@@ -1,0 +1,463 @@
+/* Axis tokens — Catppuccin Mocha, desktop ops console */
+:root {
+  --axis-crust: #11111b;
+  --axis-mantle: #181825;
+  --axis-base: #1e1e2e;
+  --axis-surface: #181825;
+  --axis-surface-1: #1e1e2e;
+  --axis-surface-2: #313244;
+  --axis-surface-3: #45475a;
+  --axis-overlay: #585b70;
+  --axis-bg: var(--axis-crust);
+  --axis-border: color-mix(in srgb, #45475a 62%, transparent);
+  --axis-border-strong: #585b70;
+  --axis-fg: #cdd6f4;
+  --axis-muted: #7f849c;
+  --axis-muted-strong: #a6adc8;
+  --axis-ink: #89b4fa;
+  --axis-ink-soft: #b4befe;
+  --axis-accent: #89b4fa;
+  --axis-accent-soft: rgba(137, 180, 250, 0.14);
+  --axis-on-accent: #11111b;
+  --axis-success: #a6e3a1;
+  --axis-success-soft: rgba(166, 227, 161, 0.14);
+  --axis-warning: #f9e2af;
+  --axis-warning-soft: rgba(249, 226, 175, 0.12);
+  --axis-danger: #f38ba8;
+  --axis-danger-soft: rgba(243, 139, 168, 0.14);
+  --axis-info: #89b4fa;
+  --axis-info-soft: rgba(137, 180, 250, 0.14);
+
+  --axis-space-1: 0.25rem;
+  --axis-space-2: 0.5rem;
+  --axis-space-3: 0.75rem;
+  --axis-space-4: 1rem;
+  --axis-space-5: 1.25rem;
+  --axis-space-6: 1.5rem;
+  --axis-space-8: 2rem;
+
+  --axis-text-2xs: 0.6875rem;
+  --axis-text-xs: 0.75rem;
+  --axis-text-sm: 0.8125rem;
+  --axis-text-md: 0.875rem;
+  --axis-text-lg: 1rem;
+  --axis-text-xl: 1.375rem;
+  --axis-leading: 1.45;
+  --axis-leading-tight: 1.25;
+  --axis-tracking-kicker: 0.08em;
+
+  --axis-radius-sm: 4px;
+  --axis-radius: 6px;
+  --axis-radius-lg: 8px;
+  --axis-shadow: 0 1px 0 color-mix(in srgb, #000 28%, transparent);
+  --axis-shadow-md: 0 10px 28px color-mix(in srgb, #000 42%, transparent);
+  --axis-ring: color-mix(in srgb, var(--axis-accent) 45%, transparent);
+  --axis-ease: 140ms cubic-bezier(0.22, 1, 0.36, 1);
+  --axis-rail-width: 15.25rem;
+  --axis-titlebar-height: 2.75rem;
+
+  --font-display: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  --font-body: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", "Segoe UI Mono", Consolas, monospace;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+  background: var(--axis-bg);
+  color: var(--axis-fg);
+  font-family: var(--font-body);
+  font-size: var(--axis-text-md);
+  line-height: var(--axis-leading);
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--axis-surface-3) transparent;
+}
+
+::selection {
+  background: var(--axis-accent-soft);
+  color: var(--axis-fg);
+}
+
+:focus-visible {
+  outline: 2px solid var(--axis-ring);
+  outline-offset: 2px;
+}
+
+@keyframes axis-enter {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.axis-enter {
+  animation: axis-enter 180ms var(--axis-ease) both;
+}
+
+.axis-kicker {
+  margin: 0;
+  font-size: var(--axis-text-2xs);
+  font-weight: 600;
+  letter-spacing: var(--axis-tracking-kicker);
+  text-transform: uppercase;
+  color: var(--axis-muted);
+}
+
+.page-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--axis-space-3);
+  margin-bottom: var(--axis-space-4);
+}
+
+.page-header-copy {
+  min-width: 0;
+}
+
+.page-header h1 {
+  margin: 0.15rem 0 0;
+  font-family: var(--font-display);
+  font-size: var(--axis-text-xl);
+  font-weight: 560;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
+}
+
+.page-header-desc {
+  margin-top: var(--axis-space-1);
+  max-width: 44rem;
+  font-size: var(--axis-text-sm);
+  line-height: var(--axis-leading);
+  color: var(--axis-muted-strong);
+}
+
+.page-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--axis-space-2);
+}
+
+.axis-panel {
+  border-radius: var(--axis-radius);
+  border: 1px solid var(--axis-border);
+  background: var(--axis-surface-1);
+  box-shadow: var(--axis-shadow);
+  transition:
+    border-color var(--axis-ease),
+    background-color var(--axis-ease);
+}
+
+.axis-panel-padded {
+  padding: var(--axis-space-4);
+}
+
+.axis-panel-interactive:hover {
+  border-color: color-mix(in srgb, var(--axis-accent) 38%, var(--axis-border));
+}
+
+.axis-panel-head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0 0 var(--axis-space-3);
+}
+
+.axis-panel-head h3 {
+  margin: 0;
+  font-size: var(--axis-text-sm);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.axis-panel-head .muted {
+  margin: 0;
+  font-size: var(--axis-text-2xs);
+}
+
+.signal-card {
+  padding: var(--axis-space-3) var(--axis-space-3);
+  min-height: 5.25rem;
+}
+
+.signal-card-value {
+  margin: 0.35rem 0 0;
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  font-weight: 560;
+  line-height: 1;
+  letter-spacing: -0.03em;
+}
+
+.signal-card-hint {
+  margin: 0.4rem 0 0;
+  font-size: var(--axis-text-2xs);
+  line-height: 1.35;
+  color: var(--axis-muted);
+}
+
+.signal-card.tone-good .signal-card-value {
+  color: var(--axis-success);
+}
+
+.signal-card.tone-warn .signal-card-value {
+  color: var(--axis-warning);
+}
+
+.signal-card.tone-bad .signal-card-value {
+  color: var(--axis-danger);
+}
+
+.dist-bar {
+  padding: var(--axis-space-4);
+}
+
+.dist-bar ul {
+  margin: var(--axis-space-3) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dist-bar li + li {
+  margin-top: var(--axis-space-3);
+}
+
+.dist-bar-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--axis-space-3);
+  font-size: var(--axis-text-xs);
+  margin-bottom: 0.2rem;
+}
+
+.dist-bar-track {
+  height: 0.35rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--axis-surface-2);
+}
+
+.dist-bar-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--axis-accent);
+  transition: width 700ms ease;
+}
+
+.axis-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  min-height: 1.85rem;
+  border-radius: var(--axis-radius);
+  border: 1px solid var(--axis-border);
+  background: color-mix(in srgb, var(--axis-surface-2) 35%, transparent);
+  padding: 0.28rem 0.7rem;
+  font-size: var(--axis-text-xs);
+  line-height: 1.25;
+  color: var(--axis-muted-strong);
+  cursor: pointer;
+  transition:
+    color var(--axis-ease),
+    background-color var(--axis-ease),
+    border-color var(--axis-ease);
+}
+
+.axis-btn:hover:not(:disabled) {
+  color: var(--axis-fg);
+  background: color-mix(in srgb, var(--axis-surface-2) 75%, transparent);
+  border-color: var(--axis-border-strong);
+}
+
+.axis-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.axis-btn-icon {
+  width: 1.85rem;
+  min-width: 1.85rem;
+  padding: 0;
+}
+
+.axis-btn-icon img {
+  display: block;
+}
+
+.axis-btn-icon-check {
+  font-size: 0.625rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.axis-btn-primary {
+  border-color: transparent;
+  background: var(--axis-ink);
+  color: var(--axis-on-accent);
+  font-weight: 600;
+}
+
+.axis-btn-primary:hover:not(:disabled) {
+  background: var(--axis-ink-soft);
+  color: var(--axis-on-accent);
+  border-color: transparent;
+}
+
+.axis-btn-ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--axis-muted);
+}
+
+.axis-btn-ghost:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--axis-surface-2) 55%, transparent);
+  color: var(--axis-fg);
+  border-color: transparent;
+}
+
+.axis-btn-danger {
+  border-color: color-mix(in srgb, var(--axis-danger) 40%, transparent);
+  background: var(--axis-danger-soft);
+  color: var(--axis-danger);
+  font-weight: 500;
+}
+
+.axis-seg {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--axis-border);
+  border-radius: var(--axis-radius);
+  background: var(--axis-mantle);
+}
+
+.axis-seg-btn {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0.22rem 0.7rem;
+  min-height: 1.6rem;
+  font: inherit;
+  font-size: var(--axis-text-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--axis-muted);
+  cursor: pointer;
+}
+
+.axis-seg-btn + .axis-seg-btn {
+  border-left: 1px solid var(--axis-border);
+}
+
+.axis-seg-btn:hover:not(:disabled):not(.is-active) {
+  color: var(--axis-fg);
+  background: color-mix(in srgb, var(--axis-surface-2) 70%, transparent);
+}
+
+.axis-seg-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.axis-seg-include.is-active {
+  background: var(--axis-success-soft);
+  color: var(--axis-success);
+}
+
+.axis-seg-exclude.is-active {
+  background: var(--axis-danger-soft);
+  color: var(--axis-danger);
+}
+
+.axis-table-wrap {
+  overflow-x: auto;
+}
+
+.axis-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--axis-text-xs);
+}
+
+.axis-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  border-bottom: 1px solid var(--axis-border);
+  background: color-mix(in srgb, var(--axis-mantle) 88%, var(--axis-surface-2));
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  font-size: var(--axis-text-2xs);
+  font-weight: 600;
+  letter-spacing: var(--axis-tracking-kicker);
+  text-transform: uppercase;
+  color: var(--axis-muted);
+}
+
+.axis-table td {
+  border-bottom: 1px solid var(--axis-border);
+  padding: 0.55rem 0.75rem;
+  color: var(--axis-fg);
+  vertical-align: middle;
+}
+
+.axis-table tr:last-child td {
+  border-bottom: none;
+}
+
+.axis-table tbody tr:hover td {
+  background: color-mix(in srgb, var(--axis-surface-2) 42%, transparent);
+}
+
+.axis-link {
+  color: var(--axis-accent);
+  text-decoration: none;
+}
+
+.axis-link:hover {
+  text-decoration: underline;
+}
+
+.axis-alert {
+  border-radius: var(--axis-radius);
+  padding: 0.6rem 0.8rem;
+  font-size: var(--axis-text-xs);
+}
+
+.axis-alert-warning {
+  border: 1px solid color-mix(in srgb, var(--axis-warning) 35%, transparent);
+  background: var(--axis-warning-soft);
+}
+
+.axis-alert-danger {
+  border: 1px solid color-mix(in srgb, var(--axis-danger) 35%, transparent);
+  background: var(--axis-danger-soft);
+}
+
+.axis-alert-info {
+  border: 1px solid color-mix(in srgb, var(--axis-info) 35%, transparent);
+  background: var(--axis-info-soft);
+}

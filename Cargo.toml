@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/axis-sdk",
+    "crates/axis-tauri/src-tauri",
+]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

@@ -1,0 +1,19 @@
+[package]
+name = "axis-sdk"
+version.workspace = true
+edition.workspace = true
+description = "Axis Graph SDK — device-code auth and tenant glance"
+
+[dependencies]
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+# keyring 3 ships with no default store; without a native feature, Entry::new
+# fails at runtime and Credential Manager is never used.
+keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["sync", "time", "rt", "macros"] }
+urlencoding = "2"
+uuid = { version = "1", features = ["v4"] }
