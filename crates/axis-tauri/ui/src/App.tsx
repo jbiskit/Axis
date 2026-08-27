@@ -74,6 +74,12 @@ export default function App() {
           onCancel={() => {
             void session.cancelLogin();
           }}
+          appVersion={updater.appVersion}
+          autoCheck={updater.autoCheck}
+          checkingForUpdate={updater.checking}
+          updateStatus={updater.status}
+          onAutoCheckChange={updater.setAutoCheck}
+          onCheckForUpdate={() => void updater.checkNow()}
         />
         {updateDialog}
       </>
@@ -86,6 +92,12 @@ export default function App() {
         route={route}
         accountName={session.accountName}
         organizationName={session.glance?.organizationName ?? null}
+        appVersion={updater.appVersion}
+        autoCheck={updater.autoCheck}
+        checkingForUpdate={updater.checking}
+        updateStatus={updater.status}
+        onAutoCheckChange={updater.setAutoCheck}
+        onCheckForUpdate={() => void updater.checkNow()}
         onSignOut={() => {
           window.location.hash = "/intune";
           void session.logout();

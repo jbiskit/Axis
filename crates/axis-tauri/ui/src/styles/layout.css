@@ -193,6 +193,64 @@
   color: var(--axis-muted);
 }
 
+.app-update-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.35rem;
+}
+
+.app-update-controls.compact {
+  margin-top: 1rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--axis-border);
+}
+
+.app-update-version {
+  margin: 0;
+  font-size: var(--axis-text-2xs);
+  color: var(--axis-muted);
+}
+
+.app-update-auto {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  margin: 0;
+  font-size: var(--axis-text-2xs);
+  line-height: 1.35;
+  color: var(--axis-muted);
+  cursor: pointer;
+}
+
+.app-update-auto input {
+  margin: 0.12rem 0 0;
+  flex-shrink: 0;
+  width: 0.85rem;
+  height: 0.85rem;
+  accent-color: var(--axis-accent);
+  cursor: pointer;
+}
+
+.app-update-controls .axis-btn {
+  justify-content: flex-start;
+  width: 100%;
+  min-height: 1.7rem;
+  padding-inline: 0.45rem;
+  font-size: var(--axis-text-2xs);
+}
+
+.app-update-controls.compact .axis-btn {
+  width: auto;
+  align-self: flex-start;
+}
+
+.app-update-status {
+  margin: 0;
+  font-size: var(--axis-text-2xs);
+  line-height: 1.35;
+}
+
 .shell-workspace {
   display: flex;
   min-width: 0;

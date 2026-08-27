@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type { NavIconId, NavItem } from "../types/inventory";
 import { INTUNE_NAV, matchingNavItems } from "../lib/nav";
 import { navigate, type AppRoute } from "../lib/route";
+import { AppUpdateControls } from "./AppUpdateControls";
 
 function NavIcon({ name }: { name: NavIconId | "chevron" }) {
   const common = {
@@ -173,12 +174,24 @@ export function AppShell({
   route,
   accountName,
   organizationName,
+  appVersion,
+  autoCheck,
+  checkingForUpdate,
+  updateStatus,
+  onAutoCheckChange,
+  onCheckForUpdate,
   onSignOut,
 }: {
   children: ReactNode;
   route: AppRoute;
   accountName: string | null;
   organizationName: string | null;
+  appVersion: string | null;
+  autoCheck: boolean;
+  checkingForUpdate: boolean;
+  updateStatus: string | null;
+  onAutoCheckChange: (value: boolean) => void;
+  onCheckForUpdate: () => void;
   onSignOut: () => void;
 }) {
   const { pathname, search } = route;
@@ -251,6 +264,14 @@ export function AppShell({
             <span className="shell-session-org">{organizationName ?? "Signed in"}</span>
             {accountName ? <span className="shell-session-user">{accountName}</span> : null}
           </div>
+          <AppUpdateControls
+            appVersion={appVersion}
+            autoCheck={autoCheck}
+            checking={checkingForUpdate}
+            status={updateStatus}
+            onAutoCheckChange={onAutoCheckChange}
+            onCheck={onCheckForUpdate}
+          />
           <button type="button" className="axis-btn axis-btn-ghost" onClick={onSignOut}>
             Sign out
           </button>
