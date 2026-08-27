@@ -1,15 +1,28 @@
 import { useState } from "react";
 import type { DeviceCodePrompt } from "../types/glance";
 import { loadLastExtraScopes } from "../lib/loginPrefs";
+import { AppUpdateControls } from "./AppUpdateControls";
 
 export function LoginScreen({
   deviceCode,
   onLogin,
   onCancel,
+  appVersion,
+  autoCheck,
+  checkingForUpdate,
+  updateStatus,
+  onAutoCheckChange,
+  onCheckForUpdate,
 }: {
   deviceCode: DeviceCodePrompt | null;
   onLogin: (extraScopes: string) => Promise<void>;
   onCancel?: () => Promise<void> | void;
+  appVersion: string | null;
+  autoCheck: boolean;
+  checkingForUpdate: boolean;
+  updateStatus: string | null;
+  onAutoCheckChange: (value: boolean) => void;
+  onCheckForUpdate: () => void;
 }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -149,6 +162,16 @@ export function LoginScreen({
           Tokens use Microsoft Graph Command Line Tools by default. Permissions on the
           session are whatever Entra issued for that public client.
         </p>
+
+        <AppUpdateControls
+          compact
+          appVersion={appVersion}
+          autoCheck={autoCheck}
+          checking={checkingForUpdate}
+          status={updateStatus}
+          onAutoCheckChange={onAutoCheckChange}
+          onCheck={onCheckForUpdate}
+        />
       </div>
     </div>
   );

@@ -108,26 +108,13 @@ pub async fn check_for_update(
 ) -> Result<UpdateCheck, String> {
     let current_version = app_version(&app);
     if !updater_enabled() {
-        return Ok(UpdateCheck {
-            current_version,
-            available: false,
-            downloaded: false,
-            version: None,
-            notes: None,
-        });
+        return Err("Updates are disabled in this build.".into());
     }
 
     let remote = match fetch_remote_release().await {
         Ok(Some(remote)) => remote,
-        Ok(None) | Err(_) => {
-            return Ok(UpdateCheck {
-                current_version,
-                available: false,
-                downloaded: false,
-                version: None,
-                notes: None,
-            });
-        }
+        Ok(None) => return Err("No published Axis release was found.".into()),
+        Err(error) => return Err(format!("Could not check for updates: {error}")),
     };
 
     if !is_newer(&remote.version, &current_version) {
