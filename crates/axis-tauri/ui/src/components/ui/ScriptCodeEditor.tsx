@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import Editor, { loader, type BeforeMount, type Monaco, type OnMount } from "@monaco-editor/react";
 import * as monaco from "monaco-editor";
 import {
@@ -9,9 +9,6 @@ import { registerAxisScriptCompletions } from "../../lib/monacoScriptSupport";
 
 export type ScriptCodeLanguage = "powershell" | "bash";
 
-// monaco-editor 0.56 ships ESM workers via `new URL(..., import.meta.url)`.
-// Do not import `monaco-editor/esm/vs/editor/editor.worker?worker` — package
-// exports remap that path and Vite cannot resolve it.
 loader.config({ monaco });
 
 function monacoLanguageId(language: ScriptCodeLanguage): string {
@@ -33,25 +30,43 @@ export function ScriptCodeEditor({
   ariaLabel?: string;
   height?: string;
 }) {
+  const hostRef = useRef<HTMLDivElement>(null);
+  const editorRef = useRef<{ layout: () => void } | null>(null);
   const languageId = monacoLanguageId(language);
-  const monacoRef = useRef<Monaco | null>(null);
 
   const handleBeforeMount = useCallback<BeforeMount>((instance) => {
-    monacoRef.current = instance;
     defineAxisMonacoTheme(instance);
     registerAxisScriptCompletions(instance);
   }, []);
 
   const handleMount = useCallback<OnMount>(
-    (editor, instance) => {
-      monacoRef.current = instance;
+    (editor) => {
+      editorRef.current = editor;
       editor.updateOptions({
         ariaLabel: ariaLabel ?? `${language} script editor`,
       });
-      requestAnimationFrame(() => editor.layout());
+      editor.layout();
     },
     [ariaLabel, language],
   );
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host || typeof ResizeObserver === "undefined") return;
+    let frame = 0;
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        editorRef.current?.layout();
+      });
+    });
+    observer.observe(host);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+      editorRef.current = null;
+    };
+  }, []);
 
   const options = useMemo(
     () => ({
@@ -61,7 +76,7 @@ export function ScriptCodeEditor({
       lineHeight: 20,
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
       wordWrap: "on" as const,
-      automaticLayout: true,
+      automaticLayout: false,
       scrollBeyondLastLine: false,
       tabSize: 2,
       renderLineHighlight: "line" as const,
@@ -99,7 +114,7 @@ export function ScriptCodeEditor({
   );
 
   return (
-    <div className="monaco-script-host" style={{ height }}>
+    <div ref={hostRef} className="monaco-script-host" style={{ height }}>
       <Editor
         height="100%"
         language={languageId}

@@ -1,4 +1,4 @@
-import { Fragment, useState, type ReactNode } from "react";
+import { Fragment, useState, type ReactNode, Component, type ErrorInfo } from "react";
 import type { AssignedFilter, ListFilterOption } from "../../lib/listSelection";
 import { PageHeader } from "../ui/PageChrome";
 import { SelectCheckbox } from "./PolicyBulkAssign";
@@ -82,6 +82,41 @@ export function InspectorEmpty({ label }: { label: string }) {
       </p>
     </div>
   );
+}
+
+export class InspectorErrorBoundary extends Component<
+  { children: ReactNode },
+  { message: string | null }
+> {
+  state = { message: null as string | null };
+
+  static getDerivedStateFromError(error: Error): { message: string } {
+    return { message: error.message || "Inspector failed." };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error("Inspector crashed", error, info.componentStack);
+  }
+
+  render() {
+    if (this.state.message) {
+      return (
+        <div className="stack" style={{ padding: "1rem" }}>
+          <div className="axis-alert axis-alert-danger">
+            This inspector crashed: {this.state.message}
+          </div>
+          <button
+            type="button"
+            className="axis-btn"
+            onClick={() => this.setState({ message: null })}
+          >
+            Try again
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
 }
 
 export function MetaEditor({

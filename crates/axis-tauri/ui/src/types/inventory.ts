@@ -549,6 +549,12 @@ export type CreatedCatalogPolicy = {
   name: string;
 };
 
+export type CreateCatalogPolicyResponse = {
+  policy: CreatedCatalogPolicy | null;
+  error: string | null;
+  mode: "live";
+};
+
 export type CatalogCategoriesResponse = {
   categories: CatalogCategory[];
   error: string | null;
@@ -586,10 +592,21 @@ export type CatalogIndexState = {
   cachePath: string | null;
 };
 
-export type CreateCatalogPolicyResponse = {
-  policy: CreatedCatalogPolicy | null;
+export type CreateTenantScriptInput = {
+  kind: string;
+  displayName: string;
+  description?: string | null;
+  runAsAccount?: string | null;
+  fileName?: string | null;
+  scriptText?: string | null;
+  detectionScriptText?: string | null;
+  remediationScriptText?: string | null;
+  runAs32Bit?: boolean | null;
+};
+
+export type CreateTenantScriptResponse = {
+  script: TenantScriptSummary | null;
   error: string | null;
-  mode: "live";
 };
 
 export type GraphObjectDetail = {

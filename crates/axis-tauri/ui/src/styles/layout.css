@@ -1689,6 +1689,32 @@
   margin-top: 1rem;
 }
 
+.create-script-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.create-script-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.85rem;
+}
+
+.create-script-dialog .device-field {
+  min-width: 0;
+}
+
+.create-script-body {
+  min-height: 10rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
 .axis-modal select {
   display: block;
   width: 100%;

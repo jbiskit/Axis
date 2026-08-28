@@ -18,6 +18,8 @@ import type {
   CatalogSearchResponse,
   CategorySettingsResponse,
   CreateCatalogPolicyResponse,
+  CreateTenantScriptInput,
+  CreateTenantScriptResponse,
   GraphObjectDetailResponse,
   E8BaselineReferencesResponse,
   BaselineExportResponse,
@@ -301,6 +303,12 @@ export async function updateScriptContent(input: {
   remediationScriptText?: string | null;
 }): Promise<ActionResponse> {
   return invoke("update_script_content_cmd", input);
+}
+
+export async function createTenantScript(
+  input: CreateTenantScriptInput,
+): Promise<CreateTenantScriptResponse> {
+  return invoke<CreateTenantScriptResponse>("create_tenant_script_cmd", { input });
 }
 
 export async function searchDirectoryGroups(query: string): Promise<DirectoryGroupsResponse> {
