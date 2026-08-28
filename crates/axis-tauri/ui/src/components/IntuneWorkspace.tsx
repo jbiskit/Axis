@@ -52,7 +52,7 @@ import { SettingsSearchView } from "./SettingsSearchView";
 import { SettingsCatalogWorkbench } from "./SettingsCatalogWorkbench";
 import { TenantOverview } from "./TenantOverview";
 import { PageHeader, SignalCard } from "./ui/PageChrome";
-import { GraphObjectInspector } from "./workbench/GraphObjectInspector";
+import { CreateScriptDialog, type ScriptFamily } from "./workbench/CreateScriptDialog";
 import { DocumentTabs } from "./workbench/DocumentTabs";
 import {
   BulkAssignBar,
@@ -66,6 +66,7 @@ import {
   formatRelative,
   IncompleteBanner,
   InspectorEmpty,
+  InspectorErrorBoundary,
   SearchableTable,
   useListSearchState,
   WorkspaceSplit,
@@ -1385,16 +1386,32 @@ function ScriptsWorkbench({
     if (kind === "compliance") return item.kind === "compliance";
     return item.kind.startsWith("platform");
   });
-  const selected = scoped.find((item) => item.id === selectedId) ?? items.find((item) => item.id === selectedId);
   const title = kind === "remediation" ? "Remediations" : kind === "compliance" ? "Compliance scripts" : "Scripts";
-  const incomplete =
-    "Create/new and assignment writes are not ported. Script bodies use Monaco; Admin sessions can PATCH them to Graph.";
+  const family: ScriptFamily =
+    kind === "remediation" ? "remediation" : kind === "compliance" ? "compliance" : "platform";
+  const [creating, setCreating] = useState(false);
+  const [createdOverlay, setCreatedOverlay] = useState<TenantScriptSummary | null>(null);
+  const visible = useMemo(() => {
+    if (!createdOverlay) return scoped;
+    if (scoped.some((item) => item.id === createdOverlay.id)) return scoped;
+    return [createdOverlay, ...scoped];
+  }, [createdOverlay, scoped]);
+  const selected = visible.find((item) => item.id === selectedId) ?? items.find((item) => item.id === selectedId);
   const titleFor = useCallback(
-    (id: string) => items.find((item) => item.id === id)?.displayName ?? id,
-    [items],
+    (id: string) =>
+      visible.find((item) => item.id === id)?.displayName ??
+      items.find((item) => item.id === id)?.displayName ??
+      id,
+    [items, visible],
   );
   const { tabs, close } = useDocumentTabs(selectedId, titleFor);
+  const createButton = (
+    <button type="button" className="axis-btn axis-btn-primary" onClick={() => setCreating(true)}>
+      New
+    </button>
+  );
   return (
+    <>
     <WorkspaceSplit
       inspectorPrimary={Boolean(selected)}
       master={
@@ -1402,7 +1419,7 @@ function ScriptsWorkbench({
           <CompactObjectList
             title={title}
             description="Select a script to inspect it here."
-            items={scoped.map((item) => ({
+            items={visible.map((item) => ({
               id: item.id,
               title: item.displayName,
               meta: `${item.kind} · ${item.runAsAccount ?? "—"}`,
@@ -1412,20 +1429,23 @@ function ScriptsWorkbench({
             onRefresh={onRefresh}
             loading={loading}
             error={error}
+            actions={createButton}
           />
         ) : (
           <div className="stack">
             <PageHeader
               eyebrow="Devices"
               title={title}
-              description="Live Graph inventory. Select a row to inspect script bodies here."
+              description="Live Graph inventory. Create a script here, then assign it from the inspector."
               actions={
-                <button type="button" className="axis-btn" onClick={onRefresh} disabled={loading}>
-                  Refresh
-                </button>
+                <>
+                  {createButton}
+                  <button type="button" className="axis-btn" onClick={onRefresh} disabled={loading}>
+                    Refresh
+                  </button>
+                </>
               }
             />
-            <IncompleteBanner>{incomplete}</IncompleteBanner>
             {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
             <section className="axis-panel" style={{ overflow: "hidden" }}>
               <table className="axis-table">
@@ -1438,7 +1458,7 @@ function ScriptsWorkbench({
                   </tr>
                 </thead>
                 <tbody>
-                  {scoped.map((item) => (
+                  {visible.map((item) => (
                     <tr key={item.id} className="row-link" onClick={() => onSelect(item.id)}>
                       <td>{item.displayName}</td>
                       <td className="muted">{item.kind}</td>
@@ -1465,24 +1485,36 @@ function ScriptsWorkbench({
                 else onClose();
               }}
             />
+            <InspectorErrorBoundary>
             <GraphObjectInspector
               key={selected.id}
               kind={`script:${selected.kind}`}
               id={selected.id}
               fallbackTitle={selected.displayName}
-              incomplete={incomplete}
               onClose={() => {
                 const next = close(selected.id);
                 if (next) onSelect(next);
                 else onClose();
               }}
             />
+            </InspectorErrorBoundary>
           </div>
         ) : (
           <InspectorEmpty label="Select a script to inspect it in this workspace. Close clears the selection and stays here." />
         )
       }
     />
+    <CreateScriptDialog
+      open={creating}
+      family={family}
+      onClose={() => setCreating(false)}
+      onCreated={(script) => {
+        setCreatedOverlay(script);
+        onSelect(script.id);
+        onRefresh();
+      }}
+    />
+    </>
   );
 }
 

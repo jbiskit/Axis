@@ -275,6 +275,7 @@ pub fn run() {
             commands::reveal_bitlocker_key_cmd,
             commands::rotate_laps_password_cmd,
             commands::update_script_content_cmd,
+            commands::create_tenant_script_cmd,
             commands::search_directory_groups_cmd,
             commands::create_directory_group_cmd,
             commands::list_assignment_filters_cmd,

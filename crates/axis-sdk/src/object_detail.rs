@@ -380,30 +380,67 @@ fn encode_b64(text: &str) -> String {
     base64::engine::general_purpose::STANDARD.encode(text.as_bytes())
 }
 
-fn script_patch_target(kind: &str, id: &str) -> Result<(String, &'static str), GraphError> {
-    let enc = encode_id(id);
+#[derive(Clone, Copy)]
+enum ScriptContentKind {
+    Platform,
+    Remediation,
+    Compliance,
+}
+
+struct ScriptKindSpec {
+    kind: &'static str,
+    collection: &'static str,
+    odata_type: &'static str,
+    content: ScriptContentKind,
+    supports_32bit: bool,
+    supports_signature: bool,
+    file_ext: &'static str,
+}
+
+fn script_kind_spec(kind: &str) -> Result<ScriptKindSpec, GraphError> {
+    let kind = kind.strip_prefix("script:").unwrap_or(kind);
     Ok(match kind {
-        "script:platform-powershell" => (
-            format!("/deviceManagement/deviceManagementScripts/{enc}"),
-            "#microsoft.graph.deviceManagementScript",
-        ),
-        "script:platform-shell" => (
-            format!("/deviceManagement/deviceShellScripts/{enc}"),
-            "#microsoft.graph.deviceShellScript",
-        ),
-        "script:remediation" => (
-            format!("/deviceManagement/deviceHealthScripts/{enc}"),
-            "#microsoft.graph.deviceHealthScript",
-        ),
-        "script:compliance" => (
-            format!("/deviceManagement/deviceComplianceScripts/{enc}"),
-            "#microsoft.graph.deviceComplianceScript",
-        ),
+        "platform-powershell" => ScriptKindSpec {
+            kind: "platform-powershell",
+            collection: "/deviceManagement/deviceManagementScripts",
+            odata_type: "#microsoft.graph.deviceManagementScript",
+            content: ScriptContentKind::Platform,
+            supports_32bit: true,
+            supports_signature: true,
+            file_ext: "ps1",
+        },
+        "platform-shell" => ScriptKindSpec {
+            kind: "platform-shell",
+            collection: "/deviceManagement/deviceShellScripts",
+            odata_type: "#microsoft.graph.deviceShellScript",
+            content: ScriptContentKind::Platform,
+            supports_32bit: false,
+            supports_signature: false,
+            file_ext: "sh",
+        },
+        "remediation" => ScriptKindSpec {
+            kind: "remediation",
+            collection: "/deviceManagement/deviceHealthScripts",
+            odata_type: "#microsoft.graph.deviceHealthScript",
+            content: ScriptContentKind::Remediation,
+            supports_32bit: true,
+            supports_signature: true,
+            file_ext: "ps1",
+        },
+        "compliance" => ScriptKindSpec {
+            kind: "compliance",
+            collection: "/deviceManagement/deviceComplianceScripts",
+            odata_type: "#microsoft.graph.deviceComplianceScript",
+            content: ScriptContentKind::Compliance,
+            supports_32bit: true,
+            supports_signature: true,
+            file_ext: "ps1",
+        },
         other => {
             return Err(GraphError::Request {
                 status: 400,
                 code: None,
-                message: format!("Cannot PATCH script body for kind: {other}"),
+                message: format!("Cannot create or PATCH script for kind: {other}"),
                 permission_related: false,
             });
         }
@@ -419,11 +456,12 @@ pub async fn update_script_content(
     detection_script_text: Option<&str>,
     remediation_script_text: Option<&str>,
 ) -> Result<(), GraphError> {
-    let (path, odata_type) = script_patch_target(kind, id)?;
-    let mut body = json!({ "@odata.type": odata_type });
+    let spec = script_kind_spec(kind)?;
+    let path = format!("{}/{enc}", spec.collection, enc = encode_id(id));
+    let mut body = json!({ "@odata.type": spec.odata_type });
     let object = body.as_object_mut().expect("json object");
-    match kind {
-        "script:remediation" => {
+    match spec.content {
+        ScriptContentKind::Remediation => {
             if let Some(text) = detection_script_text {
                 object.insert("detectionScriptContent".into(), json!(encode_b64(text)));
             }
@@ -431,12 +469,12 @@ pub async fn update_script_content(
                 object.insert("remediationScriptContent".into(), json!(encode_b64(text)));
             }
         }
-        "script:compliance" => {
+        ScriptContentKind::Compliance => {
             if let Some(text) = detection_script_text.or(script_text) {
                 object.insert("detectionScriptContent".into(), json!(encode_b64(text)));
             }
         }
-        _ => {
+        ScriptContentKind::Platform => {
             if let Some(text) = script_text {
                 object.insert("scriptContent".into(), json!(encode_b64(text)));
             }
@@ -445,4 +483,290 @@ pub async fn update_script_content(
     GraphClient::new()
         .patch_no_content(access_token, &path, "beta", &body)
         .await
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateTenantScriptInput {
+    pub kind: String,
+    pub display_name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub run_as_account: Option<String>,
+    #[serde(default)]
+    pub file_name: Option<String>,
+    #[serde(default)]
+    pub script_text: Option<String>,
+    #[serde(default)]
+    pub detection_script_text: Option<String>,
+    #[serde(default)]
+    pub remediation_script_text: Option<String>,
+    #[serde(default)]
+    pub run_as_32_bit: Option<bool>,
+}
+
+fn default_script_file_name(display_name: &str, ext: &str) -> String {
+    let mut stem: String = display_name
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    while stem.contains("--") {
+        stem = stem.replace("--", "-");
+    }
+    let stem = stem.trim_matches('-');
+    let stem = if stem.is_empty() { "script" } else { stem };
+    format!("{stem}.{ext}")
+}
+
+fn script_create_body(
+    spec: &ScriptKindSpec,
+    input: &CreateTenantScriptInput,
+) -> Result<Value, GraphError> {
+    let display_name = input.display_name.trim();
+    if display_name.is_empty() {
+        return Err(GraphError::Request {
+            status: 400,
+            code: None,
+            message: "Display name is required.".into(),
+            permission_related: false,
+        });
+    }
+    let run_as = input
+        .run_as_account
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("system");
+    if !matches!(run_as, "system" | "user") {
+        return Err(GraphError::Request {
+            status: 400,
+            code: None,
+            message: "Run as must be system or user.".into(),
+            permission_related: false,
+        });
+    }
+    let file_name = input
+        .file_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| default_script_file_name(display_name, spec.file_ext));
+    let description = input
+        .description
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    let mut body = json!({
+        "@odata.type": spec.odata_type,
+        "displayName": display_name,
+        "runAsAccount": run_as,
+        "roleScopeTagIds": ["0"],
+    });
+    let object = body.as_object_mut().expect("json object");
+    if matches!(spec.content, ScriptContentKind::Platform) {
+        object.insert("fileName".into(), json!(file_name));
+    }
+    if spec.supports_signature {
+        object.insert("enforceSignatureCheck".into(), json!(false));
+    }
+    if let Some(description) = description {
+        object.insert("description".into(), json!(description));
+    }
+    if spec.supports_32bit {
+        object.insert(
+            "runAs32Bit".into(),
+            json!(input.run_as_32_bit.unwrap_or(false)),
+        );
+    }
+
+    match spec.content {
+        ScriptContentKind::Platform => {
+            let text = input.script_text.as_deref().unwrap_or("");
+            object.insert("scriptContent".into(), json!(encode_b64(text)));
+        }
+        ScriptContentKind::Remediation => {
+            let detection = input
+                .detection_script_text
+                .as_deref()
+                .or(input.script_text.as_deref())
+                .unwrap_or("");
+            if detection.trim().is_empty() {
+                return Err(GraphError::Request {
+                    status: 400,
+                    code: None,
+                    message: "A detection script is required.".into(),
+                    permission_related: false,
+                });
+            }
+            object.insert("detectionScriptContent".into(), json!(encode_b64(detection)));
+            object.insert(
+                "remediationScriptContent".into(),
+                json!(encode_b64(
+                    input.remediation_script_text.as_deref().unwrap_or("")
+                )),
+            );
+        }
+        ScriptContentKind::Compliance => {
+            let detection = input
+                .detection_script_text
+                .as_deref()
+                .or(input.script_text.as_deref())
+                .unwrap_or("");
+            if detection.trim().is_empty() {
+                return Err(GraphError::Request {
+                    status: 400,
+                    code: None,
+                    message: "A detection script is required.".into(),
+                    permission_related: false,
+                });
+            }
+            object.insert("detectionScriptContent".into(), json!(encode_b64(detection)));
+        }
+    }
+    Ok(body)
+}
+
+fn summary_from_created(
+    kind: &str,
+    object: &Value,
+) -> Result<crate::TenantScriptSummary, GraphError> {
+    let id = object
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| GraphError::Request {
+            status: 502,
+            code: None,
+            message: "Graph created the script but did not return an id.".into(),
+            permission_related: false,
+        })?;
+    Ok(crate::TenantScriptSummary {
+        kind: kind.to_string(),
+        display_name: object
+            .get("displayName")
+            .and_then(Value::as_str)
+            .unwrap_or("Untitled")
+            .to_string(),
+        description: object
+            .get("description")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        file_name: object
+            .get("fileName")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        run_as_account: object
+            .get("runAsAccount")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        publisher: object
+            .get("publisher")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        version: object
+            .get("version")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        is_global_script: object.get("isGlobalScript").and_then(Value::as_bool),
+        created_date_time: object
+            .get("createdDateTime")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        last_modified_date_time: object
+            .get("lastModifiedDateTime")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        assignment_count: Some(0),
+        id: id.to_string(),
+    })
+}
+
+/// POST a new Intune platform, remediation, or compliance script.
+pub async fn create_tenant_script(
+    access_token: &str,
+    input: CreateTenantScriptInput,
+) -> Result<crate::TenantScriptSummary, GraphError> {
+    let spec = script_kind_spec(&input.kind)?;
+    let body = script_create_body(&spec, &input)?;
+    let created: Value = GraphClient::new()
+        .post(access_token, spec.collection, "beta", &body)
+        .await?;
+    summary_from_created(spec.kind, &created)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn input(kind: &str, name: &str) -> CreateTenantScriptInput {
+        CreateTenantScriptInput {
+            kind: kind.into(),
+            display_name: name.into(),
+            description: Some("  from Axis  ".into()),
+            run_as_account: None,
+            file_name: None,
+            script_text: Some("Write-Output 'hi'".into()),
+            detection_script_text: Some("exit 0".into()),
+            remediation_script_text: Some("# fix".into()),
+            run_as_32_bit: Some(true),
+        }
+    }
+
+    #[test]
+    fn platform_powershell_body_encodes_script_content() {
+        let spec = script_kind_spec("script:platform-powershell").unwrap();
+        let body = script_create_body(&spec, &input("platform-powershell", "Hello world")).unwrap();
+        assert_eq!(
+            body["@odata.type"],
+            "#microsoft.graph.deviceManagementScript"
+        );
+        assert_eq!(body["displayName"], "Hello world");
+        assert_eq!(body["fileName"], "Hello-world.ps1");
+        assert_eq!(body["runAsAccount"], "system");
+        assert_eq!(body["runAs32Bit"], true);
+        assert_eq!(body["scriptContent"], encode_b64("Write-Output 'hi'"));
+        assert_eq!(body["description"], "from Axis");
+        assert!(body.get("detectionScriptContent").is_none());
+    }
+
+    #[test]
+    fn shell_script_omits_32bit() {
+        let spec = script_kind_spec("platform-shell").unwrap();
+        let body = script_create_body(&spec, &input("platform-shell", "mac")).unwrap();
+        assert_eq!(body["fileName"], "mac.sh");
+        assert!(body.get("runAs32Bit").is_none());
+        assert!(body.get("enforceSignatureCheck").is_none());
+    }
+
+    #[test]
+    fn remediation_omits_file_name() {
+        let spec = script_kind_spec("remediation").unwrap();
+        let body = script_create_body(&spec, &input("remediation", "Probe")).unwrap();
+        assert!(body.get("fileName").is_none());
+        assert_eq!(body["detectionScriptContent"], encode_b64("exit 0"));
+        assert_eq!(body["remediationScriptContent"], encode_b64("# fix"));
+    }
+
+    #[test]
+    fn remediation_requires_detection() {
+        let spec = script_kind_spec("remediation").unwrap();
+        let mut empty = input("remediation", "Probe");
+        empty.detection_script_text = Some("  ".into());
+        empty.script_text = None;
+        assert!(script_create_body(&spec, &empty).is_err());
+    }
+
+    #[test]
+    fn unknown_kind_is_rejected() {
+        assert!(script_kind_spec("win32").is_err());
+    }
 }

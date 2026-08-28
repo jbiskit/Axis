@@ -59,7 +59,10 @@ pub use e8_baselines::*;
 pub use glance::fetch_tenant_glance;
 pub use graph::GraphError;
 pub use inventory::*;
-pub use object_detail::{fetch_graph_object_detail, update_script_content, GraphObjectDetail};
+pub use object_detail::{
+    create_tenant_script, fetch_graph_object_detail, update_script_content, CreateTenantScriptInput,
+    GraphObjectDetail,
+};
 pub use session_store::SessionMode;
 pub use settings_catalog::*;
 pub use types::*;

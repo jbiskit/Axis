@@ -46,8 +46,9 @@ function pretty(value: unknown): string {
 }
 
 function exportPayload(detail: GraphObjectDetail): Record<string, unknown> {
+  const object = asRecord(detail.object) ?? {};
   return {
-    ...detail.object,
+    ...object,
     assignments: detail.assignments,
     ...(detail.settings?.length ? { settings: detail.settings } : {}),
     ...(detail.extras ? { extras: detail.extras } : {}),
@@ -158,7 +159,7 @@ function ExportJsonDialog({
 }
 
 function overviewRows(detail: GraphObjectDetail): Array<{ label: string; value: string }> {
-  const object = detail.object;
+  const object = asRecord(detail.object) ?? {};
   const keys = [
     ["Description", "description"],
     ["Publisher", "publisher"],
@@ -259,9 +260,7 @@ export function GraphObjectInspector({
         setScriptText(response.detail?.scriptText ?? "");
         setDetectionText(response.detail?.detectionScriptText ?? "");
         setRemediationText(response.detail?.remediationScriptText ?? "");
-        if (response.detail && (hasScript(response.detail) || kind.startsWith("script:"))) {
-          setTab("payload");
-        } else if (kind === "configurationPolicy" || kind === "groupPolicyConfiguration") {
+        if (response.detail && (kind === "configurationPolicy" || kind === "groupPolicyConfiguration")) {
           setTab("payload");
         }
       })
@@ -289,10 +288,11 @@ export function GraphObjectInspector({
   }
 
   const language = scriptLanguage(kind);
-  const portalHref = intunePortalUrlForKind(kind, id, detail?.object ?? null);
+  const portalHref = intunePortalUrlForKind(kind, id, asRecord(detail?.object) ?? null);
   const payloadLabel = detail && hasScript(detail) ? "Scripts" : "Settings";
-  const settings = detail?.settings ?? [];
+  const settings = Array.isArray(detail?.settings) ? detail.settings : [];
   const extras = detail?.extras ?? null;
+  const assignments = Array.isArray(detail?.assignments) ? detail.assignments : [];
   const rows = useMemo(() => (detail ? overviewRows(detail) : []), [detail]);
   const canEditScripts = kind.startsWith("script:");
   const canEditPolicy = kind === "configurationPolicy";
@@ -418,7 +418,7 @@ export function GraphObjectInspector({
       {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
       {saveError ? <div className="axis-alert axis-alert-danger">{saveError}</div> : null}
       {saveMessage ? <div className="axis-alert axis-alert-info">{saveMessage}</div> : null}
-      {detail?.warnings.length ? (
+      {detail?.warnings?.length ? (
         <div className="axis-alert axis-alert-warning">{detail.warnings.join(" · ")}</div>
       ) : null}
       {detail && editingPolicy ? (
@@ -436,7 +436,7 @@ export function GraphObjectInspector({
             {(
               [
                 ["overview", "Overview"],
-                ["assignments", `Assignments (${detail.assignments.length})`],
+                ["assignments", `Assignments (${assignments.length})`],
                 ["payload", `${payloadLabel}${settings.length ? ` (${settings.length})` : ""}`],
               ] as const
             ).map(([tabId, label]) => (
@@ -466,9 +466,9 @@ export function GraphObjectInspector({
             <section className="axis-panel" style={{ padding: "0.85rem" }}>
               <div className="device-toolbar">
                 <p className="muted" style={{ margin: 0 }}>
-                  {detail.assignments.length === 0
+                  {assignments.length === 0
                     ? "No assignments on this object."
-                    : `${detail.assignments.length} assignment${detail.assignments.length === 1 ? "" : "s"}.`}
+                    : `${assignments.length} assignment${assignments.length === 1 ? "" : "s"}.`}
                 </p>
                 {canAssign ? (
                   <button
@@ -480,9 +480,9 @@ export function GraphObjectInspector({
                   </button>
                 ) : null}
               </div>
-              {detail.assignments.length > 0 ? (
+              {assignments.length > 0 ? (
                 <ul className="assignment-rows" style={{ marginTop: "0.75rem" }}>
-                  {detail.assignments.map((row, index) => (
+                  {assignments.map((row, index) => (
                     <li key={text(row.id) ?? String(index)} className="assignment-row">
                       {summarizeGraphAssignment(row)}
                     </li>
@@ -600,7 +600,7 @@ export function GraphObjectInspector({
                   {
                     id: detail.id,
                     name: detail.title,
-                    odataType: text(detail.object["@odata.type"]),
+                    odataType: text(asRecord(detail.object)?.["@odata.type"]),
                   },
                 ]
               : []

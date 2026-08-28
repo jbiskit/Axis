@@ -2,7 +2,7 @@ use crate::AppState;
 use axis_sdk::{
     add_settings_to_policy, apply_filter_names, apply_group_metadata, assign_object_assignments,
     assignment_capabilities, collect_managed_device_diagnostics, create_directory_group,
-    create_policy_with_settings, delete_managed_device,
+    create_policy_with_settings, create_tenant_script, delete_managed_device,
     drafts_from_graph_assignments, fetch_app_protection_policies, fetch_autopilot_devices,
     fetch_applied_policy_settings, fetch_autopilot_profiles, fetch_baseline_export_json,
     fetch_baseline_reference_sources, fetch_compliance_policies,
@@ -20,7 +20,8 @@ use axis_sdk::{
     AppliedPolicySettingsLoad, AssignmentCapabilities, AssignmentDraft, AssignmentFilter, AutopilotDevice, AutopilotProfile,
     BaselineReferenceSourceInput, BaselineReferenceSourceLoad, BitLockerRecoveryKeySummary,
     CatalogCategory, CatalogIndexState, CatalogPolicySummary, CatalogSearchResult,
-    CategorySettingsLoad, CreateDirectoryGroupInput, CreatedCatalogPolicy, DirectoryGroup,
+    CategorySettingsLoad, CreateDirectoryGroupInput, CreateTenantScriptInput, CreatedCatalogPolicy,
+    DirectoryGroup,
     E8BaselineReference, E8BaselineSource, GraphObjectDetail, InventoryList, LapsCredentialInfo,
     MobileAppSummary, PolicySettingIssue, SettingConflictDetail,
     SettingsCatalogPlatform, TenantScriptSummary, WindowsUpdatePolicy,
@@ -1134,6 +1135,36 @@ pub async fn update_script_content_cmd(
             error: None,
         }),
         Err(error) => Ok(action_err(error)),
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateTenantScriptResponse {
+    pub script: Option<TenantScriptSummary>,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn create_tenant_script_cmd(
+    state: State<'_, AppState>,
+    input: CreateTenantScriptInput,
+) -> Result<CreateTenantScriptResponse, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Ok(CreateTenantScriptResponse {
+            script: None,
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match create_tenant_script(&token, input).await {
+        Ok(script) => Ok(CreateTenantScriptResponse {
+            script: Some(script),
+            error: None,
+        }),
+        Err(error) => Ok(CreateTenantScriptResponse {
+            script: None,
+            error: Some(error.to_string()),
+        }),
     }
 }
 
