@@ -22,8 +22,9 @@ pub use assignments::{
     list_assignment_filters, mail_nickname_from_display_name, resolve_directory_groups,
     search_directory_groups, AssignmentCapabilities, AssignmentDraft, AssignmentFilter,
     AssignmentFilterMode, AssignmentIntent, AssignmentTargetKind, CreateDirectoryGroupInput,
-    CreateGroupMembership, DirectoryGroup, GroupMembershipKind, DYNAMIC_DEVICE_RULE_TEMPLATE,
-    DYNAMIC_USER_RULE_TEMPLATE,
+    CreateGroupMembership, DirectoryGroup, GroupMembershipKind, RemediationScheduleDraft,
+    RemediationScheduleKind, DYNAMIC_DEVICE_RULE_TEMPLATE, DYNAMIC_USER_RULE_TEMPLATE,
+    default_remediation_schedule,
 };
 pub use auth::{
     decode_access_token_claims, device_code_client_id, device_code_scopes, device_code_tenant,

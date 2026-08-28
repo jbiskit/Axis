@@ -282,6 +282,21 @@ export type AssignmentFilter = {
   rule?: string | null;
 };
 
+export type RemediationScheduleKind =
+  | "hourly"
+  | "daily"
+  | "weekly"
+  | "monthly"
+  | "runOnce";
+
+export type RemediationScheduleDraft = {
+  kind: RemediationScheduleKind;
+  interval: number;
+  time?: string | null;
+  useUtc?: boolean | null;
+  date?: string | null;
+};
+
 export type AssignmentDraft = {
   targetKind: AssignmentTargetKind;
   groupId?: string | null;
@@ -291,12 +306,15 @@ export type AssignmentDraft = {
   filterName?: string | null;
   filterMode?: AssignmentFilterMode | null;
   intent?: AssignmentIntent | null;
+  runRemediationScript?: boolean | null;
+  runSchedule?: RemediationScheduleDraft | null;
 };
 
 export type AssignmentCapabilities = {
   writable: boolean;
   supportsIntent: boolean;
   supportsFilters: boolean;
+  supportsSchedule: boolean;
 };
 
 export type DirectoryGroupsResponse = {

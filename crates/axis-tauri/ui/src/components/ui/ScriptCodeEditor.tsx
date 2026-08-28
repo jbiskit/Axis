@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import Editor, { loader, type BeforeMount, type Monaco, type OnMount } from "@monaco-editor/react";
+import Editor, { loader, type BeforeMount, type OnMount } from "@monaco-editor/react";
 import * as monaco from "monaco-editor";
 import {
   defineAxisMonacoTheme,

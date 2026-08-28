@@ -1,9 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  assignObjectAssignments,
-  loadAssignmentWorkspace,
-  searchDirectoryGroups,
-} from "../../lib/tauri";
+  assignmentTargetLabel,
+  summarizeAssignmentDraft,
+} from "../../lib/assignmentSummary";
+import {
+  defaultRemediationSchedule,
+  remediationScheduleIntervalLabel,
+  remediationScheduleKindLabel,
+  summarizeRemediationSchedule,
+} from "../../lib/remediationSchedule";
 import type {
   AssignmentDraft,
   AssignmentFilter,
@@ -12,11 +17,35 @@ import type {
   AssignmentTargetKind,
   DirectoryGroup,
   GroupMembershipKind,
+  RemediationScheduleKind,
 } from "../../types/inventory";
+import {
+  assignObjectAssignments,
+  loadAssignmentWorkspace,
+  searchDirectoryGroups,
+} from "../../lib/tauri";
 import { CreateEntraGroupPanel } from "./CreateEntraGroupPanel";
 import { IncludeExcludeToggle } from "./IncludeExcludeToggle";
 
 type AssignmentRow = AssignmentDraft & { key: string };
+
+function withRemediationScheduleDefaults(
+  draft: AssignmentDraft,
+  supportsSchedule: boolean,
+): AssignmentDraft {
+  if (
+    !supportsSchedule ||
+    draft.targetKind === "exclusionGroup" ||
+    draft.runSchedule
+  ) {
+    return draft;
+  }
+  return {
+    ...draft,
+    runRemediationScript: draft.runRemediationScript ?? true,
+    runSchedule: defaultRemediationSchedule(),
+  };
+}
 
 function rowKey(
   targetKind: AssignmentTargetKind,
@@ -39,12 +68,19 @@ function assignmentFingerprint(drafts: AssignmentDraft[]): string {
     .map((draft) => {
       const filterId = draft.filterId ?? "";
       const filterMode = filterId ? (draft.filterMode ?? "include") : "";
+      const schedule = draft.runSchedule;
       return [
         draft.targetKind,
         draft.groupId ?? "",
         draft.intent ?? "",
         filterId,
         filterMode,
+        draft.runRemediationScript ?? "",
+        schedule?.kind ?? "",
+        schedule?.interval ?? "",
+        schedule?.time ?? "",
+        schedule?.useUtc ?? "",
+        schedule?.date ?? "",
       ].join("\0");
     })
     .sort()
@@ -79,45 +115,18 @@ function membershipPillClass(kind?: GroupMembershipKind | null): string {
   }
 }
 
-function targetLabel(row: AssignmentDraft): string {
-  switch (row.targetKind) {
-    case "allUsers":
-      return "All users";
-    case "allDevices":
-      return "All devices";
-    case "exclusionGroup":
-      return `Exclude · ${row.groupName || row.groupId || "group"}`;
-    case "group":
-      return `Include · ${row.groupName || row.groupId || "group"}`;
-    default:
-      return row.groupName || row.groupId || "Group";
-  }
-}
-
-function filterLabel(row: AssignmentDraft): string | null {
-  if (row.targetKind === "exclusionGroup" || !row.filterId) return null;
-  const mode = row.filterMode === "exclude" ? "exclude filter" : "include filter";
-  return `${mode} ${row.filterName ?? row.filterId}`;
-}
-
 function formatFilterOption(filter: AssignmentFilter): string {
   const bits = [filter.displayName];
   if (filter.platform) bits.push(filter.platform);
   return bits.join(" · ");
 }
 
-function summarize(rows: AssignmentRow[], supportsIntent: boolean): string {
+function summarize(rows: AssignmentRow[], supportsIntent: boolean, supportsSchedule: boolean): string {
   if (rows.length === 0) return "No assignments (clear all)";
   return rows
-    .map((row) => {
-      const filter = filterLabel(row);
-      const intent =
-        supportsIntent && row.intent
-          ? `${row.intent[0]?.toUpperCase()}${row.intent.slice(1)}: `
-          : "";
-      const label = `${intent}${targetLabel(row)}`;
-      return filter ? `${label} (${filter})` : label;
-    })
+    .map((row) =>
+      summarizeAssignmentDraft(row, { supportsIntent, supportsSchedule }),
+    )
     .join(" · ");
 }
 
@@ -154,6 +163,7 @@ export function AssignmentsEditor({
   const [filtersLoading, setFiltersLoading] = useState(true);
   const [writable, setWritable] = useState(false);
   const [supportsIntent, setSupportsIntent] = useState(false);
+  const [supportsSchedule, setSupportsSchedule] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [groupQuery, setGroupQuery] = useState("");
   const [groupHits, setGroupHits] = useState<DirectoryGroup[]>([]);
@@ -175,13 +185,18 @@ export function AssignmentsEditor({
     void loadAssignmentWorkspace(kind, isBulk ? [] : assignments)
       .then((response) => {
         if (cancelled) return;
-        const nextRows = draftsToRows(response.drafts);
+        const nextRows = draftsToRows(
+          response.drafts.map((draft) =>
+            withRemediationScheduleDefaults(draft, response.capabilities.supportsSchedule),
+          ),
+        );
         setRows(nextRows);
         setBaselineFingerprint(assignmentFingerprint(nextRows));
         setFilters(response.filters);
         setFiltersError(response.filtersError);
         setWritable(response.capabilities.writable);
         setSupportsIntent(response.capabilities.supportsIntent);
+        setSupportsSchedule(response.capabilities.supportsSchedule);
         setLoadError(response.error);
       })
       .catch((error: unknown) => {
@@ -227,8 +242,8 @@ export function AssignmentsEditor({
   }, [groupQuery]);
 
   const summary = useMemo(
-    () => summarize(rows, supportsIntent),
-    [rows, supportsIntent],
+    () => summarize(rows, supportsIntent, supportsSchedule),
+    [rows, supportsIntent, supportsSchedule],
   );
   const dirty = useMemo(
     () => assignmentFingerprint(rows) !== baselineFingerprint,
@@ -250,6 +265,13 @@ export function AssignmentsEditor({
                 ),
             )
           : current;
+      const scheduleDefaults =
+        supportsSchedule && targetKind !== "exclusionGroup"
+          ? {
+              runRemediationScript: true,
+              runSchedule: defaultRemediationSchedule(),
+            }
+          : {};
       return [
         ...cleaned,
         {
@@ -259,6 +281,7 @@ export function AssignmentsEditor({
           groupName: group?.displayName,
           groupMembership: group?.membership,
           intent,
+          ...scheduleDefaults,
         },
       ];
     });
@@ -315,6 +338,16 @@ export function AssignmentsEditor({
         if (current.some((other) => other.key === nextKey && other.key !== key)) {
           return row;
         }
+        const scheduleDefaults =
+          supportsSchedule && !exclude
+            ? {
+                runRemediationScript: row.runRemediationScript ?? true,
+                runSchedule: row.runSchedule ?? defaultRemediationSchedule(),
+              }
+            : {
+                runRemediationScript: undefined,
+                runSchedule: undefined,
+              };
         return {
           ...row,
           targetKind,
@@ -322,10 +355,81 @@ export function AssignmentsEditor({
           filterId: exclude ? undefined : row.filterId,
           filterName: exclude ? undefined : row.filterName,
           filterMode: exclude ? undefined : row.filterMode,
+          ...scheduleDefaults,
         };
       }),
     );
     setSaveMessage(null);
+  };
+
+  const setRowRunRemediationScript = (key: string, runRemediationScript: boolean) => {
+    setRows((current) =>
+      current.map((row) => (row.key === key ? { ...row, runRemediationScript } : row)),
+    );
+  };
+
+  const setRowScheduleKind = (key: string, kind: RemediationScheduleKind) => {
+    setRows((current) =>
+      current.map((row) => {
+        if (row.key !== key) return row;
+        const currentSchedule = row.runSchedule ?? defaultRemediationSchedule();
+        return {
+          ...row,
+          runSchedule: {
+            ...currentSchedule,
+            kind,
+            interval: kind === "runOnce" ? 1 : currentSchedule.interval,
+            date: kind === "runOnce" ? currentSchedule.date ?? "" : undefined,
+          },
+        };
+      }),
+    );
+  };
+
+  const setRowScheduleInterval = (key: string, interval: number) => {
+    setRows((current) =>
+      current.map((row) => {
+        if (row.key !== key) return row;
+        const currentSchedule = row.runSchedule ?? defaultRemediationSchedule();
+        return {
+          ...row,
+          runSchedule: {
+            ...currentSchedule,
+            interval: Math.max(1, Math.min(23, interval)),
+          },
+        };
+      }),
+    );
+  };
+
+  const setRowScheduleTime = (key: string, time: string) => {
+    setRows((current) =>
+      current.map((row) => {
+        if (row.key !== key) return row;
+        const currentSchedule = row.runSchedule ?? defaultRemediationSchedule();
+        return { ...row, runSchedule: { ...currentSchedule, time } };
+      }),
+    );
+  };
+
+  const setRowScheduleDate = (key: string, date: string) => {
+    setRows((current) =>
+      current.map((row) => {
+        if (row.key !== key) return row;
+        const currentSchedule = row.runSchedule ?? defaultRemediationSchedule();
+        return { ...row, runSchedule: { ...currentSchedule, date } };
+      }),
+    );
+  };
+
+  const setRowScheduleUseUtc = (key: string, useUtc: boolean) => {
+    setRows((current) =>
+      current.map((row) => {
+        if (row.key !== key) return row;
+        const currentSchedule = row.runSchedule ?? defaultRemediationSchedule();
+        return { ...row, runSchedule: { ...currentSchedule, useUtc } };
+      }),
+    );
   };
 
   const removeRow = (key: string) => {
@@ -541,7 +645,7 @@ export function AssignmentsEditor({
                 <div className="assignment-row-top">
                   <div className="assignment-hit-name">
                     <span className={row.targetKind === "exclusionGroup" ? "muted" : undefined}>
-                      {targetLabel(row)}
+                      {assignmentTargetLabel(row)}
                     </span>
                     {membershipLabel(row.groupMembership) ? (
                       <span
@@ -591,7 +695,7 @@ export function AssignmentsEditor({
                         value={row.filterId ?? ""}
                         disabled={filters.length === 0}
                         onChange={(event) => setRowFilter(row.key, event.target.value)}
-                        aria-label={`Filter for ${targetLabel(row)}`}
+                        aria-label={`Filter for ${assignmentTargetLabel(row)}`}
                       >
                         <option value="">None</option>
                         {filters.map((filter) => (
@@ -605,7 +709,7 @@ export function AssignmentsEditor({
                       <IncludeExcludeToggle
                         value={row.filterMode ?? "include"}                        includeLabel="Include"
                         excludeLabel="Exclude"
-                        ariaLabel={`Filter mode for ${targetLabel(row)}`}
+                        ariaLabel={`Filter mode for ${assignmentTargetLabel(row)}`}
                         onChange={(mode) =>
                           setRowFilterMode(row.key, mode as AssignmentFilterMode)
                         }
@@ -617,6 +721,107 @@ export function AssignmentsEditor({
                     Exclusion groups do not use assignment filters.
                   </p>
                 )}
+                {supportsSchedule && row.targetKind !== "exclusionGroup" ? (
+                  <div className="assignment-schedule">
+                    <p className="muted" style={{ margin: "0.35rem 0 0.5rem", fontSize: "0.6875rem" }}>
+                      Schedule
+                      {row.runSchedule
+                        ? ` · ${summarizeRemediationSchedule(row.runSchedule, row.runRemediationScript)}`
+                        : ""}
+                    </p>
+                    <div className="assignment-filter-row">
+                      <label className="assignment-filter">
+                        <span>Frequency</span>
+                        <select
+                          className="axis-input"
+                          value={row.runSchedule?.kind ?? "daily"}
+                          onChange={(event) =>
+                            setRowScheduleKind(row.key, event.target.value as RemediationScheduleKind)
+                          }
+                        >
+                          <option value="hourly">Hourly</option>
+                          <option value="daily">Daily</option>
+                          <option value="runOnce">Once</option>
+                          <option value="weekly">Weekly</option>
+                          <option value="monthly">Monthly</option>
+                        </select>
+                      </label>
+                      {row.runSchedule?.kind !== "runOnce" ? (
+                        <label className="assignment-filter">
+                          <span>Interval</span>
+                          <input
+                            className="axis-input"
+                            type="number"
+                            min={1}
+                            max={23}
+                            value={row.runSchedule?.interval ?? 1}
+                            onChange={(event) =>
+                              setRowScheduleInterval(row.key, Number(event.target.value))
+                            }
+                            aria-label={`Schedule interval for ${assignmentTargetLabel(row)}`}
+                          />
+                        </label>
+                      ) : null}
+                      {row.runSchedule?.kind !== "hourly" ? (
+                        <label className="assignment-filter">
+                          <span>Time</span>
+                          <input
+                            className="axis-input"
+                            type="time"
+                            value={row.runSchedule?.time ?? "08:00"}
+                            onChange={(event) => setRowScheduleTime(row.key, event.target.value)}
+                            aria-label={`Schedule time for ${assignmentTargetLabel(row)}`}
+                          />
+                        </label>
+                      ) : null}
+                      {row.runSchedule?.kind === "runOnce" ? (
+                        <label className="assignment-filter">
+                          <span>Date</span>
+                          <input
+                            className="axis-input"
+                            type="date"
+                            value={row.runSchedule?.date ?? ""}
+                            onChange={(event) => setRowScheduleDate(row.key, event.target.value)}
+                            aria-label={`Schedule date for ${assignmentTargetLabel(row)}`}
+                          />
+                        </label>
+                      ) : null}
+                    </div>
+                    <div className="assignment-filter-row">
+                      {row.runSchedule?.kind !== "hourly" ? (
+                        <label className="axis-check">
+                          <input
+                            type="checkbox"
+                            checked={row.runSchedule?.useUtc ?? false}
+                            onChange={(event) =>
+                              setRowScheduleUseUtc(row.key, event.target.checked)
+                            }
+                          />
+                          Use UTC
+                        </label>
+                      ) : null}
+                      <label className="axis-check">
+                        <input
+                          type="checkbox"
+                          checked={row.runRemediationScript ?? true}
+                          onChange={(event) =>
+                            setRowRunRemediationScript(row.key, event.target.checked)
+                          }
+                        />
+                        Run remediation script
+                      </label>
+                      {row.runSchedule ? (
+                        <span className="muted" style={{ fontSize: "0.6875rem" }}>
+                          {remediationScheduleKindLabel(row.runSchedule.kind)} ·{" "}
+                          {remediationScheduleIntervalLabel(
+                            row.runSchedule.kind,
+                            row.runSchedule.interval,
+                          )}
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
               </li>
             ))
           )}

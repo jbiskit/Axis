@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { closeThisWindow, popOutObject } from "../../lib/popout";
+import { summarizeAssignmentDraft } from "../../lib/assignmentSummary";
 import { intunePortalUrlForKind } from "../../lib/intune/portalLinks";
-import { fetchGraphObjectDetail, updateScriptContent } from "../../lib/tauri";
-import type { GraphObjectDetail } from "../../types/inventory";
+import { fetchGraphObjectDetail, loadAssignmentWorkspace, updateScriptContent } from "../../lib/tauri";
+import { parseScriptInspectorKind } from "../../lib/scriptKinds";
+import type { AssignmentDraft, GraphObjectDetail } from "../../types/inventory";
 import { OpenInIntune } from "../intune/OpenInIntune";
-import { ScriptCodeEditor, type ScriptCodeLanguage } from "../ui/ScriptCodeEditor";
+import { ScriptCodeEditor } from "../ui/ScriptCodeEditor";
 import { PageHeader } from "../ui/PageChrome";
 import { CatalogSettingInstances } from "./CatalogSettingInstances";
 import { PolicySettingsEditor } from "./PolicySettingsEditor";
@@ -24,17 +26,6 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
-}
-
-function summarizeGraphAssignment(row: Record<string, unknown>): string {
-  const target = asRecord(row.target);
-  const odata = String(target?.["@odata.type"] ?? "");
-  const groupId = text(target?.groupId);
-  if (odata.includes("allLicensedUsers")) return "All users";
-  if (odata.includes("allDevices")) return "All devices";
-  if (odata.includes("exclusionGroup")) return `Exclude · ${groupId ?? "group"}`;
-  if (groupId) return `Include · ${groupId}`;
-  return "Assignment";
 }
 
 function pretty(value: unknown): string {
@@ -209,10 +200,6 @@ function hasScript(detail: GraphObjectDetail): boolean {
   return Boolean(detail.scriptText || detail.detectionScriptText || detail.remediationScriptText);
 }
 
-function scriptLanguage(kind: string): ScriptCodeLanguage {
-  return kind.includes("shell") ? "bash" : "powershell";
-}
-
 export function GraphObjectInspector({
   kind,
   id,
@@ -241,6 +228,8 @@ export function GraphObjectInspector({
   const [saveBusy, setSaveBusy] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [assignmentDrafts, setAssignmentDrafts] = useState<AssignmentDraft[]>([]);
+  const [assignmentsLoading, setAssignmentsLoading] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -260,7 +249,12 @@ export function GraphObjectInspector({
         setScriptText(response.detail?.scriptText ?? "");
         setDetectionText(response.detail?.detectionScriptText ?? "");
         setRemediationText(response.detail?.remediationScriptText ?? "");
-        if (response.detail && (kind === "configurationPolicy" || kind === "groupPolicyConfiguration")) {
+        if (
+          response.detail &&
+          (kind === "configurationPolicy" ||
+            kind === "groupPolicyConfiguration" ||
+            kind.startsWith("script:"))
+        ) {
           setTab("payload");
         }
       })
@@ -277,6 +271,36 @@ export function GraphObjectInspector({
     };
   }, [kind, id]);
 
+  const assignments = useMemo(
+    () => (Array.isArray(detail?.assignments) ? detail.assignments : []),
+    [detail?.assignments],
+  );
+
+  useEffect(() => {
+    if (!detail || assignments.length === 0) {
+      setAssignmentDrafts([]);
+      setAssignmentsLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setAssignmentsLoading(true);
+    void loadAssignmentWorkspace(kind, assignments)
+      .then((response) => {
+        if (cancelled) return;
+        setAssignmentDrafts(response.drafts);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setAssignmentDrafts([]);
+      })
+      .finally(() => {
+        if (!cancelled) setAssignmentsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [kind, detail?.id, assignments]);
+
   async function reloadDetail() {
     try {
       const response = await fetchGraphObjectDetail(kind, id);
@@ -287,14 +311,15 @@ export function GraphObjectInspector({
     }
   }
 
-  const language = scriptLanguage(kind);
+  const scriptInfo = parseScriptInspectorKind(kind);
+  const language = scriptInfo?.language ?? "powershell";
   const portalHref = intunePortalUrlForKind(kind, id, asRecord(detail?.object) ?? null);
   const payloadLabel = detail && hasScript(detail) ? "Scripts" : "Settings";
   const settings = Array.isArray(detail?.settings) ? detail.settings : [];
   const extras = detail?.extras ?? null;
-  const assignments = Array.isArray(detail?.assignments) ? detail.assignments : [];
   const rows = useMemo(() => (detail ? overviewRows(detail) : []), [detail]);
-  const canEditScripts = kind.startsWith("script:");
+  const supportsRemediationSchedule = kind === "script:remediation";
+  const canEditScripts = Boolean(scriptInfo);
   const canEditPolicy = kind === "configurationPolicy";
   const canAssign = kind !== "autopilotDevice";
   const exportJson = detail ? pretty(exportPayload(detail)) : "";
@@ -313,11 +338,10 @@ export function GraphObjectInspector({
       const response = await updateScriptContent({
         kind: detail.kind,
         id: detail.id,
-        scriptText:
-          kind.includes("remediation") || kind.includes("compliance") ? null : scriptText,
+        scriptText: scriptInfo?.isPlatform ? scriptText : null,
         detectionScriptText:
-          kind.includes("remediation") || kind.includes("compliance") ? detectionText : null,
-        remediationScriptText: kind.includes("remediation") ? remediationText : null,
+          scriptInfo?.isRemediation || scriptInfo?.isCompliance ? detectionText : null,
+        remediationScriptText: scriptInfo?.isRemediation ? remediationText : null,
       });
       if (!response.ok) {
         setSaveError(response.error ?? "Save failed");
@@ -480,11 +504,18 @@ export function GraphObjectInspector({
                   </button>
                 ) : null}
               </div>
-              {assignments.length > 0 ? (
+              {assignmentsLoading ? (
+                <p className="muted" style={{ marginTop: "0.75rem" }}>
+                  Resolving group names…
+                </p>
+              ) : null}
+              {!assignmentsLoading && assignments.length > 0 ? (
                 <ul className="assignment-rows" style={{ marginTop: "0.75rem" }}>
-                  {assignments.map((row, index) => (
-                    <li key={text(row.id) ?? String(index)} className="assignment-row">
-                      {summarizeGraphAssignment(row)}
+                  {assignmentDrafts.map((draft, index) => (
+                    <li key={`${draft.targetKind}:${draft.groupId ?? index}`} className="assignment-row">
+                      {summarizeAssignmentDraft(draft, {
+                        supportsSchedule: supportsRemediationSchedule,
+                      })}
                     </li>
                   ))}
                 </ul>
@@ -498,7 +529,13 @@ export function GraphObjectInspector({
                   <p className="muted" style={{ margin: 0 }}>
                     {dirty
                       ? "Unsaved edits in the buffer."
-                      : "PowerShell/shell bodies from Graph."}
+                      : scriptInfo?.isPlatform
+                        ? "Platform script body from Graph."
+                        : scriptInfo?.isRemediation
+                          ? "Detection and remediation scripts from Graph."
+                          : scriptInfo?.isCompliance
+                            ? "Compliance discovery script from Graph."
+                            : "PowerShell/shell bodies from Graph."}
                   </p>
                   <button
                     type="button"
@@ -510,7 +547,7 @@ export function GraphObjectInspector({
                   </button>
                 </div>
               ) : null}
-              {kind.startsWith("script:") && !kind.includes("remediation") && !kind.includes("compliance") ? (
+              {scriptInfo?.isPlatform ? (
                 <section className="axis-panel" style={{ padding: "0.85rem" }}>
                   <h2 style={{ margin: "0 0 0.5rem", fontSize: "0.85rem" }}>Script</h2>
                   <ScriptCodeEditor
@@ -521,7 +558,7 @@ export function GraphObjectInspector({
                   />
                 </section>
               ) : null}
-              {kind.includes("remediation") || kind.includes("compliance") ? (
+              {scriptInfo?.isRemediation || scriptInfo?.isCompliance ? (
                 <section className="axis-panel" style={{ padding: "0.85rem" }}>
                   <h2 style={{ margin: "0 0 0.5rem", fontSize: "0.85rem" }}>Detection</h2>
                   <ScriptCodeEditor
@@ -532,7 +569,7 @@ export function GraphObjectInspector({
                   />
                 </section>
               ) : null}
-              {kind.includes("remediation") ? (
+              {scriptInfo?.isRemediation ? (
                 <section className="axis-panel" style={{ padding: "0.85rem" }}>
                   <h2 style={{ margin: "0 0 0.5rem", fontSize: "0.85rem" }}>Remediation</h2>
                   <ScriptCodeEditor

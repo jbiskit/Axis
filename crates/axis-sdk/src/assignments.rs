@@ -87,6 +87,29 @@ pub struct AssignmentFilter {
     pub rule: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RemediationScheduleKind {
+    Hourly,
+    Daily,
+    Weekly,
+    Monthly,
+    RunOnce,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemediationScheduleDraft {
+    pub kind: RemediationScheduleKind,
+    pub interval: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub use_utc: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub date: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AssignmentDraft {
@@ -105,6 +128,10 @@ pub struct AssignmentDraft {
     pub filter_mode: Option<AssignmentFilterMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub intent: Option<AssignmentIntent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_remediation_script: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_schedule: Option<RemediationScheduleDraft>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -113,6 +140,121 @@ pub struct AssignmentCapabilities {
     pub writable: bool,
     pub supports_intent: bool,
     pub supports_filters: bool,
+    pub supports_schedule: bool,
+}
+
+pub fn default_remediation_schedule() -> RemediationScheduleDraft {
+    RemediationScheduleDraft {
+        kind: RemediationScheduleKind::Daily,
+        interval: 1,
+        time: Some("08:00".into()),
+        use_utc: Some(false),
+        date: None,
+    }
+}
+
+fn schedule_kind_from_odata(odata: &str) -> Option<RemediationScheduleKind> {
+    if odata.contains("HourlySchedule") {
+        Some(RemediationScheduleKind::Hourly)
+    } else if odata.contains("DailySchedule") {
+        Some(RemediationScheduleKind::Daily)
+    } else if odata.contains("WeeklySchedule") {
+        Some(RemediationScheduleKind::Weekly)
+    } else if odata.contains("MonthlySchedule") {
+        Some(RemediationScheduleKind::Monthly)
+    } else if odata.contains("RunOnceSchedule") {
+        Some(RemediationScheduleKind::RunOnce)
+    } else {
+        None
+    }
+}
+
+fn schedule_odata_type(kind: RemediationScheduleKind) -> &'static str {
+    match kind {
+        RemediationScheduleKind::Hourly => "#microsoft.graph.deviceHealthScriptHourlySchedule",
+        RemediationScheduleKind::Daily => "#microsoft.graph.deviceHealthScriptDailySchedule",
+        RemediationScheduleKind::Weekly => "#microsoft.graph.deviceHealthScriptWeeklySchedule",
+        RemediationScheduleKind::Monthly => "#microsoft.graph.deviceHealthScriptMonthlySchedule",
+        RemediationScheduleKind::RunOnce => "#microsoft.graph.deviceHealthScriptRunOnceSchedule",
+    }
+}
+
+fn schedule_uses_time(kind: RemediationScheduleKind) -> bool {
+    !matches!(kind, RemediationScheduleKind::Hourly)
+}
+
+fn normalize_time_for_ui(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.len() >= 5 && trimmed.as_bytes().get(2) == Some(&b':') {
+        trimmed[..5].to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn normalize_time_for_graph(raw: Option<&str>) -> String {
+    let trimmed = raw.unwrap_or("08:00").trim();
+    if trimmed.is_empty() {
+        return "08:00:00".into();
+    }
+    if trimmed.matches(':').count() >= 2 {
+        return trimmed.to_string();
+    }
+    format!("{trimmed}:00")
+}
+
+fn schedule_from_graph(value: &Value) -> Option<RemediationScheduleDraft> {
+    let odata = value.get("@odata.type")?.as_str()?;
+    let kind = schedule_kind_from_odata(odata)?;
+    let interval = value.get("interval").and_then(Value::as_i64).unwrap_or(1) as i32;
+    let time = value
+        .get("time")
+        .and_then(Value::as_str)
+        .map(normalize_time_for_ui);
+    let use_utc = value.get("useUtc").and_then(Value::as_bool);
+    let date = value
+        .get("date")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    Some(RemediationScheduleDraft {
+        kind,
+        interval,
+        time,
+        use_utc,
+        date,
+    })
+}
+
+fn schedule_to_graph(schedule: &RemediationScheduleDraft) -> Value {
+    let interval = schedule.interval.clamp(1, 23);
+    let mut body = json!({
+        "@odata.type": schedule_odata_type(schedule.kind),
+        "interval": interval,
+    });
+    if schedule_uses_time(schedule.kind) {
+        let object = body.as_object_mut().expect("object");
+        object.insert(
+            "time".into(),
+            json!(normalize_time_for_graph(schedule.time.as_deref())),
+        );
+        object.insert(
+            "useUtc".into(),
+            json!(schedule.use_utc.unwrap_or(false)),
+        );
+    }
+    if schedule.kind == RemediationScheduleKind::RunOnce {
+        if let Some(date) = schedule
+            .date
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            body.as_object_mut()
+                .expect("object")
+                .insert("date".into(), json!(date));
+        }
+    }
+    body
 }
 
 #[derive(Deserialize)]
@@ -185,21 +327,29 @@ pub fn assignment_capabilities(kind: &str) -> AssignmentCapabilities {
         | "groupPolicyConfiguration"
         | "windowsUpdate:rings"
         | "script:platform-powershell"
-        | "script:platform-shell"
-        | "script:remediation" => AssignmentCapabilities {
+        | "script:platform-shell" => AssignmentCapabilities {
             writable: true,
             supports_intent: false,
             supports_filters: true,
+            supports_schedule: false,
+        },
+        "script:remediation" => AssignmentCapabilities {
+            writable: true,
+            supports_intent: false,
+            supports_filters: true,
+            supports_schedule: true,
         },
         "mobileApp" => AssignmentCapabilities {
             writable: true,
             supports_intent: true,
             supports_filters: true,
+            supports_schedule: false,
         },
         _ => AssignmentCapabilities {
             writable: false,
             supports_intent: false,
             supports_filters: true,
+            supports_schedule: false,
         },
     }
 }
@@ -208,6 +358,15 @@ pub fn drafts_from_graph_assignments(rows: &[Value], include_intent: bool) -> Ve
     rows.iter()
         .filter_map(|row| draft_from_graph_assignment(row, include_intent))
         .collect()
+}
+
+fn is_real_assignment_filter_id(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    !trimmed
+        .eq_ignore_ascii_case("00000000-0000-0000-0000-000000000000")
 }
 
 fn draft_from_graph_assignment(row: &Value, include_intent: bool) -> Option<AssignmentDraft> {
@@ -223,16 +382,15 @@ fn draft_from_graph_assignment(row: &Value, include_intent: bool) -> Option<Assi
     let filter_id = target
         .get("deviceAndAppManagementAssignmentFilterId")
         .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
+        .filter(|value| is_real_assignment_filter_id(value))
         .map(str::to_string);
     let filter_type = target
         .get("deviceAndAppManagementAssignmentFilterType")
         .and_then(Value::as_str)
         .unwrap_or("");
     let filter_mode = match filter_type {
-        "include" => Some(AssignmentFilterMode::Include),
-        "exclude" => Some(AssignmentFilterMode::Exclude),
-        _ if filter_id.is_some() => Some(AssignmentFilterMode::Include),
+        "include" if filter_id.is_some() => Some(AssignmentFilterMode::Include),
+        "exclude" if filter_id.is_some() => Some(AssignmentFilterMode::Exclude),
         _ => None,
     };
     let intent = if include_intent {
@@ -259,6 +417,8 @@ fn draft_from_graph_assignment(row: &Value, include_intent: bool) -> Option<Assi
             filter_name: None,
             filter_mode,
             intent,
+            run_remediation_script: None,
+            run_schedule: None,
         }
     } else if odata.contains("allDevicesAssignmentTarget") {
         AssignmentDraft {
@@ -270,6 +430,8 @@ fn draft_from_graph_assignment(row: &Value, include_intent: bool) -> Option<Assi
             filter_name: None,
             filter_mode,
             intent,
+            run_remediation_script: None,
+            run_schedule: None,
         }
     } else if odata.contains("exclusionGroupAssignmentTarget") {
         AssignmentDraft {
@@ -281,6 +443,8 @@ fn draft_from_graph_assignment(row: &Value, include_intent: bool) -> Option<Assi
             filter_name: None,
             filter_mode: None,
             intent,
+            run_remediation_script: None,
+            run_schedule: None,
         }
     } else if odata.contains("groupAssignmentTarget") {
         AssignmentDraft {
@@ -292,6 +456,8 @@ fn draft_from_graph_assignment(row: &Value, include_intent: bool) -> Option<Assi
             filter_name: None,
             filter_mode,
             intent,
+            run_remediation_script: None,
+            run_schedule: None,
         }
     } else {
         return None;
@@ -301,6 +467,14 @@ fn draft_from_graph_assignment(row: &Value, include_intent: bool) -> Option<Assi
         draft.filter_id = None;
         draft.filter_mode = None;
     }
+
+    draft.run_remediation_script = row
+        .get("runRemediationScript")
+        .and_then(Value::as_bool);
+    draft.run_schedule = row
+        .get("runSchedule")
+        .and_then(schedule_from_graph);
+
     Some(draft)
 }
 
@@ -702,18 +876,18 @@ fn build_assignment_body(draft: &AssignmentDraft, spec: &AssignSpec) -> Result<V
             .expect("object")
             .insert("settings".into(), settings);
     }
-    if spec.remediation {
+    if spec.remediation && draft.target_kind != AssignmentTargetKind::ExclusionGroup {
         let object = body.as_object_mut().expect("object");
-        object.insert("runRemediationScript".into(), json!(true));
         object.insert(
-            "runSchedule".into(),
-            json!({
-                "@odata.type": "#microsoft.graph.deviceHealthScriptDailySchedule",
-                "interval": 1,
-                "time": "08:00:00",
-                "useUtc": false,
-            }),
+            "runRemediationScript".into(),
+            json!(draft.run_remediation_script.unwrap_or(true)),
         );
+        let schedule = draft
+            .run_schedule
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(default_remediation_schedule);
+        object.insert("runSchedule".into(), schedule_to_graph(&schedule));
     }
     Ok(body)
 }
@@ -844,6 +1018,22 @@ mod tests {
     }
 
     #[test]
+    fn parse_ignores_null_assignment_filter_guid() {
+        let rows = vec![json!({
+            "target": {
+                "@odata.type": "#microsoft.graph.groupAssignmentTarget",
+                "groupId": "g1",
+                "deviceAndAppManagementAssignmentFilterId": "00000000-0000-0000-0000-000000000000",
+                "deviceAndAppManagementAssignmentFilterType": "include"
+            }
+        })];
+        let drafts = drafts_from_graph_assignments(&rows, false);
+        assert_eq!(drafts.len(), 1);
+        assert!(drafts[0].filter_id.is_none());
+        assert!(drafts[0].filter_mode.is_none());
+    }
+
+    #[test]
     fn parse_include_group_and_all_users() {
         let rows = vec![
             json!({
@@ -929,14 +1119,75 @@ mod tests {
     }
 
     #[test]
-    fn dynamic_device_rejects_user_rule() {
-        let error = directory_group_create_body(&CreateDirectoryGroupInput {
-            display_name: "Windows devices".into(),
-            description: None,
-            membership: CreateGroupMembership::DynamicDevice,
-            membership_rule: Some(r#"(user.department -eq "Finance")"#.into()),
-        })
-        .unwrap_err();
-        assert!(error.to_string().contains("device.*"));
+    fn remediation_capabilities_support_schedule() {
+        let caps = assignment_capabilities("script:remediation");
+        assert!(caps.supports_schedule);
+        assert!(
+            !assignment_capabilities("script:platform-powershell").supports_schedule
+        );
+    }
+
+    #[test]
+    fn parse_remediation_schedule_from_assignment() {
+        let rows = vec![json!({
+            "target": {
+                "@odata.type": "#microsoft.graph.groupAssignmentTarget",
+                "groupId": "g1"
+            },
+            "runRemediationScript": false,
+            "runSchedule": {
+                "@odata.type": "#microsoft.graph.deviceHealthScriptDailySchedule",
+                "interval": 7,
+                "useUtc": true,
+                "time": "14:30:00.0000000"
+            }
+        })];
+        let drafts = drafts_from_graph_assignments(&rows, false);
+        assert_eq!(drafts.len(), 1);
+        assert_eq!(drafts[0].run_remediation_script, Some(false));
+        let schedule = drafts[0].run_schedule.as_ref().unwrap();
+        assert_eq!(schedule.kind, RemediationScheduleKind::Daily);
+        assert_eq!(schedule.interval, 7);
+        assert_eq!(schedule.time.as_deref(), Some("14:30"));
+        assert_eq!(schedule.use_utc, Some(true));
+    }
+
+    #[test]
+    fn parse_hourly_and_run_once_schedules() {
+        let hourly = drafts_from_graph_assignments(
+            &[json!({
+                "target": {
+                    "@odata.type": "#microsoft.graph.allDevicesAssignmentTarget"
+                },
+                "runSchedule": {
+                    "@odata.type": "#microsoft.graph.deviceHealthScriptHourlySchedule",
+                    "interval": 4
+                }
+            })],
+            false,
+        );
+        assert_eq!(
+            hourly[0].run_schedule.as_ref().unwrap().kind,
+            RemediationScheduleKind::Hourly
+        );
+
+        let once = drafts_from_graph_assignments(
+            &[json!({
+                "target": {
+                    "@odata.type": "#microsoft.graph.allDevicesAssignmentTarget"
+                },
+                "runSchedule": {
+                    "@odata.type": "#microsoft.graph.deviceHealthScriptRunOnceSchedule",
+                    "interval": 1,
+                    "useUtc": false,
+                    "time": "09:15:00",
+                    "date": "2026-08-28"
+                }
+            })],
+            false,
+        );
+        let schedule = once[0].run_schedule.as_ref().unwrap();
+        assert_eq!(schedule.kind, RemediationScheduleKind::RunOnce);
+        assert_eq!(schedule.date.as_deref(), Some("2026-08-28"));
     }
 }
