@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { createTenantScript } from "../../lib/tauri";
+import { scriptLanguageForKind } from "../../lib/scriptKinds";
 import type { TenantScriptSummary } from "../../types/inventory";
+import { ScriptCodeEditor } from "../ui/ScriptCodeEditor";
 
 export type ScriptFamily = "platform" | "remediation" | "compliance";
 export type CreateScriptKind = "platform-powershell" | "platform-shell" | "remediation" | "compliance";
@@ -27,26 +29,28 @@ function ScriptBodyField({
   value,
   onChange,
   disabled,
-  rows = 10,
+  language,
+  height = "14rem",
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   disabled?: boolean;
-  rows?: number;
+  language: "powershell" | "bash";
+  height?: string;
 }) {
   return (
-    <label className="device-field">
-      {label}
-      <textarea
-        className="axis-input create-script-body"
-        rows={rows}
-        spellCheck={false}
+    <div className="device-field">
+      <span>{label}</span>
+      <ScriptCodeEditor
         value={value}
-        disabled={disabled}
-        onChange={(event) => onChange(event.target.value)}
+        onChange={onChange}
+        language={language}
+        readOnly={disabled}
+        ariaLabel={label}
+        height={height}
       />
-    </label>
+    </div>
   );
 }
 
@@ -97,6 +101,7 @@ export function CreateScriptDialog({
   }, [busy, onClose, open]);
 
   const needsDetection = kind === "remediation" || kind === "compliance";
+  const editorLanguage = scriptLanguageForKind(kind);
   const canCreate = useMemo(() => {
     if (!name.trim() || busy) return false;
     if (needsDetection) return Boolean(detectionText.trim());
@@ -237,7 +242,8 @@ export function CreateScriptDialog({
                 value={detectionText}
                 onChange={setDetectionText}
                 disabled={busy}
-                rows={8}
+                language={editorLanguage}
+                height="12rem"
               />
               {kind === "remediation" ? (
                 <ScriptBodyField
@@ -245,7 +251,8 @@ export function CreateScriptDialog({
                   value={remediationText}
                   onChange={setRemediationText}
                   disabled={busy}
-                  rows={8}
+                  language={editorLanguage}
+                  height="12rem"
                 />
               ) : null}
             </>
@@ -255,7 +262,8 @@ export function CreateScriptDialog({
               value={scriptText}
               onChange={setScriptText}
               disabled={busy}
-              rows={12}
+              language={editorLanguage}
+              height="16rem"
             />
           )}
         </div>

@@ -105,11 +105,15 @@ export function BulkAssignBar({
   onEdit,
   onClear,
   extra,
+  editDisabled = false,
+  editHint,
 }: {
   count: number;
   onEdit: () => void;
   onClear: () => void;
   extra?: ReactNode;
+  editDisabled?: boolean;
+  editHint?: string;
 }) {
   if (count === 0) return null;
   return (
@@ -122,6 +126,8 @@ export function BulkAssignBar({
         <button
           type="button"
           className="axis-btn axis-btn-primary"
+          disabled={editDisabled}
+          title={editHint}
           onClick={onEdit}
         >
           Update assignments
@@ -260,5 +266,10 @@ export function AssignmentsDialog({
 function bulkNoun(kind: string, count: number): string {
   const plural = count !== 1;
   if (kind === "mobileApp") return plural ? "apps" : "app";
+  if (kind.startsWith("script:")) {
+    if (kind.endsWith("remediation")) return plural ? "remediations" : "remediation";
+    if (kind.endsWith("compliance")) return plural ? "compliance scripts" : "compliance script";
+    return plural ? "scripts" : "script";
+  }
   return plural ? "policies" : "policy";
 }

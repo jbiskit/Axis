@@ -19,6 +19,16 @@ import {
 } from "../lib/listSelection";
 import { hrefWithParam, navigate, type AppRoute } from "../lib/route";
 import {
+  homogeneousBulkAssignKind,
+  inspectorKindForTenantScript,
+  matchesScriptFilters,
+  matchesScriptWorkbenchScope,
+  scriptKindFilterOptions,
+  scriptWorkbenchScopeFromPath,
+  tenantScriptKindLabel,
+  type ScriptKindFilter,
+} from "../lib/scriptKinds";
+import {
   fetchAppProtectionPolicies,
   fetchAutopilotDevices,
   fetchAutopilotProfiles,
@@ -54,6 +64,7 @@ import { TenantOverview } from "./TenantOverview";
 import { PageHeader, SignalCard } from "./ui/PageChrome";
 import { CreateScriptDialog, type ScriptFamily } from "./workbench/CreateScriptDialog";
 import { DocumentTabs } from "./workbench/DocumentTabs";
+import { GraphObjectInspector } from "./workbench/GraphObjectInspector";
 import {
   BulkAssignBar,
   AssignmentsDialog,
@@ -1375,20 +1386,13 @@ function ScriptsWorkbench({
   onClose: () => void;
   onRefresh: () => void;
 }) {
-  const kind =
-    pathname.endsWith("remediations")
-      ? "remediation"
-      : pathname.endsWith("compliance")
-        ? "compliance"
-        : "platform";
-  const scoped = items.filter((item) => {
-    if (kind === "remediation") return item.kind === "remediation";
-    if (kind === "compliance") return item.kind === "compliance";
-    return item.kind.startsWith("platform");
-  });
-  const title = kind === "remediation" ? "Remediations" : kind === "compliance" ? "Compliance scripts" : "Scripts";
-  const family: ScriptFamily =
-    kind === "remediation" ? "remediation" : kind === "compliance" ? "compliance" : "platform";
+  const scope = scriptWorkbenchScopeFromPath(pathname);
+  const scoped = items.filter((item) => matchesScriptWorkbenchScope(item.kind, scope));
+  const title =
+    scope === "remediation" ? "Remediations" : scope === "compliance" ? "Compliance scripts" : "Scripts";
+  const family: ScriptFamily = scope;
+  const { query, setQuery, assignedFilter, setAssignedFilter } = useListSearchState();
+  const [kindFilter, setKindFilter] = useState<ScriptKindFilter>("all");
   const [creating, setCreating] = useState(false);
   const [createdOverlay, setCreatedOverlay] = useState<TenantScriptSummary | null>(null);
   const visible = useMemo(() => {
@@ -1396,7 +1400,19 @@ function ScriptsWorkbench({
     if (scoped.some((item) => item.id === createdOverlay.id)) return scoped;
     return [createdOverlay, ...scoped];
   }, [createdOverlay, scoped]);
-  const selected = visible.find((item) => item.id === selectedId) ?? items.find((item) => item.id === selectedId);
+  const filtered = useMemo(
+    () => visible.filter((item) => matchesScriptFilters(item, query, assignedFilter, kindFilter)),
+    [visible, query, assignedFilter, kindFilter],
+  );
+  const selected = visible.find((item) => item.id === selectedId) ?? null;
+  useEffect(() => {
+    setKindFilter("all");
+  }, [scope]);
+  useEffect(() => {
+    if (!selectedId) return;
+    if (visible.some((item) => item.id === selectedId)) return;
+    onClose();
+  }, [onClose, selectedId, visible]);
   const titleFor = useCallback(
     (id: string) =>
       visible.find((item) => item.id === id)?.displayName ??
@@ -1405,38 +1421,98 @@ function ScriptsWorkbench({
     [items, visible],
   );
   const { tabs, close } = useDocumentTabs(selectedId, titleFor);
+  const filteredIds = useMemo(() => filtered.map((item) => item.id), [filtered]);
+  const selection = useCheckedIds(filteredIds);
+  const checkedScripts = filtered.filter((item) => selection.checkedIds.has(item.id));
+  const bulkScripts = filtered.filter((item) => selection.bulkTargetIds.includes(item.id));
+  const bulkAssignKind = homogeneousBulkAssignKind(bulkScripts);
+  const bulkKindConflict =
+    scope === "platform" &&
+    checkedScripts.length > 0 &&
+    new Set(checkedScripts.map((item) => item.kind)).size > 1;
+  const showBulk = selection.bulkEditorOpen && bulkScripts.length > 0 && bulkAssignKind != null;
+  const bulkPolicies: CatalogPolicySummary[] = bulkScripts.map((item) => ({
+    id: item.id,
+    name: item.displayName,
+  }));
+  const bulkBar = (
+    <BulkAssignBar
+      count={checkedScripts.length}
+      onEdit={selection.openBulkEditor}
+      onClear={selection.clear}
+      editDisabled={bulkKindConflict}
+      editHint={
+        bulkKindConflict
+          ? "Select scripts of the same kind (PowerShell or shell) to bulk-edit assignments."
+          : undefined
+      }
+    />
+  );
   const createButton = (
     <button type="button" className="axis-btn axis-btn-primary" onClick={() => setCreating(true)}>
       New
     </button>
   );
+  const searchPlaceholder =
+    scope === "remediation"
+      ? "Name, run as, assigned…"
+      : scope === "compliance"
+        ? "Name, run as, assigned…"
+        : "Name, kind, run as, assigned…";
+  const countLabel = `${filtered.length} of ${visible.length}`;
+  const kindSecondaryFilter =
+    scope === "platform"
+      ? {
+          label: "Kind",
+          value: kindFilter,
+          onChange: (value: string) => setKindFilter(value as ScriptKindFilter),
+          options: scriptKindFilterOptions(),
+        }
+      : undefined;
   return (
     <>
     <WorkspaceSplit
       inspectorPrimary={Boolean(selected)}
       master={
         selected ? (
-          <CompactObjectList
-            title={title}
-            description="Select a script to inspect it here."
-            items={visible.map((item) => ({
-              id: item.id,
-              title: item.displayName,
-              meta: `${item.kind} · ${item.runAsAccount ?? "—"}`,
-            }))}
-            selectedId={selected.id}
-            onSelect={onSelect}
-            onRefresh={onRefresh}
-            loading={loading}
-            error={error}
-            actions={createButton}
-          />
+          <div className="stack">
+            {bulkBar}
+            <CompactObjectList
+              title={title}
+              description="Select a script to inspect it here."
+              items={filtered.map((item) => ({
+                id: item.id,
+                title: item.displayName,
+                meta: `${tenantScriptKindLabel(item.kind)} · ${item.runAsAccount ?? "—"}`,
+              }))}
+              selectedId={selected.id}
+              onSelect={onSelect}
+              onRefresh={onRefresh}
+              loading={loading}
+              error={error}
+              actions={createButton}
+              checkedIds={selection.checkedIds}
+              onToggleChecked={selection.toggle}
+              query={query}
+              onQueryChange={setQuery}
+              assignedFilter={assignedFilter}
+              onAssignedFilterChange={setAssignedFilter}
+              countLabel={countLabel}
+              searchPlaceholder={searchPlaceholder}
+              secondaryFilter={kindSecondaryFilter}
+              allSelected={selection.allSelected}
+              onToggleAll={selection.toggleAll}
+              selectAllIndeterminate={checkedScripts.length > 0 && !selection.allSelected}
+              selectAllDisabled={filtered.length === 0}
+              selectAllLabel={`Select all filtered ${title.toLowerCase()}`}
+            />
+          </div>
         ) : (
           <div className="stack">
             <PageHeader
               eyebrow="Devices"
               title={title}
-              description="Live Graph inventory. Create a script here, then assign it from the inspector."
+              description="Live Graph inventory. Create a script here, then bulk-select rows to update assignments on multiple scripts at once."
               actions={
                 <>
                   {createButton}
@@ -1447,10 +1523,28 @@ function ScriptsWorkbench({
               }
             />
             {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
-            <section className="axis-panel" style={{ overflow: "hidden" }}>
+            {bulkBar}
+            <SearchableTable
+              query={query}
+              onQueryChange={setQuery}
+              assignedFilter={assignedFilter}
+              onAssignedFilterChange={setAssignedFilter}
+              countLabel={countLabel}
+              placeholder={searchPlaceholder}
+              secondaryFilter={kindSecondaryFilter}
+            >
               <table className="axis-table">
                 <thead>
                   <tr>
+                    <th className="axis-table-check">
+                      <SelectCheckbox
+                        checked={selection.allSelected}
+                        indeterminate={checkedScripts.length > 0 && !selection.allSelected}
+                        disabled={filtered.length === 0}
+                        label={`Select all filtered ${title.toLowerCase()}`}
+                        onChange={selection.toggleAll}
+                      />
+                    </th>
                     <th>Name</th>
                     <th>Kind</th>
                     <th>Run as</th>
@@ -1458,17 +1552,33 @@ function ScriptsWorkbench({
                   </tr>
                 </thead>
                 <tbody>
-                  {visible.map((item) => (
-                    <tr key={item.id} className="row-link" onClick={() => onSelect(item.id)}>
+                  {filtered.map((item) => (
+                    <tr
+                      key={item.id}
+                      className={`row-link${selectedId === item.id ? " selected" : ""}`}
+                      onClick={() => onSelect(item.id)}
+                    >
+                      <td className="axis-table-check">
+                        <SelectCheckbox
+                          checked={selection.checkedIds.has(item.id)}
+                          label={`Select ${item.displayName}`}
+                          onChange={() => selection.toggle(item.id)}
+                        />
+                      </td>
                       <td>{item.displayName}</td>
-                      <td className="muted">{item.kind}</td>
+                      <td className="muted">{tenantScriptKindLabel(item.kind)}</td>
                       <td className="muted">{item.runAsAccount ?? "—"}</td>
                       <td className="muted">{item.assignmentCount ?? "—"}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-            </section>
+              {!loading && filtered.length === 0 ? (
+                <p className="muted" style={{ padding: "1rem" }}>
+                  No matching {title.toLowerCase()}.
+                </p>
+              ) : null}
+            </SearchableTable>
           </div>
         )
       }
@@ -1488,7 +1598,7 @@ function ScriptsWorkbench({
             <InspectorErrorBoundary>
             <GraphObjectInspector
               key={selected.id}
-              kind={`script:${selected.kind}`}
+              kind={inspectorKindForTenantScript(selected.kind)}
               id={selected.id}
               fallbackTitle={selected.displayName}
               onClose={() => {
@@ -1503,6 +1613,16 @@ function ScriptsWorkbench({
           <InspectorEmpty label="Select a script to inspect it in this workspace. Close clears the selection and stays here." />
         )
       }
+    />
+    <AssignmentsDialog
+      open={showBulk}
+      kind={bulkAssignKind ?? "script:remediation"}
+      policies={bulkPolicies}
+      onClose={selection.closeBulkEditor}
+      onSaved={() => {
+        onRefresh();
+        selection.clear();
+      }}
     />
     <CreateScriptDialog
       open={creating}
