@@ -1023,6 +1023,11 @@
   color: var(--axis-warning);
 }
 
+.axis-pill-danger {
+  background: var(--axis-danger-soft);
+  color: var(--axis-danger);
+}
+
 .axis-pill.is-active {
   outline: 2px solid var(--axis-ring);
   outline-offset: 1px;
@@ -1842,53 +1847,103 @@ details.axis-panel > summary {
   display: flex;
   min-width: 0;
   flex: 1;
-  gap: 0.25rem;
+  gap: 0.2rem;
   overflow-x: auto;
+  scrollbar-width: none;
+  padding: 0.18rem;
+  border: 1px solid var(--axis-border);
+  border-radius: calc(var(--axis-radius) + 2px);
+  background: color-mix(in srgb, var(--axis-mantle) 88%, var(--axis-surface-2));
+}
+
+.document-tab-list::-webkit-scrollbar {
+  display: none;
 }
 
 .document-tab {
   display: inline-flex;
-  align-items: center;
+  min-width: 5rem;
   max-width: 14rem;
-  border: 1px solid var(--axis-border);
+  flex: 1 1 0;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid transparent;
   border-radius: var(--axis-radius);
-  background: var(--axis-surface-1);
+  background: transparent;
+  color: var(--axis-muted);
+  cursor: grab;
+}
+
+.document-tab.is-dragging {
+  opacity: 0.42;
+}
+
+.document-tab.drop-before {
+  box-shadow: inset 2px 0 0 var(--axis-accent);
+}
+
+.document-tab.drop-after {
+  box-shadow: inset -2px 0 0 var(--axis-accent);
+}
+
+.document-tab.active.drop-before {
+  box-shadow: inset 2px 0 0 var(--axis-accent), inset 0 -2px 0 var(--axis-accent);
+}
+
+.document-tab.active.drop-after {
+  box-shadow: inset -2px 0 0 var(--axis-accent), inset 0 -2px 0 var(--axis-accent);
+}
+
+.document-tab:hover {
+  background: color-mix(in srgb, var(--axis-surface-2) 62%, transparent);
+  color: var(--axis-fg);
 }
 
 .document-tab.active {
   background: var(--axis-accent-soft);
-  border-color: color-mix(in srgb, var(--axis-accent) 35%, var(--axis-border));
+  border-color: color-mix(in srgb, var(--axis-accent) 38%, var(--axis-border));
+  color: var(--axis-fg);
+  box-shadow: inset 0 -2px 0 var(--axis-accent);
 }
 
 .document-tab-label {
   min-width: 0;
+  flex: 1 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  padding: 0.28rem 0.45rem 0.28rem 0.65rem;
+  padding: 0.3rem 0.35rem 0.3rem 0.55rem;
   border: 0;
   background: transparent;
   color: inherit;
   font: inherit;
   font-size: var(--axis-text-xs);
+  text-align: left;
   cursor: pointer;
 }
 
 .document-tab-close {
+  display: inline-flex;
   flex-shrink: 0;
-  width: 1.35rem;
-  height: 1.35rem;
-  margin-right: 0.15rem;
+  align-items: center;
+  justify-content: center;
+  width: 1.2rem;
+  height: 1.2rem;
+  margin: 0 0.28rem 0 0.05rem;
   border: 0;
-  border-radius: 999px;
-  background: transparent;
-  color: var(--axis-muted);
+  border-radius: 0.28rem;
+  background: var(--axis-danger-soft);
+  color: var(--axis-danger);
+  font-size: 0.95rem;
+  line-height: 1;
   cursor: pointer;
 }
 
-.document-tab-close:hover {
-  background: var(--axis-surface-2);
-  color: var(--axis-fg);
+.document-tab-close:hover,
+.document-tab-close:focus-visible {
+  background: var(--axis-danger);
+  color: var(--axis-crust);
+  outline: none;
 }
 
 .monaco-script-host {
@@ -1995,6 +2050,36 @@ details.axis-panel > summary {
   padding: 0.45rem 0.6rem;
 }
 
+.assignment-hit {
+  cursor: pointer;
+  background: transparent;
+  transition: background 0.12s ease;
+}
+
+.assignment-hit:hover,
+.assignment-hit:focus-within {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--axis-accent) 18%, transparent) 0%,
+    color-mix(in srgb, var(--axis-surface-2) 70%, transparent) 55%,
+    color-mix(in srgb, var(--axis-surface-2) 35%, transparent) 100%
+  );
+}
+
+.assignment-hit.is-assigned {
+  background: color-mix(in srgb, var(--axis-accent-soft) 70%, transparent);
+}
+
+.assignment-hit.is-assigned:hover,
+.assignment-hit.is-assigned:focus-within {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--axis-accent) 28%, transparent) 0%,
+    color-mix(in srgb, var(--axis-accent-soft) 90%, transparent) 60%,
+    color-mix(in srgb, var(--axis-surface-2) 40%, transparent) 100%
+  );
+}
+
 .assignment-hits li + li {
   border-top: 1px solid var(--axis-border);
 }
@@ -2024,11 +2109,19 @@ details.axis-panel > summary {
 .assignment-hit-pick {
   border: 0;
   background: none;
-  padding: 0;
+  padding: 0.15rem 0;
+  margin: -0.15rem 0;
+  border-radius: calc(var(--axis-radius) - 2px);
   text-align: left;
   color: inherit;
   font: inherit;
   cursor: pointer;
+}
+
+.assignment-hit-pick:hover,
+.assignment-hit-pick:focus-visible {
+  color: var(--axis-fg);
+  outline: none;
 }
 
 .assignment-hit-pick:disabled {
@@ -2216,4 +2309,117 @@ details.axis-panel > summary {
 
 .update-error {
   color: var(--axis-danger);
+}
+
+.script-status-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.75rem;
+}
+
+.script-status-row {
+  cursor: pointer;
+}
+
+.script-status-row:hover {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--axis-accent) 14%, transparent) 0%,
+    color-mix(in srgb, var(--axis-surface-2) 55%, transparent) 100%
+  );
+}
+
+.script-status-details {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  padding: 0.25rem 0 0.4rem;
+}
+
+.script-status-output p {
+  margin: 0 0 0.3rem;
+  font-size: var(--axis-text-xs);
+  font-weight: 600;
+  color: var(--axis-muted);
+}
+
+.script-status-output pre {
+  margin: 0;
+  max-height: 14rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--axis-border);
+  border-radius: var(--axis-radius);
+  background: var(--axis-bg);
+  color: var(--axis-fg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--axis-text-xs);
+  line-height: 1.45;
+}
+
+.object-list-menu-host {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  flex: 1;
+  height: 100%;
+}
+
+.axis-context-menu {
+  position: fixed;
+  z-index: 80;
+  min-width: 11.5rem;
+  padding: 0.28rem;
+  border: 1px solid var(--axis-border-strong);
+  border-radius: var(--axis-radius);
+  background: var(--axis-mantle);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.38);
+}
+
+.axis-context-menu-item {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0.4rem 0.65rem;
+  border: 0;
+  border-radius: calc(var(--axis-radius) - 2px);
+  background: transparent;
+  color: var(--axis-fg);
+  font: inherit;
+  font-size: var(--axis-text-xs);
+  text-align: left;
+  cursor: pointer;
+}
+
+.axis-context-menu-item:hover:not(:disabled) {
+  background: var(--axis-accent-soft);
+}
+
+.axis-context-menu-item:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.axis-context-menu-item.is-danger {
+  color: var(--axis-danger);
+}
+
+.axis-context-menu-sep {
+  height: 1px;
+  margin: 0.28rem 0.35rem;
+  background: var(--axis-border);
+}
+
+.axis-context-menu-toast {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 70;
+  max-width: 24rem;
+  margin: 0;
 }

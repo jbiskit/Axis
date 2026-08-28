@@ -151,6 +151,7 @@ export type CompactListItem = {
   title: string;
   meta?: string;
   group?: string;
+  kind?: string;
 };
 
 export function SearchableTable({
@@ -332,6 +333,7 @@ export function CompactObjectList({
   selectAllDisabled,
   selectAllLabel,
   secondaryFilter,
+  objectKind,
 }: {
   title: string;
   description?: string;
@@ -366,6 +368,7 @@ export function CompactObjectList({
     onChange: (value: string) => void;
     options: ListFilterOption[];
   };
+  objectKind?: string;
 }) {
   return (
     <div className="device-list-compact">
@@ -436,7 +439,16 @@ export function CompactObjectList({
               {item.group && item.group !== items[index - 1]?.group ? (
                 <li className="device-card-group">{item.group}</li>
               ) : null}
-              <li className={onToggleChecked ? "device-card-row" : undefined}>
+              <li
+                className={onToggleChecked ? "device-card-row" : undefined}
+                {...(item.kind ?? objectKind
+                  ? {
+                      "data-list-id": item.id,
+                      "data-list-title": item.title,
+                      "data-list-kind": item.kind ?? objectKind,
+                    }
+                  : {})}
+              >
                 {onToggleChecked && checkedIds ? (
                   <SelectCheckbox
                     checked={checkedIds.has(item.id)}

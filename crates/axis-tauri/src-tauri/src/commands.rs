@@ -3,13 +3,14 @@ use axis_sdk::{
     add_settings_to_policy, apply_filter_names, apply_group_metadata, assign_object_assignments,
     assignment_capabilities, collect_managed_device_diagnostics, create_directory_group,
     create_policy_with_settings, create_tenant_script, delete_managed_device,
+    duplicate_graph_object,
     drafts_from_graph_assignments, fetch_app_protection_policies, fetch_autopilot_devices,
     fetch_applied_policy_settings, fetch_autopilot_profiles, fetch_baseline_export_json,
     fetch_baseline_reference_sources, fetch_compliance_policies,
     fetch_configuration_policies, fetch_device_configurations, fetch_e8_baseline_references,
     fetch_endpoint_security_intents, fetch_enrollment_configurations, fetch_graph_object_detail,
     fetch_group_policy_configurations, fetch_managed_device_detail, fetch_policy_setting_issues,
-    fetch_mobile_apps, fetch_remediation_scripts, fetch_setting_conflict_details, fetch_store_apps,
+    fetch_mobile_apps, fetch_script_run_status, fetch_remediation_scripts, fetch_setting_conflict_details, fetch_store_apps,
     fetch_tenant_scripts, fetch_win32_apps, fetch_windows_update_policies,
     get_laps_credential_info, initiate_on_demand_remediation, list_assignment_filters,
     list_bitlocker_recovery_keys, list_catalog_categories, load_category_settings,
@@ -21,9 +22,9 @@ use axis_sdk::{
     BaselineReferenceSourceInput, BaselineReferenceSourceLoad, BitLockerRecoveryKeySummary,
     CatalogCategory, CatalogIndexState, CatalogPolicySummary, CatalogSearchResult,
     CategorySettingsLoad, CreateDirectoryGroupInput, CreateTenantScriptInput, CreatedCatalogPolicy,
-    DirectoryGroup,
+    DirectoryGroup, DuplicatedObject,
     E8BaselineReference, E8BaselineSource, GraphObjectDetail, InventoryList, LapsCredentialInfo,
-    MobileAppSummary, PolicySettingIssue, SettingConflictDetail,
+    MobileAppSummary, PolicySettingIssue, RemediationDeviceStatusReport, SettingConflictDetail,
     SettingsCatalogPlatform, TenantScriptSummary, WindowsUpdatePolicy,
 };
 use serde::Serialize;
@@ -822,6 +823,38 @@ pub async fn fetch_remediation_scripts_cmd(
     with_inventory(&state, fetch_remediation_scripts(&token)).await
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemediationDeviceStatusResponse {
+    pub report: Option<RemediationDeviceStatusReport>,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn fetch_remediation_device_status_cmd(
+    state: State<'_, AppState>,
+    script_id: String,
+    kind: Option<String>,
+) -> Result<RemediationDeviceStatusResponse, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Ok(RemediationDeviceStatusResponse {
+            report: None,
+            error: Some("Not signed in.".into()),
+        });
+    };
+    let kind = kind.unwrap_or_else(|| "script:remediation".into());
+    match fetch_script_run_status(&token, &kind, &script_id).await {
+        Ok(report) => Ok(RemediationDeviceStatusResponse {
+            report: Some(report),
+            error: None,
+        }),
+        Err(error) => Ok(RemediationDeviceStatusResponse {
+            report: None,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
 #[tauri::command]
 pub async fn sync_managed_device_cmd(
     state: State<'_, AppState>,
@@ -1166,6 +1199,48 @@ pub async fn create_tenant_script_cmd(
             error: Some(error.to_string()),
         }),
     }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicateGraphObjectResponse {
+    pub object: Option<DuplicatedObject>,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn duplicate_graph_object_cmd(
+    state: State<'_, AppState>,
+    kind: String,
+    id: String,
+    display_name: Option<String>,
+) -> Result<DuplicateGraphObjectResponse, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Ok(DuplicateGraphObjectResponse {
+            object: None,
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match duplicate_graph_object(&token, &kind, &id, display_name.as_deref()).await {
+        Ok(object) => Ok(DuplicateGraphObjectResponse {
+            object: Some(object),
+            error: None,
+        }),
+        Err(error) => Ok(DuplicateGraphObjectResponse {
+            object: None,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn lint_script_cmd(
+    language: String,
+    source: String,
+) -> Result<crate::script_lint::ScriptLintResult, String> {
+    tokio::task::spawn_blocking(move || crate::script_lint::lint_script(&language, &source))
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[derive(Debug, Serialize)]

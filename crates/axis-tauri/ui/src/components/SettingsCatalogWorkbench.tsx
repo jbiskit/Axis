@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import type { CatalogPolicySummary } from "../types/inventory";
 import { BrowseCatalogPanel } from "./BrowseCatalogPanel";
 import { PageHeader } from "./ui/PageChrome";
@@ -6,7 +6,10 @@ import { settingsCatalogPlatformFromScope } from "../lib/catalog";
 import { matchesCatalogPolicyFilters, platformFilterOptionsFromList, type AssignedFilter, type ListFilterOption } from "../lib/listSelection";
 import { INTUNE_PLATFORM_LABELS, type IntunePlatform } from "../lib/platforms";
 import { hrefWithParam, navigate } from "../lib/route";
+import { withTransientItem } from "../lib/duplicateObject";
 import { GraphObjectInspector } from "./workbench/GraphObjectInspector";
+import { listTargetProps, ObjectListMenuHost } from "./workbench/ObjectListMenu";
+import { InspectorWithDocumentTabs } from "./workbench/DocumentTabs";
 import {
   BulkAssignBar,
   AssignmentsDialog,
@@ -50,25 +53,35 @@ export function SettingsCatalogWorkbench({
         : value.includes("windows");
     });
   }, [catalogPlatform, policies]);
+  const [overlay, setOverlay] = useState<CatalogPolicySummary | null>(null);
+  const listed = useMemo(() => withTransientItem(scoped, overlay), [overlay, scoped]);
   const platformOptions = useMemo(
-    () => platformFilterOptionsFromList(scoped.map((item) => item.platforms)),
-    [scoped],
+    () => platformFilterOptionsFromList(listed.map((item) => item.platforms)),
+    [listed],
   );
   const filtered = useMemo(
     () =>
-      scoped.filter((item) =>
+      listed.filter((item) =>
         matchesCatalogPolicyFilters(item, query, assignedFilter, platformFilter),
       ),
-    [assignedFilter, platformFilter, query, scoped],
+    [assignedFilter, listed, platformFilter, query],
   );
 
-  const selected = filtered.find((item) => item.id === selectedId) ?? scoped.find((item) => item.id === selectedId) ?? policies.find((item) => item.id === selectedId);
+  const selected = filtered.find((item) => item.id === selectedId) ?? listed.find((item) => item.id === selectedId) ?? policies.find((item) => item.id === selectedId);
   const filteredIds = useMemo(() => filtered.map((item) => item.id), [filtered]);
   const selection = useCheckedIds(filteredIds);
   const checkedPolicies = filtered.filter((item) => selection.checkedIds.has(item.id));
   const bulkPolicies = filtered.filter((item) => selection.bulkTargetIds.includes(item.id));
   const showBulk = selection.bulkEditorOpen && bulkPolicies.length > 0;
   const inspectorOpen = Boolean(selected);
+  const titleFor = useCallback(
+    (id: string) =>
+      listed.find((item) => item.id === id)?.name ??
+      policies.find((item) => item.id === id)?.name ??
+      id,
+    [listed, policies],
+  );
+  const selectPolicy = (id: string) => navigate(hrefWithParam(pathname, search, "policy", id || null));
   const loadedLimitBanner = truncated ? (
     <IncompleteBanner>
       Filter and select all apply to loaded Settings Catalog rows. Axis keeps at most 500 items from Graph for this list.
@@ -176,7 +189,14 @@ export function SettingsCatalogWorkbench({
     <WorkspaceSplit
       inspectorPrimary={inspectorOpen}
       master={
-        selected ? (
+        <ObjectListMenuHost
+          onDuplicated={(created) => {
+            setOverlay({ id: created.id, name: created.title, isAssigned: false });
+            selectPolicy(created.id);
+            onRefresh();
+          }}
+        >
+        {selected ? (
           <div className="stack">
             <BulkAssignBar
               count={checkedPolicies.length}
@@ -187,6 +207,7 @@ export function SettingsCatalogWorkbench({
             <CompactObjectList
               title="Settings Catalog"
               description="Select a policy to edit settings and assignments here."
+              objectKind="configurationPolicy"
               items={filtered.map((item) => ({
                 id: item.id,
                 title: item.name,
@@ -259,20 +280,31 @@ export function SettingsCatalogWorkbench({
               onToggleAll={selection.toggleAll}
             />
           </div>
-        )
+        )}
+        </ObjectListMenuHost>
       }
       inspector={
-        selected ? (
-          <GraphObjectInspector
-            key={selected.id}
-            kind="configurationPolicy"
-            id={selected.id}
-            fallbackTitle={selected.name}
-            onClose={() => navigate(hrefWithParam(pathname, search, "policy", ""))}
-          />
-        ) : (
-          <InspectorEmpty label="Select a Settings Catalog policy to edit settings and assignments in this workspace. Close clears the selection and stays here." />
-        )
+        <InspectorWithDocumentTabs
+          selectedId={selected?.id ?? null}
+          titleFor={titleFor}
+          onSelect={selectPolicy}
+          onClear={() => selectPolicy("")}
+          empty={
+            <InspectorEmpty label="Select a Settings Catalog policy to edit settings and assignments in this workspace. Close clears the selection and stays here." />
+          }
+        >
+          {({ closeActive }) =>
+            selected ? (
+              <GraphObjectInspector
+                key={selected.id}
+                kind="configurationPolicy"
+                id={selected.id}
+                fallbackTitle={selected.name}
+                onClose={closeActive}
+              />
+            ) : null
+          }
+        </InspectorWithDocumentTabs>
       }
     />
     <AssignmentsDialog
@@ -364,6 +396,7 @@ function TenantPolicyTable({
               key={item.id}
               className={`row-link${selectedId === item.id ? " selected" : ""}`}
               onClick={() => onSelect(item.id)}
+              {...listTargetProps(item.id, item.name, "configurationPolicy")}
             >
               <td className="axis-table-check">
                 <SelectCheckbox

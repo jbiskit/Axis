@@ -57,6 +57,63 @@ export type TenantScriptSummary = {
   assignmentCount?: number | null;
 };
 
+export type RemediationRunManagedDevice = {
+  id?: string | null;
+  deviceName?: string | null;
+  osVersion?: string | null;
+  userId?: string | null;
+  userPrincipalName?: string | null;
+};
+
+export type RemediationDeviceRunState = {
+  id?: string | null;
+  runState?: string | null;
+  errorCode?: number | null;
+  errorDescription?: string;
+  resultMessage?: string;
+  assignmentFilterIds?: string[];
+  detectionState?: string | null;
+  lastStateUpdateDateTime?: string | null;
+  postRemediationDetectionScriptError?: string;
+  postRemediationDetectionScriptOutput?: string;
+  preRemediationDetectionScriptError?: string;
+  preRemediationDetectionScriptOutput?: string;
+  remediationScriptError?: string;
+  remediationState?: string | null;
+  managedDevice?: RemediationRunManagedDevice | null;
+};
+
+export type RemediationRunSummary = {
+  noIssueDetectedDeviceCount?: number | null;
+  issueDetectedDeviceCount?: number | null;
+  detectionScriptErrorDeviceCount?: number | null;
+  detectionScriptPendingDeviceCount?: number | null;
+  issueRemediatedDeviceCount?: number | null;
+  remediationScriptErrorDeviceCount?: number | null;
+  unknownDeviceCount?: number | null;
+  lastScriptRunDateTime?: string | null;
+};
+
+export type ScriptUserRunState = {
+  id?: string | null;
+  userPrincipalName?: string | null;
+  successDeviceCount?: number | null;
+  errorDeviceCount?: number | null;
+  pendingDeviceCount?: number | null;
+};
+
+export type RemediationDeviceStatusReport = {
+  scriptId: string;
+  kind?: string;
+  family?: string;
+  states: RemediationDeviceRunState[];
+  userStates?: ScriptUserRunState[];
+  truncated: boolean;
+  usersTruncated?: boolean;
+  fetchedAt: string;
+  summary?: RemediationRunSummary | null;
+};
+
 export type AutopilotDevice = {
   id: string;
   serialNumber?: string | null;
@@ -622,9 +679,35 @@ export type CreateTenantScriptInput = {
   runAs32Bit?: boolean | null;
 };
 
+export type ScriptDiagnostic = {
+  message: string;
+  startLine: number;
+  startColumn: number;
+  endLine: number;
+  endColumn: number;
+  severity: string;
+};
+
+export type ScriptLintResult = {
+  diagnostics: ScriptDiagnostic[];
+  engine: string;
+  engineError?: string | null;
+};
+
 export type CreateTenantScriptResponse = {
   script: TenantScriptSummary | null;
   error: string | null;
+};
+
+export type DuplicateGraphObjectResponse = {
+  object: DuplicatedObject | null;
+  error: string | null;
+};
+
+export type DuplicatedObject = {
+  id: string;
+  kind: string;
+  title: string;
 };
 
 export type GraphObjectDetail = {

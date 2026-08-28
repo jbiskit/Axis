@@ -102,6 +102,19 @@ function membershipLabel(kind?: GroupMembershipKind | null): string | null {
   }
 }
 
+function groupRowMode(
+  rows: AssignmentRow[],
+  groupId: string,
+): "include" | "exclude" | null {
+  const match = rows.find(
+    (row) =>
+      row.groupId === groupId &&
+      (row.targetKind === "group" || row.targetKind === "exclusionGroup"),
+  );
+  if (!match) return null;
+  return match.targetKind === "exclusionGroup" ? "exclude" : "include";
+}
+
 function membershipPillClass(kind?: GroupMembershipKind | null): string {
   switch (kind) {
     case "dynamicUser":
@@ -573,33 +586,43 @@ export function AssignmentsEditor({
       ) : null}
       {groupHits.length > 0 ? (
         <ul className="assignment-hits">
-          {groupHits.map((group) => (
-            <li key={group.id}>
-              <button
-                type="button"
-                className="assignment-hit-name assignment-hit-pick"                onClick={() =>
-                  addRow(groupPickerMode === "exclude" ? "exclusionGroup" : "group", group)
-                }
+          {groupHits.map((group) => {
+            const assignedMode = groupRowMode(rows, group.id);
+            return (
+              <li
+                key={group.id}
+                className={assignedMode ? "assignment-hit is-assigned" : "assignment-hit"}
               >
-                <span>{group.displayName}</span>
-                <span
-                  className={membershipPillClass(group.membership)}
-                  title={group.membershipRule ?? undefined}
+                <button
+                  type="button"
+                  className="assignment-hit-name assignment-hit-pick"
+                  onClick={() =>
+                    addRow(
+                      groupPickerMode === "exclude" ? "exclusionGroup" : "group",
+                      group,
+                    )
+                  }
                 >
-                  {membershipLabel(group.membership)}
+                  <span>{group.displayName}</span>
+                  <span
+                    className={membershipPillClass(group.membership)}
+                    title={group.membershipRule ?? undefined}
+                  >
+                    {membershipLabel(group.membership)}
+                  </span>
+                </button>
+                <span className="assignment-hit-actions">
+                  <IncludeExcludeToggle
+                    value={assignedMode}
+                    ariaLabel={`Add ${group.displayName} as an assignment`}
+                    onChange={(mode) =>
+                      addRow(mode === "exclude" ? "exclusionGroup" : "group", group)
+                    }
+                  />
                 </span>
-              </button>
-              <span className="assignment-hit-actions">
-                <IncludeExcludeToggle
-                  value={groupPickerMode}                  ariaLabel={`Add ${group.displayName} as include or exclude`}
-                  onChange={(mode) => {
-                    setGroupPickerMode(mode);
-                    addRow(mode === "exclude" ? "exclusionGroup" : "group", group);
-                  }}
-                />
-              </span>
-            </li>
-          ))}
+              </li>
+            );
+          })}
         </ul>
       ) : null}
 

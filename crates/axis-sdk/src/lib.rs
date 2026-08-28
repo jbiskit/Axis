@@ -12,6 +12,8 @@ mod glance;
 mod graph;
 mod inventory;
 mod object_detail;
+mod object_duplicate;
+mod script_status;
 mod session_store;
 mod settings_catalog;
 mod types;
@@ -63,6 +65,14 @@ pub use inventory::*;
 pub use object_detail::{
     create_tenant_script, fetch_graph_object_detail, update_script_content, CreateTenantScriptInput,
     GraphObjectDetail,
+};
+pub use object_duplicate::{
+    can_duplicate_kind, duplicate_graph_object, copy_display_name, DuplicatedObject,
+};
+pub use script_status::{
+    fetch_remediation_device_status, fetch_script_run_status, RemediationDeviceRunState,
+    RemediationDeviceStatusReport, RemediationRunManagedDevice, RemediationRunSummary,
+    ScriptUserRunState,
 };
 pub use session_store::SessionMode;
 pub use settings_catalog::*;

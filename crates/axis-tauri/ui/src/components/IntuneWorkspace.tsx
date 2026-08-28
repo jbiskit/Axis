@@ -6,6 +6,9 @@ import type {
   E8BaselineReference,
   MobileAppSummary,
   TenantScriptSummary,
+  WindowsUpdatePolicy,
+  AppProtectionPolicy,
+  AutopilotProfile,
 } from "../types/inventory";
 import { useInventory } from "../hooks/useInventory";
 import { useDocumentTabs } from "../hooks/useDocumentTabs";
@@ -28,6 +31,7 @@ import {
   tenantScriptKindLabel,
   type ScriptKindFilter,
 } from "../lib/scriptKinds";
+import { withTransientItem } from "../lib/duplicateObject";
 import {
   fetchAppProtectionPolicies,
   fetchAutopilotDevices,
@@ -63,8 +67,9 @@ import { SettingsCatalogWorkbench } from "./SettingsCatalogWorkbench";
 import { TenantOverview } from "./TenantOverview";
 import { PageHeader, SignalCard } from "./ui/PageChrome";
 import { CreateScriptDialog, type ScriptFamily } from "./workbench/CreateScriptDialog";
-import { DocumentTabs } from "./workbench/DocumentTabs";
+import { DocumentTabs, InspectorWithDocumentTabs } from "./workbench/DocumentTabs";
 import { GraphObjectInspector } from "./workbench/GraphObjectInspector";
+import { listTargetProps, ObjectListMenuHost } from "./workbench/ObjectListMenu";
 import {
   BulkAssignBar,
   AssignmentsDialog,
@@ -492,82 +497,16 @@ export function IntuneWorkspace({
         />
       );
     }
-    const items = family ? windowsUpdate.items.filter((item) => item.family === family) : windowsUpdate.items;
-    const selected = items.find((item) => item.id === search.get("policy"));
     return (
-      <WorkspaceSplit
-        inspectorPrimary={Boolean(selected)}
-        master={
-          selected ? (
-            <CompactObjectList
-              title={family ?? "Windows Update"}
-              description="Select a profile to inspect it here."
-              items={items.map((item) => ({
-                id: item.id,
-                title: item.name,
-                meta: `${item.family} · ${formatRelative(item.lastModifiedDateTime)}`,
-              }))}
-              selectedId={selected.id}
-              onSelect={(id) => navigate(hrefWithParam(pathname, search, "policy", id))}
-              onRefresh={() => void windowsUpdate.reload()}
-              loading={windowsUpdate.loading}
-              error={windowsUpdate.error}
-            />
-          ) : (
-            <div className="stack">
-              <PageHeader
-                eyebrow="Windows Update"
-                title={family ?? "Overview"}
-                description="Update rings, feature, quality, and driver profiles from Graph."
-                actions={
-                  <button type="button" className="axis-btn" onClick={() => void windowsUpdate.reload()}>
-                    Refresh
-                  </button>
-                }
-              />
-              {windowsUpdate.error ? <div className="axis-alert axis-alert-danger">{windowsUpdate.error}</div> : null}
-              <section className="axis-panel" style={{ overflow: "hidden" }}>
-                <table className="axis-table">
-                  <thead>
-                    <tr>
-                      <th>Name</th>
-                      <th>Family</th>
-                      <th>Modified</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {items.map((item) => (
-                      <tr
-                        key={item.id}
-                        className="row-link"
-                        onClick={() => navigate(hrefWithParam(pathname, search, "policy", item.id))}
-                      >
-                        <td>{item.name}</td>
-                        <td className="muted">{item.family}</td>
-                        <td className="muted">{formatRelative(item.lastModifiedDateTime)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {windowsUpdate.loading && items.length === 0 ? <p className="muted" style={{ padding: "1rem" }}>Loading…</p> : null}
-              </section>
-            </div>
-          )
-        }
-        inspector={
-          selected ? (
-            <GraphObjectInspector
-              key={selected.id}
-              kind={`windowsUpdate:${selected.family}`}
-              id={selected.id}
-              fallbackTitle={selected.name}
-              incomplete="Ring/profile editors are not ported. The full Graph profile and assignments are shown."
-              onClose={() => navigate(hrefWithParam(pathname, search, "policy", null))}
-            />
-          ) : (
-            <InspectorEmpty label="Select an update profile to inspect it here. Close clears the selection and stays on Windows Update." />
-          )
-        }
+      <WindowsUpdateWorkbench
+        family={family}
+        items={family ? windowsUpdate.items.filter((item) => item.family === family) : windowsUpdate.items}
+        loading={windowsUpdate.loading}
+        error={windowsUpdate.error}
+        selectedId={search.get("policy")}
+        pathname={pathname}
+        search={search}
+        onRefresh={() => void windowsUpdate.reload()}
       />
     );
   }
@@ -592,69 +531,15 @@ export function IntuneWorkspace({
       );
     }
     if (pathname === "/intune/apps/protection") {
-      const selected = mam.items.find((item) => item.id === search.get("policy"));
       return (
-        <WorkspaceSplit
-          inspectorPrimary={Boolean(selected)}
-          master={
-            selected ? (
-              <CompactObjectList
-                title="App protection"
-                description="Select a policy to inspect it here."
-                items={mam.items.map((item) => ({
-                  id: item.id,
-                  title: item.displayName,
-                  meta: item.odataType ?? undefined,
-                }))}
-                selectedId={selected.id}
-                onSelect={(id) => navigate(hrefWithParam(pathname, search, "policy", id))}
-                onRefresh={() => void mam.reload()}
-                loading={mam.loading}
-                error={mam.error}
-              />
-            ) : (
-              <div className="stack">
-                <PageHeader eyebrow="Apps" title="App protection" description="managedAppPolicies from Graph." />
-                {mam.error ? <div className="axis-alert axis-alert-danger">{mam.error}</div> : null}
-                <section className="axis-panel" style={{ overflow: "hidden" }}>
-                  <table className="axis-table">
-                    <thead>
-                      <tr>
-                        <th>Name</th>
-                        <th>Type</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {mam.items.map((item) => (
-                        <tr
-                          key={item.id}
-                          className="row-link"
-                          onClick={() => navigate(hrefWithParam(pathname, search, "policy", item.id))}
-                        >
-                          <td>{item.displayName}</td>
-                          <td className="muted">{item.odataType ?? "—"}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </section>
-              </div>
-            )
-          }
-          inspector={
-            selected ? (
-              <GraphObjectInspector
-                key={selected.id}
-                kind="appProtection"
-                id={selected.id}
-                fallbackTitle={selected.displayName}
-                incomplete="App protection editors are not ported. The full Graph policy and assignments are shown."
-                onClose={() => navigate(hrefWithParam(pathname, search, "policy", null))}
-              />
-            ) : (
-              <InspectorEmpty label="Select an app protection policy to inspect it here. Close clears the selection and stays on Apps." />
-            )
-          }
+        <AppProtectionWorkbench
+          items={mam.items}
+          loading={mam.loading}
+          error={mam.error}
+          selectedId={search.get("policy")}
+          pathname={pathname}
+          search={search}
+          onRefresh={() => void mam.reload()}
         />
       );
     }
@@ -714,7 +599,7 @@ function DevicesWorkspace({
     (id: string) => filteredDevices.find((device) => device.id === id)?.deviceName ?? id,
     [filteredDevices],
   );
-  const { tabs, close } = useDocumentTabs(selectedDevice, titleFor);
+  const { tabs, close, reorder } = useDocumentTabs(selectedDevice, titleFor);
   const selectDevice = (id: string | null) => navigate(hrefWithParam(devicesPath, search, "device", id));
 
   const updateDetailCache = useCallback((deviceId: string, entry: DeviceDetailCacheEntry) => {
@@ -762,6 +647,7 @@ function DevicesWorkspace({
               activeId={selectedDevice}
               onSelect={(id) => selectDevice(id)}
               onClose={(id) => closeDeviceTab(id)}
+              onReorder={reorder}
             />
             <DeviceDetailView
               deviceId={selectedDevice}
@@ -773,6 +659,251 @@ function DevicesWorkspace({
         ) : (
           <InspectorEmpty label="Select a device to inspect hardware, policies, apps, groups, and recovery here. Close clears the selection and stays on Devices. Open devices stay as workspace tabs." />
         )
+      }
+    />
+  );
+}
+
+function WindowsUpdateWorkbench({
+  family,
+  items,
+  loading,
+  error,
+  selectedId,
+  pathname,
+  search,
+  onRefresh,
+}: {
+  family: string | null;
+  items: WindowsUpdatePolicy[];
+  loading: boolean;
+  error: string | null;
+  selectedId: string | null;
+  pathname: string;
+  search: URLSearchParams;
+  onRefresh: () => void;
+}) {
+  const [overlay, setOverlay] = useState<WindowsUpdatePolicy | null>(null);
+  const listed = useMemo(() => withTransientItem(items, overlay), [items, overlay]);
+  const selected = listed.find((item) => item.id === selectedId);
+  const titleFor = useCallback(
+    (id: string) => listed.find((item) => item.id === id)?.name ?? id,
+    [listed],
+  );
+  const selectPolicy = (id: string) => navigate(hrefWithParam(pathname, search, "policy", id || null));
+  const menu = (
+    <ObjectListMenuHost
+      onDuplicated={(created, source) => {
+        const sourceFamily = source.kind.startsWith("windowsUpdate:")
+          ? source.kind.slice("windowsUpdate:".length)
+          : family ?? "rings";
+        setOverlay({
+          id: created.id,
+          family: sourceFamily,
+          name: created.title,
+        });
+        selectPolicy(created.id);
+        onRefresh();
+      }}
+    >
+      {selected ? (
+          <CompactObjectList
+            title={family ?? "Windows Update"}
+            description="Select a profile to inspect it here."
+            items={listed.map((item) => ({
+              id: item.id,
+              title: item.name,
+              kind: `windowsUpdate:${item.family}`,
+              meta: `${item.family} · ${formatRelative(item.lastModifiedDateTime)}`,
+            }))}
+            selectedId={selected.id}
+            onSelect={(id) => navigate(hrefWithParam(pathname, search, "policy", id))}
+            onRefresh={onRefresh}
+            loading={loading}
+            error={error}
+          />
+        ) : (
+          <div className="stack">
+            <PageHeader
+              eyebrow="Windows Update"
+              title={family ?? "Overview"}
+              description="Update rings, feature, quality, and driver profiles from Graph."
+              actions={
+                <button type="button" className="axis-btn" onClick={onRefresh}>
+                  Refresh
+                </button>
+              }
+            />
+            {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
+            <section className="axis-panel" style={{ overflow: "hidden" }}>
+              <table className="axis-table">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Family</th>
+                    <th>Modified</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {listed.map((item) => (
+                    <tr
+                      key={item.id}
+                      className="row-link"
+                      onClick={() => navigate(hrefWithParam(pathname, search, "policy", item.id))}
+                      {...listTargetProps(item.id, item.name, `windowsUpdate:${item.family}`)}
+                    >
+                      <td>{item.name}</td>
+                      <td className="muted">{item.family}</td>
+                      <td className="muted">{formatRelative(item.lastModifiedDateTime)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {loading && listed.length === 0 ? <p className="muted" style={{ padding: "1rem" }}>Loading…</p> : null}
+            </section>
+          </div>
+        )}
+    </ObjectListMenuHost>
+  );
+  return (
+    <WorkspaceSplit
+      inspectorPrimary={Boolean(selected)}
+      master={menu}
+      inspector={
+        <InspectorWithDocumentTabs
+          selectedId={selected?.id ?? null}
+          titleFor={titleFor}
+          onSelect={selectPolicy}
+          onClear={() => selectPolicy("")}
+          empty={
+            <InspectorEmpty label="Select an update profile to inspect it here. Close clears the selection and stays on Windows Update." />
+          }
+        >
+          {({ closeActive }) =>
+            selected ? (
+              <GraphObjectInspector
+                key={selected.id}
+                kind={`windowsUpdate:${selected.family}`}
+                id={selected.id}
+                fallbackTitle={selected.name}
+                incomplete="Ring/profile editors are not ported. The full Graph profile and assignments are shown."
+                onClose={closeActive}
+              />
+            ) : null
+          }
+        </InspectorWithDocumentTabs>
+      }
+    />
+  );
+}
+
+function AppProtectionWorkbench({
+  items,
+  loading,
+  error,
+  selectedId,
+  pathname,
+  search,
+  onRefresh,
+}: {
+  items: AppProtectionPolicy[];
+  loading: boolean;
+  error: string | null;
+  selectedId: string | null;
+  pathname: string;
+  search: URLSearchParams;
+  onRefresh: () => void;
+}) {
+  const [overlay, setOverlay] = useState<AppProtectionPolicy | null>(null);
+  const listed = useMemo(() => withTransientItem(items, overlay), [items, overlay]);
+  const selected = listed.find((item) => item.id === selectedId);
+  const titleFor = useCallback(
+    (id: string) => listed.find((item) => item.id === id)?.displayName ?? id,
+    [listed],
+  );
+  const selectPolicy = (id: string) =>
+    navigate(hrefWithParam(pathname, search, "policy", id || null));
+  return (
+    <WorkspaceSplit
+      inspectorPrimary={Boolean(selected)}
+      master={
+        <ObjectListMenuHost
+          onDuplicated={(created) => {
+            setOverlay({ id: created.id, displayName: created.title });
+            selectPolicy(created.id);
+            onRefresh();
+          }}
+        >
+        {selected ? (
+          <CompactObjectList
+            title="App protection"
+            description="Select a policy to inspect it here."
+            objectKind="appProtection"
+            items={listed.map((item) => ({
+              id: item.id,
+              title: item.displayName,
+              meta: item.odataType ?? undefined,
+            }))}
+            selectedId={selected.id}
+            onSelect={(id) => navigate(hrefWithParam(pathname, search, "policy", id))}
+            onRefresh={onRefresh}
+            loading={loading}
+            error={error}
+          />
+        ) : (
+          <div className="stack">
+            <PageHeader eyebrow="Apps" title="App protection" description="managedAppPolicies from Graph." />
+            {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
+            <section className="axis-panel" style={{ overflow: "hidden" }}>
+              <table className="axis-table">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Type</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {listed.map((item) => (
+                    <tr
+                      key={item.id}
+                      className="row-link"
+                      onClick={() => navigate(hrefWithParam(pathname, search, "policy", item.id))}
+                      {...listTargetProps(item.id, item.displayName, "appProtection")}
+                    >
+                      <td>{item.displayName}</td>
+                      <td className="muted">{item.odataType ?? "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
+          </div>
+        )}
+        </ObjectListMenuHost>
+      }
+      inspector={
+        <InspectorWithDocumentTabs
+          selectedId={selected?.id ?? null}
+          titleFor={titleFor}
+          onSelect={selectPolicy}
+          onClear={() => selectPolicy("")}
+          empty={
+            <InspectorEmpty label="Select an app protection policy to inspect it here. Close clears the selection and stays on Apps." />
+          }
+        >
+          {({ closeActive }) =>
+            selected ? (
+              <GraphObjectInspector
+                key={selected.id}
+                kind="appProtection"
+                id={selected.id}
+                fallbackTitle={selected.displayName}
+                incomplete="App protection editors are not ported. The full Graph policy and assignments are shown."
+                onClose={closeActive}
+              />
+            ) : null
+          }
+        </InspectorWithDocumentTabs>
       }
     />
   );
@@ -799,9 +930,11 @@ function PoliciesHub({
 }) {
   const { query, setQuery, assignedFilter, setAssignedFilter, platformFilter, setPlatformFilter } =
     useListSearchState();
+  const [overlay, setOverlay] = useState<CatalogPolicySummary | null>(null);
+  const listed = useMemo(() => withTransientItem(items, overlay), [items, overlay]);
   const scoped = platform
-    ? items.filter((item) => matchesIntunePlatform(item.platforms, platform))
-    : items;
+    ? listed.filter((item) => matchesIntunePlatform(item.platforms, platform))
+    : listed;
   const platformOptions = useMemo(
     () => platformFilterOptionsFromList(scoped.map((item) => item.platforms)),
     [scoped],
@@ -818,12 +951,26 @@ function PoliciesHub({
   const bulkPolicies = filtered.filter((item) => selection.bulkTargetIds.includes(item.id));
   const showBulk = selection.bulkEditorOpen && bulkPolicies.length > 0;
   const inspectorOpen = Boolean(selected);
+  const titleFor = useCallback(
+    (id: string) =>
+      scoped.find((item) => item.id === id)?.name ??
+      items.find((item) => item.id === id)?.name ??
+      id,
+    [items, scoped],
+  );
   return (
     <>
     <WorkspaceSplit
       inspectorPrimary={inspectorOpen}
       master={
-        selected ? (
+        <ObjectListMenuHost
+          onDuplicated={(created) => {
+            setOverlay({ id: created.id, name: created.title, isAssigned: false });
+            onSelect(created.id);
+            onRefresh();
+          }}
+        >
+        {selected ? (
           <div className="stack">
             <BulkAssignBar
               count={checkedPolicies.length}
@@ -834,6 +981,7 @@ function PoliciesHub({
             <CompactObjectList
               title="Policies"
               description="Loaded catalog policies. Select a row to edit settings on this policy."
+              objectKind="configurationPolicy"
               items={filtered.map((item) => ({
                 id: item.id,
                 title: item.name,
@@ -936,6 +1084,7 @@ function PoliciesHub({
                       key={item.id}
                       className={`row-link${selectedId === item.id ? " selected" : ""}`}
                       onClick={() => onSelect(item.id)}
+                      {...listTargetProps(item.id, item.name, "configurationPolicy")}
                     >
                       <td className="axis-table-check">
                         <SelectCheckbox
@@ -960,18 +1109,28 @@ function PoliciesHub({
               ) : null}
             </SearchableTable>
           </div>
-        )
+        )}
+        </ObjectListMenuHost>
       }
       inspector={
-        selected ? (
-          <GraphObjectInspector
-            key={selected.id}
-            kind="configurationPolicy"
-            id={selected.id}
-            fallbackTitle={selected.name}
-            onClose={() => onSelect("")}
-          />
-        ) : null
+        <InspectorWithDocumentTabs
+          selectedId={selected?.id ?? null}
+          titleFor={titleFor}
+          onSelect={onSelect}
+          onClear={() => onSelect("")}
+        >
+          {({ closeActive }) =>
+            selected ? (
+              <GraphObjectInspector
+                key={selected.id}
+                kind="configurationPolicy"
+                id={selected.id}
+                fallbackTitle={selected.name}
+                onClose={closeActive}
+              />
+            ) : null
+          }
+        </InspectorWithDocumentTabs>
       }
     />
     <AssignmentsDialog
@@ -1017,12 +1176,14 @@ function NamedPolicyList({
 }) {
   const { query, setQuery, assignedFilter, setAssignedFilter, platformFilter, setPlatformFilter } =
     useListSearchState();
-  const selected = items.find((item) => item.id === selectedId);
+  const [overlay, setOverlay] = useState<CatalogPolicySummary | null>(null);
+  const listed = useMemo(() => withTransientItem(items, overlay), [items, overlay]);
+  const selected = listed.find((item) => item.id === selectedId);
   const platformOptions = useMemo(
-    () => platformFilterOptionsFromList(items.map((item) => item.platforms)),
-    [items],
+    () => platformFilterOptionsFromList(listed.map((item) => item.platforms)),
+    [listed],
   );
-  const filtered = items.filter((item) =>
+  const filtered = listed.filter((item) =>
     matchesCatalogPolicyFilters(item, query, assignedFilter, platformFilter),
   );
   const filteredIds = useMemo(() => filtered.map((item) => item.id), [filtered]);
@@ -1031,12 +1192,23 @@ function NamedPolicyList({
   const bulkPolicies = filtered.filter((item) => selection.bulkTargetIds.includes(item.id));
   const showBulk = selection.bulkEditorOpen && bulkPolicies.length > 0;
   const inspectorOpen = Boolean(selected);
+  const titleFor = useCallback(
+    (id: string) => listed.find((item) => item.id === id)?.name ?? id,
+    [listed],
+  );
   return (
     <>
     <WorkspaceSplit
       inspectorPrimary={inspectorOpen}
       master={
-        selected ? (
+        <ObjectListMenuHost
+          onDuplicated={(created) => {
+            setOverlay({ id: created.id, name: created.title, isAssigned: false });
+            onSelect(created.id);
+            onRefresh();
+          }}
+        >
+        {selected ? (
           <div className="stack">
             <BulkAssignBar
               count={checkedPolicies.length}
@@ -1047,6 +1219,7 @@ function NamedPolicyList({
             <CompactObjectList
               title={title}
               description="Select a policy to inspect it here."
+              objectKind={objectKind}
               items={filtered.map((item) => ({
                 id: item.id,
                 title: item.name,
@@ -1133,6 +1306,7 @@ function NamedPolicyList({
                       key={item.id}
                       className={`row-link${selectedId === item.id ? " selected" : ""}`}
                       onClick={() => onSelect(item.id)}
+                      {...listTargetProps(item.id, item.name, objectKind)}
                     >
                       <td className="axis-table-check">
                         <SelectCheckbox
@@ -1153,21 +1327,32 @@ function NamedPolicyList({
               {!loading && filtered.length === 0 ? <p className="muted" style={{ padding: "1rem" }}>No policies.</p> : null}
             </SearchableTable>
           </div>
-        )
+        )}
+        </ObjectListMenuHost>
       }
       inspector={
-        selected ? (
-          <GraphObjectInspector
-            key={selected.id}
-            kind={objectKind}
-            id={selected.id}
-            fallbackTitle={selected.name}
-            incomplete={incomplete}
-            onClose={() => onSelect("")}
-          />
-        ) : (
-          <InspectorEmpty label="Select a policy to inspect it in this workspace. Close clears the selection and stays here." />
-        )
+        <InspectorWithDocumentTabs
+          selectedId={selected?.id ?? null}
+          titleFor={titleFor}
+          onSelect={onSelect}
+          onClear={() => onSelect("")}
+          empty={
+            <InspectorEmpty label="Select a policy to inspect it in this workspace. Close clears the selection and stays here." />
+          }
+        >
+          {({ closeActive }) =>
+            selected ? (
+              <GraphObjectInspector
+                key={selected.id}
+                kind={objectKind}
+                id={selected.id}
+                fallbackTitle={selected.name}
+                incomplete={incomplete}
+                onClose={closeActive}
+              />
+            ) : null
+          }
+        </InspectorWithDocumentTabs>
       }
     />
     <AssignmentsDialog
@@ -1420,7 +1605,7 @@ function ScriptsWorkbench({
       id,
     [items, visible],
   );
-  const { tabs, close } = useDocumentTabs(selectedId, titleFor);
+  const { tabs, close, reorder } = useDocumentTabs(selectedId, titleFor);
   const filteredIds = useMemo(() => filtered.map((item) => item.id), [filtered]);
   const selection = useCheckedIds(filteredIds);
   const checkedScripts = filtered.filter((item) => selection.checkedIds.has(item.id));
@@ -1474,7 +1659,19 @@ function ScriptsWorkbench({
     <WorkspaceSplit
       inspectorPrimary={Boolean(selected)}
       master={
-        selected ? (
+        <ObjectListMenuHost
+          onDuplicated={(created, source) => {
+            setCreatedOverlay({
+              id: created.id,
+              kind: source.kind.startsWith("script:") ? source.kind.slice("script:".length) : source.kind,
+              displayName: created.title,
+              assignmentCount: 0,
+            });
+            onSelect(created.id);
+            onRefresh();
+          }}
+        >
+        {selected ? (
           <div className="stack">
             {bulkBar}
             <CompactObjectList
@@ -1483,6 +1680,7 @@ function ScriptsWorkbench({
               items={filtered.map((item) => ({
                 id: item.id,
                 title: item.displayName,
+                kind: inspectorKindForTenantScript(item.kind),
                 meta: `${tenantScriptKindLabel(item.kind)} · ${item.runAsAccount ?? "—"}`,
               }))}
               selectedId={selected.id}
@@ -1557,6 +1755,11 @@ function ScriptsWorkbench({
                       key={item.id}
                       className={`row-link${selectedId === item.id ? " selected" : ""}`}
                       onClick={() => onSelect(item.id)}
+                      {...listTargetProps(
+                        item.id,
+                        item.displayName,
+                        inspectorKindForTenantScript(item.kind),
+                      )}
                     >
                       <td className="axis-table-check">
                         <SelectCheckbox
@@ -1580,7 +1783,8 @@ function ScriptsWorkbench({
               ) : null}
             </SearchableTable>
           </div>
-        )
+        )}
+        </ObjectListMenuHost>
       }
       inspector={
         selected ? (
@@ -1594,6 +1798,7 @@ function ScriptsWorkbench({
                 if (next) onSelect(next);
                 else onClose();
               }}
+              onReorder={reorder}
             />
             <InspectorErrorBoundary>
             <GraphObjectInspector
@@ -1653,8 +1858,13 @@ function AutopilotWorkbench({
   onSelectDevice: (id: string) => void;
   onSelectProfile: (id: string) => void;
 }) {
+  const [profileOverlay, setProfileOverlay] = useState<AutopilotProfile | null>(null);
+  const profileItems = useMemo(
+    () => withTransientItem(profiles.items, profileOverlay),
+    [profiles.items, profileOverlay],
+  );
   const device = devices.items.find((item) => item.id === selectedDevice);
-  const profile = profiles.items.find((item) => item.id === selectedProfile);
+  const profile = profileItems.find((item) => item.id === selectedProfile);
   const selected = Boolean(device || profile);
   const lists = (
     <>
@@ -1676,7 +1886,8 @@ function AutopilotWorkbench({
       />
       <CompactObjectList
         title="Profiles"
-        items={profiles.items.map((item) => ({
+        objectKind="autopilotProfile"
+        items={profileItems.map((item) => ({
           id: item.id,
           title: item.displayName,
           meta: formatRelative(item.lastModifiedDateTime),
@@ -1692,7 +1903,14 @@ function AutopilotWorkbench({
     <WorkspaceSplit
       inspectorPrimary={selected}
       master={
-        selected ? (
+        <ObjectListMenuHost
+          onDuplicated={(created) => {
+            setProfileOverlay({ id: created.id, displayName: created.title });
+            onSelectProfile(created.id);
+            void profiles.reload();
+          }}
+        >
+        {selected ? (
           <div className="device-list-compact" style={{ gap: "0.85rem" }}>
             {lists}
           </div>
@@ -1749,8 +1967,13 @@ function AutopilotWorkbench({
                     </tr>
                   </thead>
                   <tbody>
-                    {profiles.items.map((item) => (
-                      <tr key={item.id} className="row-link" onClick={() => onSelectProfile(item.id)}>
+                    {profileItems.map((item) => (
+                      <tr
+                        key={item.id}
+                        className="row-link"
+                        onClick={() => onSelectProfile(item.id)}
+                        {...listTargetProps(item.id, item.displayName, "autopilotProfile")}
+                      >
                         <td>{item.displayName}</td>
                         <td className="muted">{formatRelative(item.lastModifiedDateTime)}</td>
                       </tr>
@@ -1760,7 +1983,8 @@ function AutopilotWorkbench({
               </section>
             </div>
           </div>
-        )
+        )}
+        </ObjectListMenuHost>
       }
       inspector={
         device ? (
