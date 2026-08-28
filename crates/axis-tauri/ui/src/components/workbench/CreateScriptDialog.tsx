@@ -31,6 +31,7 @@ function ScriptBodyField({
   disabled,
   language,
   height = "14rem",
+  lintRole,
 }: {
   label: string;
   value: string;
@@ -38,6 +39,7 @@ function ScriptBodyField({
   disabled?: boolean;
   language: "powershell" | "bash";
   height?: string;
+  lintRole: "platform" | "detection" | "remediation";
 }) {
   return (
     <div className="device-field">
@@ -49,6 +51,7 @@ function ScriptBodyField({
         readOnly={disabled}
         ariaLabel={label}
         height={height}
+        lintRole={lintRole}
       />
     </div>
   );
@@ -244,6 +247,7 @@ export function CreateScriptDialog({
                 disabled={busy}
                 language={editorLanguage}
                 height="12rem"
+                lintRole="detection"
               />
               {kind === "remediation" ? (
                 <ScriptBodyField
@@ -253,6 +257,7 @@ export function CreateScriptDialog({
                   disabled={busy}
                   language={editorLanguage}
                   height="12rem"
+                  lintRole="remediation"
                 />
               ) : null}
             </>
@@ -264,6 +269,7 @@ export function CreateScriptDialog({
               disabled={busy}
               language={editorLanguage}
               height="16rem"
+              lintRole="platform"
             />
           )}
         </div>

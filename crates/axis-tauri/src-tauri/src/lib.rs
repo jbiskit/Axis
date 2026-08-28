@@ -11,6 +11,7 @@ use tokio::sync::Mutex;
 
 mod catalog_index;
 mod commands;
+mod script_lint;
 mod updater;
 
 pub(crate) struct AppState {
@@ -261,6 +262,7 @@ pub fn run() {
             commands::fetch_policy_setting_issues_cmd,
             commands::fetch_setting_conflict_details_cmd,
             commands::fetch_remediation_scripts_cmd,
+            commands::fetch_remediation_device_status_cmd,
             commands::sync_managed_device_cmd,
             commands::reboot_managed_device_cmd,
             commands::remote_lock_managed_device_cmd,
@@ -276,6 +278,8 @@ pub fn run() {
             commands::rotate_laps_password_cmd,
             commands::update_script_content_cmd,
             commands::create_tenant_script_cmd,
+            commands::duplicate_graph_object_cmd,
+            commands::lint_script_cmd,
             commands::search_directory_groups_cmd,
             commands::create_directory_group_cmd,
             commands::list_assignment_filters_cmd,

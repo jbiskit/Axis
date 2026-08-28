@@ -8,7 +8,7 @@ export function IncludeExcludeToggle({
   excludeLabel = "Exclude",
   ariaLabel = "Include or exclude",
 }: {
-  value: Mode;
+  value?: Mode | null;
   onChange: (value: Mode) => void;
   disabled?: boolean;
   includeLabel?: string;

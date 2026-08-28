@@ -20,6 +20,7 @@ import type {
   CreateCatalogPolicyResponse,
   CreateTenantScriptInput,
   CreateTenantScriptResponse,
+  DuplicateGraphObjectResponse,
   GraphObjectDetailResponse,
   E8BaselineReferencesResponse,
   BaselineExportResponse,
@@ -39,7 +40,9 @@ import type {
   LapsResponse,
   MobileAppSummary,
   PolicyIssuesResponse,
+  RemediationDeviceStatusReport,
   SettingConflictDetailsResponse,
+  ScriptLintResult,
   TenantScriptSummary,
   WindowsUpdatePolicy,
 } from "../types/inventory";
@@ -100,6 +103,13 @@ export async function fetchSettingConflictDetails(input: {
 
 export async function fetchRemediationScripts(): Promise<InventoryResponse<TenantScriptSummary>> {
   return invoke("fetch_remediation_scripts_cmd");
+}
+
+export async function fetchRemediationDeviceStatus(
+  scriptId: string,
+  kind = "script:remediation",
+): Promise<{ report: RemediationDeviceStatusReport | null; error: string | null }> {
+  return invoke("fetch_remediation_device_status_cmd", { scriptId, kind });
 }
 
 export async function syncManagedDevice(deviceId: string): Promise<ActionResponse> {
@@ -309,6 +319,25 @@ export async function createTenantScript(
   input: CreateTenantScriptInput,
 ): Promise<CreateTenantScriptResponse> {
   return invoke<CreateTenantScriptResponse>("create_tenant_script_cmd", { input });
+}
+
+export async function duplicateGraphObject(
+  kind: string,
+  id: string,
+  displayName?: string,
+): Promise<DuplicateGraphObjectResponse> {
+  return invoke<DuplicateGraphObjectResponse>("duplicate_graph_object_cmd", {
+    kind,
+    id,
+    displayName: displayName ?? null,
+  });
+}
+
+export async function lintScript(
+  language: "powershell" | "bash" | "shell",
+  source: string,
+): Promise<ScriptLintResult> {
+  return invoke<ScriptLintResult>("lint_script_cmd", { language, source });
 }
 
 export async function searchDirectoryGroups(query: string): Promise<DirectoryGroupsResponse> {

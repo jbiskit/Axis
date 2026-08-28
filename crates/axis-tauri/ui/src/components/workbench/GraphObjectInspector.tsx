@@ -2,7 +2,17 @@ import { useEffect, useMemo, useState } from "react";
 import { closeThisWindow, popOutObject } from "../../lib/popout";
 import { summarizeAssignmentDraft } from "../../lib/assignmentSummary";
 import { intunePortalUrlForKind } from "../../lib/intune/portalLinks";
-import { fetchGraphObjectDetail, loadAssignmentWorkspace, updateScriptContent } from "../../lib/tauri";
+import {
+  fetchGraphObjectDetail,
+  loadAssignmentWorkspace,
+  updateScriptContent,
+} from "../../lib/tauri";
+import {
+  readCachedAssignmentDrafts,
+  readCachedObjectDetail,
+  writeCachedAssignmentDrafts,
+  writeCachedObjectDetail,
+} from "../../lib/inspectorCache";
 import { parseScriptInspectorKind } from "../../lib/scriptKinds";
 import type { AssignmentDraft, GraphObjectDetail } from "../../types/inventory";
 import { OpenInIntune } from "../intune/OpenInIntune";
@@ -11,9 +21,10 @@ import { PageHeader } from "../ui/PageChrome";
 import { CatalogSettingInstances } from "./CatalogSettingInstances";
 import { PolicySettingsEditor } from "./PolicySettingsEditor";
 import { AssignmentsDialog } from "./PolicyBulkAssign";
+import { ScriptRunStatus } from "./RemediationDeviceStatus";
 import { formatRelative, IncompleteBanner } from "./shared";
 
-type InspectorTab = "overview" | "assignments" | "payload";
+type InspectorTab = "overview" | "status" | "assignments" | "payload";
 
 function text(value: unknown): string | null {
   if (value == null) return null;
@@ -200,6 +211,29 @@ function hasScript(detail: GraphObjectDetail): boolean {
   return Boolean(detail.scriptText || detail.detectionScriptText || detail.remediationScriptText);
 }
 
+function defaultInspectorTab(kind: string): InspectorTab {
+  if (kind === "script:remediation" || kind.startsWith("script:platform-")) return "status";
+  if (
+    kind === "configurationPolicy" ||
+    kind === "groupPolicyConfiguration" ||
+    kind.startsWith("script:")
+  ) {
+    return "payload";
+  }
+  return "overview";
+}
+
+function applyDetailToEditor(
+  detail: GraphObjectDetail | null,
+  setScriptText: (value: string) => void,
+  setDetectionText: (value: string) => void,
+  setRemediationText: (value: string) => void,
+) {
+  setScriptText(detail?.scriptText ?? "");
+  setDetectionText(detail?.detectionScriptText ?? "");
+  setRemediationText(detail?.remediationScriptText ?? "");
+}
+
 export function GraphObjectInspector({
   kind,
   id,
@@ -215,51 +249,63 @@ export function GraphObjectInspector({
   onClose: () => void;
   popout?: boolean;
 }) {
-  const [detail, setDetail] = useState<GraphObjectDetail | null>(null);
-  const [loading, setLoading] = useState(true);
+  const cached = readCachedObjectDetail(kind, id);
+  const [detail, setDetail] = useState<GraphObjectDetail | null>(cached);
+  const [loading, setLoading] = useState(!cached);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<InspectorTab>("overview");
+  const [tab, setTab] = useState<InspectorTab>(() => defaultInspectorTab(kind));
   const [editingPolicy, setEditingPolicy] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
-  const [scriptText, setScriptText] = useState("");
-  const [detectionText, setDetectionText] = useState("");
-  const [remediationText, setRemediationText] = useState("");
+  const [scriptText, setScriptText] = useState(cached?.scriptText ?? "");
+  const [detectionText, setDetectionText] = useState(cached?.detectionScriptText ?? "");
+  const [remediationText, setRemediationText] = useState(cached?.remediationScriptText ?? "");
   const [saveBusy, setSaveBusy] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [assignmentDrafts, setAssignmentDrafts] = useState<AssignmentDraft[]>([]);
+  const [assignmentDrafts, setAssignmentDrafts] = useState<AssignmentDraft[]>(
+    () => readCachedAssignmentDrafts(kind, id) ?? [],
+  );
   const [assignmentsLoading, setAssignmentsLoading] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
+    const hit = readCachedObjectDetail(kind, id);
     setError(null);
-    setTab("overview");
     setEditingPolicy(false);
     setAssignOpen(false);
     setExportOpen(false);
     setSaveMessage(null);
     setSaveError(null);
+    setTab(defaultInspectorTab(kind));
+    if (hit) {
+      setDetail(hit);
+      applyDetailToEditor(hit, setScriptText, setDetectionText, setRemediationText);
+      setLoading(false);
+      const cachedDrafts = readCachedAssignmentDrafts(kind, id);
+      if (cachedDrafts) setAssignmentDrafts(cachedDrafts);
+    } else {
+      setDetail(null);
+      setAssignmentDrafts([]);
+      applyDetailToEditor(null, setScriptText, setDetectionText, setRemediationText);
+      setLoading(true);
+    }
     void fetchGraphObjectDetail(kind, id)
       .then((response) => {
         if (cancelled) return;
-        setDetail(response.detail);
-        setError(response.error);
-        setScriptText(response.detail?.scriptText ?? "");
-        setDetectionText(response.detail?.detectionScriptText ?? "");
-        setRemediationText(response.detail?.remediationScriptText ?? "");
-        if (
-          response.detail &&
-          (kind === "configurationPolicy" ||
-            kind === "groupPolicyConfiguration" ||
-            kind.startsWith("script:"))
-        ) {
-          setTab("payload");
+        if (response.detail) {
+          writeCachedObjectDetail(response.detail);
+          setDetail(response.detail);
+          applyDetailToEditor(response.detail, setScriptText, setDetectionText, setRemediationText);
+          setError(response.error);
+        } else if (!hit) {
+          setDetail(null);
+          setError(response.error);
         }
       })
       .catch((err: unknown) => {
         if (cancelled) return;
+        if (hit) return;
         setDetail(null);
         setError(err instanceof Error ? err.message : "Failed to load object");
       })
@@ -277,21 +323,31 @@ export function GraphObjectInspector({
   );
 
   useEffect(() => {
-    if (!detail || assignments.length === 0) {
-      setAssignmentDrafts([]);
-      setAssignmentsLoading(false);
-      return;
-    }
     let cancelled = false;
-    setAssignmentsLoading(true);
+    const cachedDrafts = readCachedAssignmentDrafts(kind, id);
+    if (cachedDrafts) {
+      setAssignmentDrafts(cachedDrafts);
+      setAssignmentsLoading(false);
+    }
+    if (!detail || assignments.length === 0) {
+      if (!cachedDrafts) {
+        setAssignmentDrafts([]);
+        setAssignmentsLoading(false);
+      }
+      return () => {
+        cancelled = true;
+      };
+    }
+    if (!cachedDrafts) setAssignmentsLoading(true);
     void loadAssignmentWorkspace(kind, assignments)
       .then((response) => {
         if (cancelled) return;
         setAssignmentDrafts(response.drafts);
+        writeCachedAssignmentDrafts(kind, id, response.drafts);
       })
       .catch(() => {
         if (cancelled) return;
-        setAssignmentDrafts([]);
+        if (!cachedDrafts) setAssignmentDrafts([]);
       })
       .finally(() => {
         if (!cancelled) setAssignmentsLoading(false);
@@ -304,6 +360,7 @@ export function GraphObjectInspector({
   async function reloadDetail() {
     try {
       const response = await fetchGraphObjectDetail(kind, id);
+      if (response.detail) writeCachedObjectDetail(response.detail);
       setDetail(response.detail);
       setError(response.error);
     } catch (err: unknown) {
@@ -318,6 +375,14 @@ export function GraphObjectInspector({
   const settings = Array.isArray(detail?.settings) ? detail.settings : [];
   const extras = detail?.extras ?? null;
   const rows = useMemo(() => (detail ? overviewRows(detail) : []), [detail]);
+  const inspectorTabs: Array<[InspectorTab, string]> = [
+    ["overview", "Overview"],
+    ...(kind === "script:remediation" || kind.startsWith("script:platform-")
+      ? ([["status", "Device status"]] as Array<[InspectorTab, string]>)
+      : []),
+    ["assignments", `Assignments (${assignments.length})`],
+    ["payload", `${payloadLabel}${settings.length ? ` (${settings.length})` : ""}`],
+  ];
   const supportsRemediationSchedule = kind === "script:remediation";
   const canEditScripts = Boolean(scriptInfo);
   const canEditPolicy = kind === "configurationPolicy";
@@ -347,7 +412,7 @@ export function GraphObjectInspector({
         setSaveError(response.error ?? "Save failed");
         return;
       }
-      setDetail({
+      const next = {
         ...detail,
         scriptText: detail.scriptText != null || scriptText ? scriptText : detail.scriptText,
         detectionScriptText:
@@ -358,7 +423,9 @@ export function GraphObjectInspector({
           detail.remediationScriptText != null || remediationText
             ? remediationText
             : detail.remediationScriptText,
-      });
+      };
+      writeCachedObjectDetail(next);
+      setDetail(next);
       setSaveMessage("Saved to Graph.");
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : "Save failed");
@@ -438,7 +505,7 @@ export function GraphObjectInspector({
         }
       />
       {incomplete && !editingPolicy ? <IncompleteBanner>{incomplete}</IncompleteBanner> : null}
-      {loading ? <p className="muted">Loading Graph object…</p> : null}
+      {loading && !detail ? <p className="muted">Loading Graph object…</p> : null}
       {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
       {saveError ? <div className="axis-alert axis-alert-danger">{saveError}</div> : null}
       {saveMessage ? <div className="axis-alert axis-alert-info">{saveMessage}</div> : null}
@@ -457,13 +524,7 @@ export function GraphObjectInspector({
       ) : detail ? (
         <>
           <div className="tab-row">
-            {(
-              [
-                ["overview", "Overview"],
-                ["assignments", `Assignments (${assignments.length})`],
-                ["payload", `${payloadLabel}${settings.length ? ` (${settings.length})` : ""}`],
-              ] as const
-            ).map(([tabId, label]) => (
+            {inspectorTabs.map(([tabId, label]) => (
               <button
                 key={tabId}
                 type="button"
@@ -485,6 +546,10 @@ export function GraphObjectInspector({
                 ))}
               </dl>
             </section>
+          ) : null}
+          {tab === "status" &&
+          (kind === "script:remediation" || kind.startsWith("script:platform-")) ? (
+            <ScriptRunStatus kind={kind} scriptId={detail.id} />
           ) : null}
           {tab === "assignments" ? (
             <section className="axis-panel" style={{ padding: "0.85rem" }}>
@@ -528,13 +593,13 @@ export function GraphObjectInspector({
                 <div className="device-toolbar">
                   <p className="muted" style={{ margin: 0 }}>
                     {dirty
-                      ? "Unsaved edits in the buffer."
+                      ? "Unsaved edits in the buffer. Red markers are parse errors; yellow are Intune conventions. This does not run the script."
                       : scriptInfo?.isPlatform
-                        ? "Platform script body from Graph."
+                        ? "Platform script body from Graph. Syntax is checked locally; Intune runtime is not simulated."
                         : scriptInfo?.isRemediation
-                          ? "Detection and remediation scripts from Graph."
+                          ? "Detection and remediation scripts from Graph. Syntax is checked locally; Intune runtime is not simulated."
                           : scriptInfo?.isCompliance
-                            ? "Compliance discovery script from Graph."
+                            ? "Compliance discovery script from Graph. Syntax is checked locally; Intune runtime is not simulated."
                             : "PowerShell/shell bodies from Graph."}
                   </p>
                   <button
@@ -555,6 +620,7 @@ export function GraphObjectInspector({
                     onChange={setScriptText}
                     language={language}
                     ariaLabel="Script body"
+                    lintRole="platform"
                   />
                 </section>
               ) : null}
@@ -566,6 +632,7 @@ export function GraphObjectInspector({
                     onChange={setDetectionText}
                     language={language}
                     ariaLabel="Detection script"
+                    lintRole="detection"
                   />
                 </section>
               ) : null}
@@ -577,6 +644,7 @@ export function GraphObjectInspector({
                     onChange={setRemediationText}
                     language={language}
                     ariaLabel="Remediation script"
+                    lintRole="remediation"
                   />
                 </section>
               ) : null}
