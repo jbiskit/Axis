@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { TenantGlance } from "../types/glance";
 import type {
   BaselineReferenceSourceInput,
@@ -12,7 +12,6 @@ import type {
 } from "../types/inventory";
 import { useInventory } from "../hooks/useInventory";
 import { useDocumentTabs } from "../hooks/useDocumentTabs";
-import { POLICY_HUB_FAMILIES } from "../lib/nav";
 import { matchesIntunePlatform, platformFromSearchParam, INTUNE_PLATFORM_LABELS } from "../lib/platforms";
 import { appKindFromSearchParam, APP_KIND_LABELS } from "../lib/appKinds";
 import {
@@ -41,7 +40,9 @@ import {
   fetchDeviceConfigurations,
   fetchEnrollmentConfigurations,
   fetchBaselineReferenceSources,
+  fetchBaselineExport,
   fetchGroupPolicyConfigurations,
+  createSettingsCatalogPolicy,
   openExternalUrl,
   fetchStoreApps,
   fetchTenantScripts,
@@ -59,7 +60,9 @@ import {
   packTitle,
   sanitizeSource,
   saveStoredSources,
+  tokenForSource,
 } from "../lib/baselines/sources";
+import { normalizeIntunePolicyExport } from "../lib/baselines/policyExport";
 import { DevicesList } from "./DevicesList";
 import { DeviceDetailView, type DeviceDetailCacheEntry } from "./DeviceDetailView";
 import { SettingsSearchView } from "./SettingsSearchView";
@@ -252,12 +255,22 @@ export function IntuneWorkspace({
   if (pathname === "/intune/devices/scripts" || pathname === "/intune/devices/compliance" || pathname === "/intune/devices/remediations") {
     return (
       <ScriptsWorkbench
+        key={pathname}
         pathname={pathname}
         items={scripts.items}
         loading={scripts.loading}
         error={scripts.error}
         selectedId={search.get("script")}
-        onSelect={(id) => navigate(hrefWithParam(pathname, search, "script", id))}
+        onSelect={(id) => {
+          const kind = scripts.items.find((item) => item.id === id)?.kind;
+          const scriptPath =
+            kind === "remediation"
+              ? "/intune/devices/remediations"
+              : kind === "compliance"
+                ? "/intune/devices/compliance"
+                : "/intune/devices/scripts";
+          navigate(hrefWithParam(scriptPath, search, "script", id));
+        }}
         onClose={() => navigate(hrefWithParam(pathname, search, "script", null))}
         onRefresh={() => void scripts.reload()}
       />
@@ -705,6 +718,13 @@ function WindowsUpdateWorkbench({
         selectPolicy(created.id);
         onRefresh();
       }}
+      onMetadataUpdated={(updated, source) => {
+        const sourceFamily = source.kind.startsWith("windowsUpdate:")
+          ? source.kind.slice("windowsUpdate:".length)
+          : family ?? "rings";
+        setOverlay({ id: updated.id, family: sourceFamily, name: updated.title });
+        onRefresh();
+      }}
     >
       {selected ? (
           <CompactObjectList
@@ -831,6 +851,14 @@ function AppProtectionWorkbench({
           onDuplicated={(created) => {
             setOverlay({ id: created.id, displayName: created.title });
             selectPolicy(created.id);
+            onRefresh();
+          }}
+          onMetadataUpdated={(updated) => {
+            setOverlay({
+              id: updated.id,
+              displayName: updated.title,
+              description: updated.description,
+            });
             onRefresh();
           }}
         >
@@ -969,6 +997,15 @@ function PoliciesHub({
             onSelect(created.id);
             onRefresh();
           }}
+          onMetadataUpdated={(updated) => {
+            setOverlay({
+              id: updated.id,
+              name: updated.title,
+              description: updated.description,
+              isAssigned: selected?.isAssigned,
+            });
+            onRefresh();
+          }}
         >
         {selected ? (
           <div className="stack">
@@ -1013,7 +1050,7 @@ function PoliciesHub({
             <PageHeader
               eyebrow="Policies"
               title={platform ? `${platform} policies` : "Policies"}
-              description="Platform-first configuration families. Select a catalog row to edit its settings here; checkboxes bulk-edit assignments. Family cards open that workspace."
+              description="Select a catalog row to edit its settings here; checkboxes bulk-edit assignments."
             />
             {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
             <LoadedInventoryBanner truncated={truncated} />
@@ -1021,26 +1058,6 @@ function PoliciesHub({
               <SignalCard label="Catalog policies" value={loading ? "…" : scoped.length} />
               <SignalCard label="Assigned" value={assigned} tone="good" />
               <SignalCard label="Unassigned" value={scoped.length - assigned} tone="warn" />
-            </div>
-            <div className="family-grid">
-              {POLICY_HUB_FAMILIES.map((family) => (
-                <button
-                  key={family.href}
-                  type="button"
-                  className="axis-panel axis-panel-button"
-                  onClick={() =>
-                    navigate(platform ? `${family.href}?platform=${platform}` : family.href)
-                  }
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: "0.5rem" }}>
-                    <strong>{family.label}</strong>
-                    <span className="axis-pill">{family.status === "planned" ? "Planned" : "Ready"}</span>
-                  </div>
-                  <p className="muted" style={{ margin: "0.35rem 0 0", fontSize: "0.75rem" }}>
-                    {family.platforms.join(", ")}
-                  </p>
-                </button>
-              ))}
             </div>
             <BulkAssignBar
               count={checkedPolicies.length}
@@ -1205,6 +1222,15 @@ function NamedPolicyList({
           onDuplicated={(created) => {
             setOverlay({ id: created.id, name: created.title, isAssigned: false });
             onSelect(created.id);
+            onRefresh();
+          }}
+          onMetadataUpdated={(updated) => {
+            setOverlay({
+              id: updated.id,
+              name: updated.title,
+              description: updated.description,
+              isAssigned: selected?.isAssigned,
+            });
             onRefresh();
           }}
         >
@@ -1589,15 +1615,18 @@ function ScriptsWorkbench({
     () => visible.filter((item) => matchesScriptFilters(item, query, assignedFilter, kindFilter)),
     [visible, query, assignedFilter, kindFilter],
   );
-  const selected = visible.find((item) => item.id === selectedId) ?? null;
+  const selected =
+    visible.find((item) => item.id === selectedId) ??
+    items.find((item) => item.id === selectedId) ??
+    (createdOverlay?.id === selectedId ? createdOverlay : null);
   useEffect(() => {
     setKindFilter("all");
   }, [scope]);
   useEffect(() => {
-    if (!selectedId) return;
-    if (visible.some((item) => item.id === selectedId)) return;
+    if (!selectedId || loading) return;
+    if (items.some((item) => item.id === selectedId) || createdOverlay?.id === selectedId) return;
     onClose();
-  }, [onClose, selectedId, visible]);
+  }, [createdOverlay, items, loading, onClose, selectedId]);
   const titleFor = useCallback(
     (id: string) =>
       visible.find((item) => item.id === id)?.displayName ??
@@ -1605,7 +1634,11 @@ function ScriptsWorkbench({
       id,
     [items, visible],
   );
-  const { tabs, close, reorder } = useDocumentTabs(selectedId, titleFor);
+  const { tabs, close, reorder } = useDocumentTabs(
+    selectedId,
+    titleFor,
+    `axis:script-document-tabs:${scope}`,
+  );
   const filteredIds = useMemo(() => filtered.map((item) => item.id), [filtered]);
   const selection = useCheckedIds(filteredIds);
   const checkedScripts = filtered.filter((item) => selection.checkedIds.has(item.id));
@@ -1668,6 +1701,18 @@ function ScriptsWorkbench({
               assignmentCount: 0,
             });
             onSelect(created.id);
+            onRefresh();
+          }}
+          onMetadataUpdated={(updated, source) => {
+            setCreatedOverlay({
+              id: updated.id,
+              kind: source.kind.startsWith("script:")
+                ? source.kind.slice("script:".length)
+                : source.kind,
+              displayName: updated.title,
+              description: updated.description,
+              assignmentCount: selected?.assignmentCount,
+            });
             onRefresh();
           }}
         >
@@ -1787,11 +1832,11 @@ function ScriptsWorkbench({
         </ObjectListMenuHost>
       }
       inspector={
-        selected ? (
+        selected || tabs.length > 0 ? (
           <div className="inspector-with-tabs">
             <DocumentTabs
               tabs={tabs}
-              activeId={selected.id}
+              activeId={selected?.id ?? null}
               onSelect={onSelect}
               onClose={(id) => {
                 const next = close(id);
@@ -1800,19 +1845,23 @@ function ScriptsWorkbench({
               }}
               onReorder={reorder}
             />
-            <InspectorErrorBoundary>
-            <GraphObjectInspector
-              key={selected.id}
-              kind={inspectorKindForTenantScript(selected.kind)}
-              id={selected.id}
-              fallbackTitle={selected.displayName}
-              onClose={() => {
-                const next = close(selected.id);
-                if (next) onSelect(next);
-                else onClose();
-              }}
-            />
-            </InspectorErrorBoundary>
+            {selected ? (
+              <InspectorErrorBoundary>
+                <GraphObjectInspector
+                  key={selected.id}
+                  kind={inspectorKindForTenantScript(selected.kind)}
+                  id={selected.id}
+                  fallbackTitle={selected.displayName}
+                  onClose={() => {
+                    const next = close(selected.id);
+                    if (next) onSelect(next);
+                    else onClose();
+                  }}
+                />
+              </InspectorErrorBoundary>
+            ) : (
+              <InspectorEmpty label="Select a script or choose one of the persistent tabs above." />
+            )}
           </div>
         ) : (
           <InspectorEmpty label="Select a script to inspect it in this workspace. Close clears the selection and stays here." />
@@ -1907,6 +1956,14 @@ function AutopilotWorkbench({
           onDuplicated={(created) => {
             setProfileOverlay({ id: created.id, displayName: created.title });
             onSelectProfile(created.id);
+            void profiles.reload();
+          }}
+          onMetadataUpdated={(updated) => {
+            setProfileOverlay({
+              id: updated.id,
+              displayName: updated.title,
+              description: updated.description,
+            });
             void profiles.reload();
           }}
         >
@@ -2044,7 +2101,7 @@ function BaselinesWorkbench({
   >([]);
   const [e8Loading, setE8Loading] = useState(false);
   const [referencesError, setReferencesError] = useState<string | null>(null);
-  const initialLoadDone = useRef(false);
+  const [importOpen, setImportOpen] = useState(false);
 
   useEffect(() => {
     setSourceEntries(loadStoredSources());
@@ -2081,15 +2138,16 @@ function BaselinesWorkbench({
   }, [sourceEntries]);
 
   useEffect(() => {
-    if (!sourcesHydrated || initialLoadDone.current) return;
-    initialLoadDone.current = true;
-    void loadReferences();
+    if (!sourcesHydrated) return;
+    const timer = window.setTimeout(() => void loadReferences(), 500);
+    return () => window.clearTimeout(timer);
   }, [loadReferences, sourcesHydrated]);
 
   const packs = useMemo(() => {
     const loadsById = new Map(referenceLoads.map((load) => [load.source.id, load]));
     return sourceEntries.filter(isSourceReady).map((entry) => {
-      const load = loadsById.get(entry.id ?? "");
+      const normalizedEntry = sanitizeSource(entry);
+      const load = loadsById.get(normalizedEntry.id ?? "");
       const source = load?.source;
       const title = packTitle({
         id: entry.id,
@@ -2098,7 +2156,7 @@ function BaselinesWorkbench({
         repo: source?.repo ?? entry.repo,
       });
       return {
-        id: entry.id ?? source?.id ?? title,
+        id: normalizedEntry.id ?? source?.id ?? title,
         title,
         kind: isBuiltinSource(entry) ? "Built-in" : "Custom pack",
         owner: source?.owner ?? entry.owner,
@@ -2108,7 +2166,7 @@ function BaselinesWorkbench({
         warning: load?.warnings[0] ?? null,
         references: (load?.references ?? []).map((reference) => ({
           ...reference,
-          sourceId: source?.id ?? entry.id ?? "",
+          sourceId: source?.id ?? normalizedEntry.id ?? "",
           sourceName: title,
         })),
       };
@@ -2353,9 +2411,18 @@ function BaselinesWorkbench({
               eyebrow={selectedReference.sourceName}
               title={selectedReference.name}
               actions={
-                <button type="button" className="axis-btn" onClick={() => onSelect("")}>
-                  Close
-                </button>
+                <div className="device-actions">
+                  <button
+                    type="button"
+                    className="axis-btn axis-btn-primary"
+                    onClick={() => setImportOpen(true)}
+                  >
+                    Import to Intune
+                  </button>
+                  <button type="button" className="axis-btn" onClick={() => onSelect("")}>
+                    Close
+                  </button>
+                </div>
               }
             />
             <section className="axis-panel" style={{ padding: "0.85rem" }}>
@@ -2393,13 +2460,202 @@ function BaselinesWorkbench({
               </div>
             </section>
             <IncompleteBanner>
-              This is a reference slice. Comparison/apply against repository sources is not implemented in this pass.
+              Import creates a new Settings Catalog policy. Review its settings and assignments
+              before deployment.
             </IncompleteBanner>
+            {importOpen ? (
+              <BaselineImportDialog
+                reference={selectedReference}
+                sources={sourceEntries}
+                onClose={() => setImportOpen(false)}
+              />
+            ) : null}
           </div>
         ) : (
           <InspectorEmpty label="Select a policy under a baseline pack to inspect it here. Close clears the selection and stays on Baselines." />
         )
       }
     />
+  );
+}
+
+function BaselineImportDialog({
+  reference,
+  sources,
+  onClose,
+}: {
+  reference: E8BaselineReference & { sourceId: string; sourceName: string };
+  sources: BaselineReferenceSourceInput[];
+  onClose: () => void;
+}) {
+  const [name, setName] = useState(reference.name);
+  const [description, setDescription] = useState("");
+  const [platform, setPlatform] = useState<"windows" | "macos">("windows");
+  const [settings, setSettings] = useState<Record<string, unknown>[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchBaselineExport(
+      reference.downloadUrl,
+      tokenForSource(sources, reference.sourceId),
+    )
+      .then((response) => {
+        if (cancelled) return;
+        if (response.error || response.document == null) {
+          throw new Error(response.error ?? "The baseline export was empty.");
+        }
+        const fileName = reference.downloadUrl.split("/").pop() ?? `${reference.name}.json`;
+        const policy = normalizeIntunePolicyExport(response.document, fileName);
+        const importedName =
+          (typeof policy.name === "string" && policy.name.trim()) ||
+          (typeof policy.displayName === "string" && policy.displayName.trim()) ||
+          reference.name;
+        const importedDescription =
+          typeof policy.description === "string" ? policy.description : "";
+        const importedPlatform =
+          typeof policy.platforms === "string" &&
+          policy.platforms.toLowerCase().includes("mac")
+            ? "macos"
+            : "windows";
+        const importedSettings = Array.isArray(policy.settings)
+          ? policy.settings.flatMap((value) => {
+              if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+              const {
+                id: _id,
+                settingDefinitions: _definitions,
+                settingDefinition: _definition,
+                ...setting
+              } = value as Record<string, unknown>;
+              return [setting];
+            })
+          : [];
+        setName(importedName);
+        setDescription(importedDescription);
+        setPlatform(importedPlatform);
+        setSettings(importedSettings);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Could not load the baseline export.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [reference.downloadUrl, reference.name, reference.sourceId, sources]);
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape" && !saving) onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose, saving]);
+
+  async function importPolicy() {
+    setSaving(true);
+    setError(null);
+    try {
+      const response = await createSettingsCatalogPolicy({
+        name: name.trim(),
+        description,
+        platform,
+        settings,
+      });
+      if (response.error || !response.policy) {
+        setError(response.error ?? "Import failed.");
+        return;
+      }
+      navigate(
+        `/intune/policies/settings-catalog?platform=${platform}&policy=${encodeURIComponent(
+          response.policy.id,
+        )}`,
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Import failed.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div
+      className="axis-modal-backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !saving) onClose();
+      }}
+    >
+      <div className="axis-modal object-action-pane" role="dialog" aria-modal="true">
+        <div className="assignment-dialog-head">
+          <div>
+            <p className="axis-kicker">Baseline import</p>
+            <h2>{reference.name}</h2>
+          </div>
+          <button type="button" className="axis-btn" disabled={saving} onClick={onClose}>
+            Close
+          </button>
+        </div>
+        {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
+        {loading ? <p className="muted">Downloading and validating template…</p> : null}
+        <div className="object-action-fields">
+          <label className="device-field">
+            Policy name
+            <input
+              className="axis-input"
+              value={name}
+              disabled={loading || saving}
+              onChange={(event) => setName(event.target.value)}
+            />
+          </label>
+          <label className="device-field">
+            Description
+            <textarea
+              className="axis-input object-action-description"
+              value={description}
+              rows={4}
+              disabled={loading || saving}
+              onChange={(event) => setDescription(event.target.value)}
+            />
+          </label>
+          <label className="device-field">
+            Platform
+            <select
+              className="axis-input"
+              value={platform}
+              disabled={loading || saving}
+              onChange={(event) => setPlatform(event.target.value as "windows" | "macos")}
+            >
+              <option value="windows">Windows</option>
+              <option value="macos">macOS</option>
+            </select>
+          </label>
+          <p className="muted" style={{ margin: 0 }}>
+            {settings.length} setting{settings.length === 1 ? "" : "s"} will be imported.
+          </p>
+        </div>
+        <div className="object-action-footer">
+          <p className="muted">The imported policy is created unassigned.</p>
+          <div className="device-actions">
+            <button type="button" className="axis-btn" disabled={saving} onClick={onClose}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="axis-btn axis-btn-primary"
+              disabled={loading || saving || !name.trim() || settings.length === 0}
+              onClick={() => void importPolicy()}
+            >
+              {saving ? "Importing…" : "Import policy"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }

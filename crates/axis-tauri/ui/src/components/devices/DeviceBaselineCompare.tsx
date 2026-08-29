@@ -54,7 +54,7 @@ function catalogPolicyIds(device: ManagedDeviceDetail): string[] {
     .map((policy) => policy.id);
 }
 
-function csvEscape(cell: string | number | null | undefined): string {
+function csvEscape(cell: string | number | boolean | null | undefined): string {
   return `"${String(cell ?? "").replace(/"/g, '""')}"`;
 }
 

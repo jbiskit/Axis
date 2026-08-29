@@ -28,9 +28,26 @@ export function reorderOpenIds(
 export function useDocumentTabs(
   activeId: string | null,
   titleFor: (id: string) => string,
+  storageKey?: string,
 ) {
-  const [openIds, setOpenIds] = useState<string[]>([]);
-  const [titles, setTitles] = useState<Record<string, string>>({});
+  const [openIds, setOpenIds] = useState<string[]>(() => {
+    if (!storageKey || typeof window === "undefined") return [];
+    try {
+      const parsed = JSON.parse(window.sessionStorage.getItem(`${storageKey}:ids`) ?? "[]");
+      return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [];
+    } catch {
+      return [];
+    }
+  });
+  const [titles, setTitles] = useState<Record<string, string>>(() => {
+    if (!storageKey || typeof window === "undefined") return {};
+    try {
+      const parsed = JSON.parse(window.sessionStorage.getItem(`${storageKey}:titles`) ?? "{}");
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  });
   const suppressReopenId = useRef<string | null>(null);
 
   useEffect(() => {
@@ -50,6 +67,16 @@ export function useDocumentTabs(
       current[activeId] === title ? current : { ...current, [activeId]: title },
     );
   }, [activeId, titleFor]);
+
+  useEffect(() => {
+    if (!storageKey) return;
+    window.sessionStorage.setItem(`${storageKey}:ids`, JSON.stringify(openIds));
+  }, [openIds, storageKey]);
+
+  useEffect(() => {
+    if (!storageKey) return;
+    window.sessionStorage.setItem(`${storageKey}:titles`, JSON.stringify(titles));
+  }, [storageKey, titles]);
 
   const close = useCallback((id: string): string | null => {
     let remaining: string[] = [];

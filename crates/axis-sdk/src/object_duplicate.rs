@@ -5,6 +5,9 @@ use crate::graph::{GraphClient, GraphError};
 use crate::object_detail::{
     create_tenant_script, fetch_graph_object_detail, CreateTenantScriptInput, GraphObjectDetail,
 };
+use crate::{
+    assign_object_assignments, assignment_capabilities, drafts_from_graph_assignments,
+};
 
 const STRIP_KEYS: &[&str] = &[
     "id",
@@ -159,7 +162,11 @@ fn apply_copy_name(body: &mut Value, name: &str) {
     }
 }
 
-fn catalog_create_body(detail: &GraphObjectDetail, name: &str) -> Result<Value, GraphError> {
+fn catalog_create_body(
+    detail: &GraphObjectDetail,
+    name: &str,
+    description: Option<&str>,
+) -> Result<Value, GraphError> {
     let object = &detail.object;
     let mut settings = detail.settings.clone().unwrap_or_default();
     for row in &mut settings {
@@ -177,7 +184,9 @@ fn catalog_create_body(detail: &GraphObjectDetail, name: &str) -> Result<Value, 
         "roleScopeTagIds": object.get("roleScopeTagIds").cloned().unwrap_or(json!(["0"])),
         "settings": settings,
     });
-    if let Some(description) = string_field(object, "description") {
+    if let Some(description) =
+        description.map(str::to_string).or_else(|| string_field(object, "description"))
+    {
         payload
             .as_object_mut()
             .expect("object")
@@ -196,9 +205,18 @@ fn catalog_create_body(detail: &GraphObjectDetail, name: &str) -> Result<Value, 
     Ok(payload)
 }
 
-fn generic_create_body(detail: &GraphObjectDetail, name: &str) -> Value {
+fn generic_create_body(
+    detail: &GraphObjectDetail,
+    name: &str,
+    description: Option<&str>,
+) -> Value {
     let mut body = strip_keys(&detail.object, STRIP_KEYS);
     apply_copy_name(&mut body, name);
+    if let Some(description) = description {
+        if let Some(map) = body.as_object_mut() {
+            map.insert("description".into(), json!(description));
+        }
+    }
     if detail.kind == "compliancePolicy" {
         if let Some(actions) = detail
             .extras
@@ -323,6 +341,8 @@ async fn duplicate_script(
     kind: &str,
     detail: GraphObjectDetail,
     name: String,
+    description: Option<&str>,
+    copy_assignments: bool,
 ) -> Result<DuplicatedObject, GraphError> {
     let object = &detail.object;
     let created = create_tenant_script(
@@ -330,16 +350,21 @@ async fn duplicate_script(
         CreateTenantScriptInput {
             kind: kind.to_string(),
             display_name: name.clone(),
-            description: string_field(object, "description"),
+            description: description
+                .map(str::to_string)
+                .or_else(|| string_field(object, "description")),
             run_as_account: string_field(object, "runAsAccount"),
             file_name: None,
-            script_text: detail.script_text,
-            detection_script_text: detail.detection_script_text,
-            remediation_script_text: detail.remediation_script_text,
+            script_text: detail.script_text.clone(),
+            detection_script_text: detail.detection_script_text.clone(),
+            remediation_script_text: detail.remediation_script_text.clone(),
             run_as_32_bit: object.get("runAs32Bit").and_then(Value::as_bool),
         },
     )
     .await?;
+    if copy_assignments {
+        copy_object_assignments(access_token, kind, &created.id, &detail).await?;
+    }
     Ok(DuplicatedObject {
         id: created.id,
         kind: kind.to_string(),
@@ -347,11 +372,30 @@ async fn duplicate_script(
     })
 }
 
+async fn copy_object_assignments(
+    access_token: &str,
+    kind: &str,
+    created_id: &str,
+    detail: &GraphObjectDetail,
+) -> Result<(), GraphError> {
+    if detail.assignments.is_empty() || !assignment_capabilities(kind).writable {
+        return Ok(());
+    }
+    let drafts = drafts_from_graph_assignments(&detail.assignments, false);
+    let odata_type = detail
+        .object
+        .get("@odata.type")
+        .and_then(Value::as_str);
+    assign_object_assignments(access_token, kind, created_id, &drafts, odata_type).await
+}
+
 pub async fn duplicate_graph_object(
     access_token: &str,
     kind: &str,
     id: &str,
     display_name: Option<&str>,
+    description: Option<&str>,
+    copy_assignments: bool,
 ) -> Result<DuplicatedObject, GraphError> {
     if matches!(kind, "mobileApp" | "autopilotDevice") {
         return Err(GraphError::Request {
@@ -381,14 +425,22 @@ pub async fn duplicate_graph_object(
         .unwrap_or_else(|| copy_display_name(&detail.title));
 
     if kind.starts_with("script:") {
-        return duplicate_script(access_token, kind, detail, name).await;
+        return duplicate_script(
+            access_token,
+            kind,
+            detail,
+            name,
+            description,
+            copy_assignments,
+        )
+        .await;
     }
 
     let path = create_collection(kind)?;
     let body = if kind == "configurationPolicy" {
-        catalog_create_body(&detail, &name)?
+        catalog_create_body(&detail, &name, description)?
     } else {
-        generic_create_body(&detail, &name)
+        generic_create_body(&detail, &name, description)
     };
     let created: Value = GraphClient::new()
         .post(access_token, path, "beta", &body)
@@ -398,6 +450,9 @@ pub async fn duplicate_graph_object(
         if let Some(settings) = detail.settings.as_deref() {
             copy_gpo_definition_values(access_token, &id, settings).await;
         }
+    }
+    if copy_assignments {
+        copy_object_assignments(access_token, kind, &id, &detail).await?;
     }
     Ok(DuplicatedObject {
         id,
@@ -454,7 +509,7 @@ mod tests {
             extras: None,
             warnings: vec![],
         };
-        let body = catalog_create_body(&detail, "Source (copy)").unwrap();
+        let body = catalog_create_body(&detail, "Source (copy)", None).unwrap();
         assert_eq!(body["name"], "Source (copy)");
         assert!(body["settings"][0].get("id").is_none());
         assert!(body["settings"][0].get("settingDefinitions").is_none());

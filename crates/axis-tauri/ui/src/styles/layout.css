@@ -2423,3 +2423,59 @@ details.axis-panel > summary {
   max-width: 24rem;
   margin: 0;
 }
+
+.object-action-pane {
+  width: min(34rem, calc(100vw - 2rem));
+}
+
+.object-action-fields {
+  display: grid;
+  gap: 0.85rem;
+  margin-top: 0.9rem;
+}
+
+.object-action-description {
+  resize: vertical;
+  min-height: 7rem;
+  font-family: inherit;
+}
+
+.object-action-assignments {
+  padding: 0.7rem 0.8rem;
+}
+
+.object-action-check {
+  display: flex;
+  gap: 0.65rem;
+  align-items: flex-start;
+  cursor: pointer;
+}
+
+.object-action-check input {
+  margin-top: 0.18rem;
+  accent-color: var(--axis-accent);
+}
+
+.object-action-check span {
+  display: grid;
+  gap: 0.18rem;
+  font-size: var(--axis-text-sm);
+}
+
+.object-action-check small {
+  color: var(--axis-muted);
+  font-size: var(--axis-text-xs);
+}
+
+.object-action-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+  margin-top: 1rem;
+}
+
+.object-action-footer p {
+  margin: 0;
+  font-size: var(--axis-text-xs);
+}

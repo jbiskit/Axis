@@ -108,7 +108,7 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value || min, min), max);
 }
 
-function toSeverity(value: string): editor.MarkerSeverity {
+function toSeverity(value: string): editor.IMarkerData["severity"] {
   if (value === "warning") return 4;
   if (value === "info" || value === "hint") return 2;
   return 8;

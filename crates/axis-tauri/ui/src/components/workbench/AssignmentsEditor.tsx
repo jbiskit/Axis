@@ -153,6 +153,8 @@ export function AssignmentsEditor({
   assignments,
   objectOdataType,
   onSaved,
+  draftMode = false,
+  onDraftChange,
 }: {
   kind: string;
   id?: string;
@@ -160,7 +162,9 @@ export function AssignmentsEditor({
   targets?: AssignmentEditorTarget[];
   assignments: Record<string, unknown>[];
   objectOdataType?: string | null;
-  onSaved: () => void;
+  onSaved?: () => void;
+  draftMode?: boolean;
+  onDraftChange?: (drafts: AssignmentDraft[], writable: boolean) => void;
 }) {
   const resolvedTargets = useMemo<AssignmentEditorTarget[]>(() => {
     if (targets && targets.length > 0) return targets;
@@ -262,6 +266,14 @@ export function AssignmentsEditor({
     () => assignmentFingerprint(rows) !== baselineFingerprint,
     [rows, baselineFingerprint],
   );
+
+  useEffect(() => {
+    if (!draftMode || !onDraftChange || filtersLoading) return;
+    onDraftChange(
+      rows.map(({ key: _key, ...draft }) => draft),
+      writable,
+    );
+  }, [draftMode, filtersLoading, onDraftChange, rows, writable]);
 
   const addRow = (targetKind: AssignmentTargetKind, group?: DirectoryGroup) => {
     const intent = supportsIntent ? "required" : undefined;
@@ -479,7 +491,7 @@ export function AssignmentsEditor({
         );
         if (okCount > 0) {
           setBaselineFingerprint(assignmentFingerprint(drafts));
-          onSaved();
+          onSaved?.();
         }
         return;
       }
@@ -493,7 +505,7 @@ export function AssignmentsEditor({
             : "Cleared all assignments.",
       );
       setBaselineFingerprint(assignmentFingerprint(drafts));
-      onSaved();
+      onSaved?.();
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : "Save failed");
     } finally {
@@ -516,12 +528,14 @@ export function AssignmentsEditor({
       <div className="assignment-editor-head">
         <div>
           <p className="muted" style={{ margin: 0 }}>
-            {isBulk
+            {draftMode
+              ? `${title} — adjust the assignments that will be applied to the new copy.`
+              : isBulk
               ? `Save writes this assignment list to ${resolvedTargets.length} selected policies (includes and excludes). Leave empty and save to clear assignments on all of them.`
               : `${title} — save writes the assignment list below to Intune (includes and excludes). Leave empty and save to clear all assignments.`}
           </p>
         </div>
-        <button
+        {!draftMode ? <button
           type="button"
           className={saveClassName}
           disabled={!canSave}
@@ -540,10 +554,15 @@ export function AssignmentsEditor({
               : isBulk
                 ? `Clear all assignments · ${resolvedTargets.length}`
                 : "Clear all assignments"}
-        </button>
+        </button> : null}
       </div>
 
       {loadError ? <div className="axis-alert axis-alert-danger">{loadError}</div> : null}
+      {draftMode && !filtersLoading && !writable ? (
+        <div className="axis-alert axis-alert-warning">
+          Assignment copying is not available for this object type. The copy will be unassigned.
+        </div>
+      ) : null}
       {saveError ? <div className="axis-alert axis-alert-danger">{saveError}</div> : null}
       {saveMessage ? <div className="axis-alert axis-alert-info">{saveMessage}</div> : null}
 

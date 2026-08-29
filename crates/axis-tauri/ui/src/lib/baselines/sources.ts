@@ -200,7 +200,8 @@ export function tokenForSource(
   sources: BaselineReferenceSourceInput[],
   sourceId: string,
 ): string | undefined {
-  const source = sources.find((entry) => entry.id === sourceId);
-  if (!source?.private) return undefined;
-  return source.token?.trim() || undefined;
+  const source = sources
+    .map(sanitizeSource)
+    .find((entry) => entry.id === sourceId);
+  return source?.private ? source.token?.trim() || undefined : undefined;
 }

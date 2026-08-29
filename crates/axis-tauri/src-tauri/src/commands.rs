@@ -17,7 +17,7 @@ use axis_sdk::{
     reboot_managed_device, remote_lock_managed_device, resolve_directory_groups,
     retire_managed_device, reveal_bitlocker_recovery_key, reveal_laps_credentials,
     rotate_managed_device_laps_password, search_catalog_settings, search_directory_groups,
-    sync_managed_device, update_script_content, wipe_managed_device, AppProtectionPolicy,
+    sync_managed_device, update_object_metadata, update_script_content, wipe_managed_device, AppProtectionPolicy,
     AppliedPolicySettingsLoad, AssignmentCapabilities, AssignmentDraft, AssignmentFilter, AutopilotDevice, AutopilotProfile,
     BaselineReferenceSourceInput, BaselineReferenceSourceLoad, BitLockerRecoveryKeySummary,
     CatalogCategory, CatalogIndexState, CatalogPolicySummary, CatalogSearchResult,
@@ -25,7 +25,8 @@ use axis_sdk::{
     DirectoryGroup, DuplicatedObject,
     E8BaselineReference, E8BaselineSource, GraphObjectDetail, InventoryList, LapsCredentialInfo,
     MobileAppSummary, PolicySettingIssue, RemediationDeviceStatusReport, SettingConflictDetail,
-    SettingsCatalogPlatform, TenantScriptSummary, WindowsUpdatePolicy,
+    SettingsCatalogPlatform, TenantScriptSummary, UpdateObjectMetadataInput, UpdatedObjectMetadata,
+    WindowsUpdatePolicy,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -1214,6 +1215,8 @@ pub async fn duplicate_graph_object_cmd(
     kind: String,
     id: String,
     display_name: Option<String>,
+    description: Option<String>,
+    copy_assignments: Option<bool>,
 ) -> Result<DuplicateGraphObjectResponse, String> {
     let Some(token) = session_token(&state).await? else {
         return Ok(DuplicateGraphObjectResponse {
@@ -1221,12 +1224,51 @@ pub async fn duplicate_graph_object_cmd(
             error: Some("Not signed in.".into()),
         });
     };
-    match duplicate_graph_object(&token, &kind, &id, display_name.as_deref()).await {
+    match duplicate_graph_object(
+        &token,
+        &kind,
+        &id,
+        display_name.as_deref(),
+        description.as_deref(),
+        copy_assignments.unwrap_or(false),
+    )
+    .await
+    {
         Ok(object) => Ok(DuplicateGraphObjectResponse {
             object: Some(object),
             error: None,
         }),
         Err(error) => Ok(DuplicateGraphObjectResponse {
+            object: None,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateObjectMetadataResponse {
+    pub object: Option<UpdatedObjectMetadata>,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn update_object_metadata_cmd(
+    state: State<'_, AppState>,
+    input: UpdateObjectMetadataInput,
+) -> Result<UpdateObjectMetadataResponse, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Ok(UpdateObjectMetadataResponse {
+            object: None,
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match update_object_metadata(&token, input).await {
+        Ok(object) => Ok(UpdateObjectMetadataResponse {
+            object: Some(object),
+            error: None,
+        }),
+        Err(error) => Ok(UpdateObjectMetadataResponse {
             object: None,
             error: Some(error.to_string()),
         }),
