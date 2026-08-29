@@ -710,6 +710,18 @@ export type DuplicatedObject = {
   title: string;
 };
 
+export type UpdatedObjectMetadata = {
+  id: string;
+  kind: string;
+  title: string;
+  description?: string | null;
+};
+
+export type UpdateObjectMetadataResponse = {
+  object: UpdatedObjectMetadata | null;
+  error: string | null;
+};
+
 export type GraphObjectDetail = {
   id: string;
   kind: string;

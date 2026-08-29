@@ -12,6 +12,7 @@ mod glance;
 mod graph;
 mod inventory;
 mod object_detail;
+mod object_metadata;
 mod object_duplicate;
 mod script_status;
 mod session_store;
@@ -65,6 +66,10 @@ pub use inventory::*;
 pub use object_detail::{
     create_tenant_script, fetch_graph_object_detail, update_script_content, CreateTenantScriptInput,
     GraphObjectDetail,
+};
+pub use object_metadata::{
+    can_update_object_metadata, update_object_metadata, UpdateObjectMetadataInput,
+    UpdatedObjectMetadata,
 };
 pub use object_duplicate::{
     can_duplicate_kind, duplicate_graph_object, copy_display_name, DuplicatedObject,

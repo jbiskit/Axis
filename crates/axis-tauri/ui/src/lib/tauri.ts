@@ -21,6 +21,7 @@ import type {
   CreateTenantScriptInput,
   CreateTenantScriptResponse,
   DuplicateGraphObjectResponse,
+  UpdateObjectMetadataResponse,
   GraphObjectDetailResponse,
   E8BaselineReferencesResponse,
   BaselineExportResponse,
@@ -324,13 +325,28 @@ export async function createTenantScript(
 export async function duplicateGraphObject(
   kind: string,
   id: string,
-  displayName?: string,
+  options?: {
+    displayName?: string;
+    description?: string;
+    copyAssignments?: boolean;
+  },
 ): Promise<DuplicateGraphObjectResponse> {
   return invoke<DuplicateGraphObjectResponse>("duplicate_graph_object_cmd", {
     kind,
     id,
-    displayName: displayName ?? null,
+    displayName: options?.displayName ?? null,
+    description: options?.description ?? null,
+    copyAssignments: options?.copyAssignments ?? false,
   });
+}
+
+export async function updateObjectMetadata(input: {
+  kind: string;
+  id: string;
+  name: string;
+  description?: string | null;
+}): Promise<UpdateObjectMetadataResponse> {
+  return invoke<UpdateObjectMetadataResponse>("update_object_metadata_cmd", { input });
 }
 
 export async function lintScript(

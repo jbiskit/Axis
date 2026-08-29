@@ -315,7 +315,7 @@ export function GraphObjectInspector({
     return () => {
       cancelled = true;
     };
-  }, [kind, id]);
+  }, [fallbackTitle, kind, id]);
 
   const assignments = useMemo(
     () => (Array.isArray(detail?.assignments) ? detail.assignments : []),

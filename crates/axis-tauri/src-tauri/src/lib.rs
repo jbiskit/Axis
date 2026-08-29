@@ -279,6 +279,7 @@ pub fn run() {
             commands::update_script_content_cmd,
             commands::create_tenant_script_cmd,
             commands::duplicate_graph_object_cmd,
+            commands::update_object_metadata_cmd,
             commands::lint_script_cmd,
             commands::search_directory_groups_cmd,
             commands::create_directory_group_cmd,

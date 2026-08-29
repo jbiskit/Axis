@@ -195,6 +195,15 @@ export function SettingsCatalogWorkbench({
             selectPolicy(created.id);
             onRefresh();
           }}
+          onMetadataUpdated={(updated) => {
+            setOverlay({
+              id: updated.id,
+              name: updated.title,
+              description: updated.description,
+              isAssigned: selected?.isAssigned,
+            });
+            onRefresh();
+          }}
         >
         {selected ? (
           <div className="stack">
