@@ -156,6 +156,7 @@ export function ComplianceSettingsView({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (!odataType) {
@@ -187,6 +188,7 @@ export function ComplianceSettingsView({
     if (reset) {
       setError(null);
       setMessage(null);
+      setOpenGroups({});
     }
   }, [policyId, rows]);
 
@@ -295,7 +297,13 @@ export function ComplianceSettingsView({
             <details
               key={`${policyId}:${group.group}`}
               className="compliance-setting-group"
-              defaultOpen={group.rows.some((row) => row.configured) || groupDirty}
+              open={openGroups[group.group] ?? (configured > 0 || groupDirty)}
+              onToggle={(event) => {
+                const next = event.currentTarget.open;
+                setOpenGroups((current) =>
+                  current[group.group] === next ? current : { ...current, [group.group]: next },
+                );
+              }}
             >
               <summary className="compliance-setting-group-title">
                 <span className="compliance-setting-group-chevron" aria-hidden="true">
