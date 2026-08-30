@@ -11,7 +11,7 @@ Arguments:
 Options:
   --version-only   Update versions and lockfiles without testing or building
   --allow-dirty    Allow an intentionally dirty working tree
-  --publish        Commit, tag, and push after a successful local build
+  --publish        Commit and push; GitHub Actions creates the tag and release
   -h, --help       Show this help
 EOF
 }
@@ -87,11 +87,20 @@ ui_directory="$repository_root/crates/axis-tauri/ui"
 tauri_directory="$repository_root/crates/axis-tauri"
 cd "$repository_root"
 
-if [[ "$allow_dirty" == false ]] && [[ -n "$(git status --porcelain)" ]]; then
-  printf '%s\n' \
-    'The working tree is not clean.' \
-    'Commit or stash intended work, or rerun with --allow-dirty after reviewing git status.' >&2
-  exit 1
+if [[ "$allow_dirty" == false ]]; then
+  status="$(git status --porcelain)"
+  if [[ -n "$status" ]]; then
+    changelog_only=true
+    while IFS= read -r status_line; do
+      [[ "${status_line:3}" == "CHANGELOG.md" ]] || changelog_only=false
+    done <<< "$status"
+    if [[ "$publish" == false || "$changelog_only" == false ]]; then
+      printf '%s\n' \
+        'The working tree contains changes other than release notes.' \
+        'Commit or stash intended work, or rerun with --allow-dirty after reviewing git status.' >&2
+      exit 1
+    fi
+  fi
 fi
 
 current_version="$(
@@ -136,6 +145,7 @@ if [[ "$publish" == true ]]; then
 fi
 
 version_files=(
+  "CHANGELOG.md"
   "Cargo.toml"
   "Cargo.lock"
   "crates/axis-tauri/src-tauri/tauri.conf.json"
@@ -195,6 +205,7 @@ for (const path of [
 }
 NODE
 
+node scripts/finalize-changelog.mjs "$version"
 cargo check --workspace
 
 if [[ "$version_only" == false ]]; then
@@ -231,16 +242,16 @@ trap - ERR
 rm -rf "$backup_directory"
 
 if [[ "$publish" == true ]]; then
-  printf '\nCommitting and publishing v%s...\n' "$version"
+  printf '\nCommitting release %s...\n' "$version"
   git add -- "${version_files[@]}"
   if git diff --cached --quiet; then
     printf '%s\n' 'No version changes were staged.' >&2
     exit 1
   fi
-  git commit -m "chore: release $version"
-  git tag -a "v$version" -m "Axis $version"
-  git push --atomic origin "$branch" "refs/tags/v$version"
-  printf '\nPushed v%s. GitHub Actions will build and publish the release.\n' "$version"
+  git commit -m "release: $version"
+  git push origin "$branch"
+  printf '\nPushed release: %s. GitHub Actions will create v%s and publish it.\n' \
+    "$version" "$version"
   exit 0
 fi
 

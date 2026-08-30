@@ -2,8 +2,8 @@ name: Release Axis
 
 on:
   push:
-    tags:
-      - "v*.*.*"
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       version:
@@ -21,6 +21,7 @@ concurrency:
 jobs:
   build:
     name: Build Windows release
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.head_commit.message, 'release: ')
     runs-on: windows-latest
     env:
       CARGO_TERM_COLOR: always
@@ -35,8 +36,13 @@ jobs:
         env:
           DISPATCH_VERSION: ${{ inputs.version }}
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            version="${GITHUB_REF_NAME#v}"
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            subject="$(git log -1 --format=%s)"
+            if [[ ! "$subject" =~ ^release:\ ([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+              echo "Release commits must use: release: X.Y.Z" >&2
+              exit 1
+            fi
+            version="${BASH_REMATCH[1]}"
             publish=true
           else
             version="${DISPATCH_VERSION#v}"
@@ -71,6 +77,9 @@ jobs:
       - name: Verify version consistency
         run: node scripts/verify-release-version.mjs "${{ steps.release.outputs.version }}"
 
+      - name: Extract release notes
+        run: node scripts/extract-release-notes.mjs "${{ steps.release.outputs.version }}" "${{ runner.temp }}/axis-release-notes.md"
+
       - name: Type-check UI
         working-directory: crates/axis-tauri/ui
         run: npx tsc --noEmit --pretty false
@@ -101,8 +110,10 @@ jobs:
         if: steps.release.outputs.publish == 'true'
         uses: softprops/action-gh-release@v3
         with:
+          tag_name: v${{ steps.release.outputs.version }}
           name: Axis ${{ steps.release.outputs.version }}
-          generate_release_notes: true
+          target_commitish: ${{ github.sha }}
+          body_path: ${{ runner.temp }}/axis-release-notes.md
           fail_on_unmatched_files: true
           files: |
             target/release/axis.exe
