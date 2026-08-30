@@ -198,6 +198,15 @@ export function DeviceDetailView({
     void loadDeviceRef.current();
   }, [deviceId]);
 
+  useEffect(() => {
+    function onRefresh(event: Event) {
+      const refreshId = (event as CustomEvent<{ id?: unknown }>).detail?.id;
+      if (refreshId === deviceId) void loadDeviceRef.current({ force: true });
+    }
+    window.addEventListener("axis:graph-object-refresh", onRefresh);
+    return () => window.removeEventListener("axis:graph-object-refresh", onRefresh);
+  }, [deviceId]);
+
   const openPolicyDrilldown = useCallback(
     async (rowKey: string, policy: DevicePolicyState) => {
       if (expandedPolicyKey === rowKey) {

@@ -667,6 +667,101 @@ export type CatalogIndexState = {
   cachePath: string | null;
 };
 
+export type CreateCompliancePolicyInput = {
+  platform: string;
+  displayName: string;
+  description?: string | null;
+  gracePeriodHours?: number | null;
+  settings?: Record<string, boolean>;
+};
+
+export type CreateCompliancePolicyResponse = {
+  policy: CatalogPolicySummary | null;
+  error: string | null;
+};
+
+export type CompliancePropertyDoc = {
+  name: string;
+  label?: string | null;
+  typeName: string;
+  description: string;
+  options?: Array<{ value: string; label: string }>;
+};
+
+export type CompliancePropertyDocsResponse = {
+  properties: CompliancePropertyDoc[];
+  error: string | null;
+};
+
+export type ComplianceDeviceStatusOverview = {
+  pendingCount?: number | null;
+  notApplicableCount?: number | null;
+  successCount?: number | null;
+  errorCount?: number | null;
+  failedCount?: number | null;
+  conflictCount?: number | null;
+  inGracePeriodCount?: number | null;
+  unknownDeviceCount?: number | null;
+  lastUpdateDateTime?: string | null;
+};
+
+export type ComplianceDeviceStatus = {
+  id?: string | null;
+  deviceId?: string | null;
+  deviceDisplayName?: string | null;
+  deviceModel?: string | null;
+  userName?: string | null;
+  userPrincipalName?: string | null;
+  status?: string | null;
+  lastReportedDateTime?: string | null;
+  complianceGracePeriodExpirationDateTime?: string | null;
+};
+
+export type ComplianceUserStatus = {
+  id?: string | null;
+  userDisplayName?: string | null;
+  userPrincipalName?: string | null;
+  devicesCount?: number | null;
+  status?: string | null;
+  lastReportedDateTime?: string | null;
+};
+
+export type ComplianceSettingStatusSummary = {
+  settingName?: string | null;
+  settingId?: string | null;
+  platformType?: string | null;
+  numberOfCompliantDevices?: number | null;
+  numberOfNonCompliantDevices?: number | null;
+  numberOfUnknownDevices?: number | null;
+  numberOfNotApplicableDevices?: number | null;
+  numberOfErrorDevices?: number | null;
+  numberOfConflictDevices?: number | null;
+  numberOfOtherDevices?: number | null;
+};
+
+export type ComplianceSettingsReportState = {
+  status: string;
+  lastRefreshDateTime?: string | null;
+  expirationDateTime?: string | null;
+};
+
+export type CompliancePolicyStatusReport = {
+  policyId: string;
+  devices: ComplianceDeviceStatus[];
+  users?: ComplianceUserStatus[];
+  settings?: ComplianceSettingStatusSummary[];
+  truncated: boolean;
+  usersTruncated?: boolean;
+  fetchedAt: string;
+  overview?: ComplianceDeviceStatusOverview | null;
+  settingsReport?: ComplianceSettingsReportState | null;
+};
+
+export type CompliancePolicyStatusResponse = {
+  report: CompliancePolicyStatusReport | null;
+  error: string | null;
+};
+
 export type CreateTenantScriptInput = {
   kind: string;
   displayName: string;

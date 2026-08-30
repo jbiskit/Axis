@@ -320,8 +320,14 @@ fn as_app(row: GraphNamed, kind: &str) -> Option<MobileAppSummary> {
     })
 }
 
+fn assigned_from_row(row: &GraphNamed) -> Option<bool> {
+    row.is_assigned
+        .or_else(|| row.assignments.as_ref().map(|rows| !rows.is_empty()))
+}
+
 fn as_policy(row: GraphNamed) -> Option<CatalogPolicySummary> {
     let id = take_id(&row)?;
+    let is_assigned = assigned_from_row(&row);
     Some(CatalogPolicySummary {
         name: title(&row),
         description: row.description,
@@ -330,7 +336,7 @@ fn as_policy(row: GraphNamed) -> Option<CatalogPolicySummary> {
         setting_count: row.setting_count,
         created_date_time: row.created_date_time,
         last_modified_date_time: row.last_modified_date_time,
-        is_assigned: row.is_assigned,
+        is_assigned,
         template_family: row
             .template_reference
             .as_ref()
@@ -581,12 +587,28 @@ pub async fn fetch_configuration_policies(
 pub async fn fetch_compliance_policies(
     access_token: &str,
 ) -> Result<InventoryList<CatalogPolicySummary>, GraphError> {
-    let rows = list_named(
-        access_token,
-        "/deviceManagement/deviceCompliancePolicies?$select=id,displayName,description,createdDateTime,lastModifiedDateTime",
-    )
-    .await?;
-    let mut items: Vec<_> = rows.into_iter().filter_map(as_policy).collect();
+    // Classic deviceCompliancePolicy has no isAssigned property; Graph 400s if selected.
+    // Assignment state comes from the assignments navigation, same as scripts.
+    let expanded = "/deviceManagement/deviceCompliancePolicies?$select=id,displayName,description,createdDateTime,lastModifiedDateTime&$expand=assignments($select=id)";
+    let fallback = "/deviceManagement/deviceCompliancePolicies?$select=id,displayName,description,createdDateTime,lastModifiedDateTime&$expand=assignments";
+    let plain = "/deviceManagement/deviceCompliancePolicies?$select=id,displayName,description,createdDateTime,lastModifiedDateTime";
+    let rows = match list_named(access_token, expanded).await {
+        Ok(rows) => rows,
+        Err(_) => match list_named(access_token, fallback).await {
+            Ok(rows) => rows,
+            Err(_) => list_named(access_token, plain).await?,
+        },
+    };
+    let mut items: Vec<_> = rows
+        .into_iter()
+        .filter_map(as_policy)
+        .map(|mut item| {
+            if item.platforms.is_none() {
+                item.platforms = crate::platforms_from_compliance_odata(item.odata_type.as_deref());
+            }
+            item
+        })
+        .collect();
     items.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     Ok(InventoryList::from_items(items))
 }
@@ -872,4 +894,48 @@ pub async fn fetch_enrollment_configurations(
     let mut items: Vec<_> = rows.into_iter().filter_map(as_policy).collect();
     items.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     Ok(InventoryList::from_items(items))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compliance_row_derives_assigned_from_assignments() {
+        let assigned: GraphNamed = serde_json::from_str(
+            r#"{
+                "id": "policy-1",
+                "displayName": "Windows compliance",
+                "assignments": [{ "id": "a1" }]
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(assigned_from_row(&assigned), Some(true));
+        assert_eq!(as_policy(assigned).unwrap().is_assigned, Some(true));
+
+        let empty: GraphNamed = serde_json::from_str(
+            r#"{
+                "id": "policy-2",
+                "displayName": "Unassigned",
+                "assignments": []
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(assigned_from_row(&empty), Some(false));
+        assert_eq!(as_policy(empty).unwrap().is_assigned, Some(false));
+    }
+
+    #[test]
+    fn explicit_is_assigned_wins_over_assignments() {
+        let row: GraphNamed = serde_json::from_str(
+            r#"{
+                "id": "policy-3",
+                "name": "Catalog",
+                "isAssigned": true,
+                "assignments": []
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(assigned_from_row(&row), Some(true));
+    }
 }

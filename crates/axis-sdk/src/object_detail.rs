@@ -69,12 +69,7 @@ fn spec_for(kind: &str, id: &str) -> Result<KindSpec, GraphError> {
                 "/deviceManagement/deviceCompliancePolicies/{enc}/assignments"
             )),
             settings_path: None,
-            extra_paths: vec![(
-                "scheduledActions",
-                format!(
-                    "/deviceManagement/deviceCompliancePolicies/{enc}/scheduledActionsForRule"
-                ),
-            )],
+            extra_paths: vec![],
             decode_scripts: false,
         },
         "groupPolicyConfiguration" => KindSpec {
@@ -268,6 +263,18 @@ fn normalize_extra(value: Value) -> Value {
     value
 }
 
+/// Graph documents GET …/scheduledActionsForRule, but Intune returns 400
+/// ("No OData route exists"). Actions only come back via $expand on the policy.
+const COMPLIANCE_SCHEDULED_ACTIONS_EXPAND: &str =
+    "$expand=scheduledActionsForRule($expand=scheduledActionConfigurations)";
+
+fn take_scheduled_actions(object: &mut Value) -> Option<Value> {
+    object
+        .as_object_mut()?
+        .remove("scheduledActionsForRule")
+        .map(normalize_extra)
+}
+
 pub async fn fetch_graph_object_detail(
     access_token: &str,
     kind: &str,
@@ -275,9 +282,20 @@ pub async fn fetch_graph_object_detail(
 ) -> Result<GraphObjectDetail, GraphError> {
     let spec = spec_for(kind, id)?;
     let client = GraphClient::new();
-    let mut object: Value = client
-        .fetch_plain(access_token, &spec.object_path, "beta")
-        .await?;
+    let object_path = if kind == "compliancePolicy" {
+        format!("{}?{COMPLIANCE_SCHEDULED_ACTIONS_EXPAND}", spec.object_path)
+    } else {
+        spec.object_path.clone()
+    };
+    let mut object: Value = match client.fetch_plain(access_token, &object_path, "beta").await {
+        Ok(value) => value,
+        Err(_) if kind == "compliancePolicy" => {
+            client
+                .fetch_plain(access_token, &spec.object_path, "beta")
+                .await?
+        }
+        Err(error) => return Err(error),
+    };
     let mut warnings = Vec::new();
 
     let mut assignments = Vec::new();
@@ -310,6 +328,9 @@ pub async fn fetch_graph_object_detail(
     }
 
     let mut extras = serde_json::Map::new();
+    if let Some(actions) = take_scheduled_actions(&mut object) {
+        extras.insert("scheduledActions".into(), actions);
+    }
     for (name, path) in spec.extra_paths {
         match client
             .fetch_plain::<Value>(access_token, &path, "beta")
@@ -768,5 +789,26 @@ mod tests {
     #[test]
     fn unknown_kind_is_rejected() {
         assert!(script_kind_spec("win32").is_err());
+    }
+
+    #[test]
+    fn scheduled_actions_are_lifted_from_expanded_policy() {
+        let mut object = json!({
+            "id": "p1",
+            "displayName": "Windows compliance",
+            "scheduledActionsForRule": [
+                {
+                    "id": "rule-1",
+                    "ruleName": "PasswordRequired",
+                    "scheduledActionConfigurations": [
+                        { "actionType": "block", "gracePeriodHours": 0 }
+                    ]
+                }
+            ]
+        });
+        let actions = take_scheduled_actions(&mut object).expect("actions");
+        assert!(object.get("scheduledActionsForRule").is_none());
+        assert_eq!(actions[0]["ruleName"], "PasswordRequired");
+        assert_eq!(actions[0]["scheduledActionConfigurations"][0]["actionType"], "block");
     }
 }

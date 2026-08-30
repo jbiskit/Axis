@@ -8,7 +8,11 @@ import { INTUNE_PLATFORM_LABELS, type IntunePlatform } from "../lib/platforms";
 import { hrefWithParam, navigate } from "../lib/route";
 import { withTransientItem } from "../lib/duplicateObject";
 import { GraphObjectInspector } from "./workbench/GraphObjectInspector";
-import { listTargetProps, ObjectListMenuHost } from "./workbench/ObjectListMenu";
+import {
+  BulkDeleteAction,
+  listTargetProps,
+  ObjectListMenuHost,
+} from "./workbench/ObjectListMenu";
 import { InspectorWithDocumentTabs } from "./workbench/DocumentTabs";
 import {
   BulkAssignBar,
@@ -73,6 +77,21 @@ export function SettingsCatalogWorkbench({
   const checkedPolicies = filtered.filter((item) => selection.checkedIds.has(item.id));
   const bulkPolicies = filtered.filter((item) => selection.bulkTargetIds.includes(item.id));
   const showBulk = selection.bulkEditorOpen && bulkPolicies.length > 0;
+  const bulkDelete = (
+    <BulkDeleteAction
+      targets={checkedPolicies.map((item) => ({
+        id: item.id,
+        title: item.name,
+        kind: "configurationPolicy",
+      }))}
+      onDeleted={(deleted) => {
+        if (deleted.some((target) => target.id === overlay?.id)) setOverlay(null);
+        if (deleted.some((target) => target.id === selectedId)) selectPolicy("");
+        selection.clear();
+        onRefresh();
+      }}
+    />
+  );
   const inspectorOpen = Boolean(selected);
   const titleFor = useCallback(
     (id: string) =>
@@ -142,6 +161,8 @@ export function SettingsCatalogWorkbench({
           <PageHeader
             title="Browse catalog"
             description="Add settings from the Intune catalog to a new or existing freeform policy. One policy cannot mix Windows and macOS."
+            onRefresh={onRefresh}
+            refreshing={loading}
             actions={
               <div className="device-actions">
                 {platformSwitcher}
@@ -204,6 +225,11 @@ export function SettingsCatalogWorkbench({
             });
             onRefresh();
           }}
+          onDeleted={(target) => {
+            if (overlay?.id === target.id) setOverlay(null);
+            if (selectedId === target.id) selectPolicy("");
+            onRefresh();
+          }}
         >
         {selected ? (
           <div className="stack">
@@ -211,6 +237,7 @@ export function SettingsCatalogWorkbench({
               count={checkedPolicies.length}
               onEdit={selection.openBulkEditor}
               onClear={selection.clear}
+              extra={bulkDelete}
             />
             {loadedLimitBanner}
             <CompactObjectList
@@ -253,6 +280,8 @@ export function SettingsCatalogWorkbench({
             <PageHeader
               title="Settings Catalog"
               description="Live configurationPolicies for this platform. Select a row to edit settings and assignments; checkboxes bulk-edit assignments."
+              onRefresh={onRefresh}
+              refreshing={loading}
               actions={
                 <div className="device-actions">
                   {platformSwitcher}
@@ -269,6 +298,7 @@ export function SettingsCatalogWorkbench({
               count={checkedPolicies.length}
               onEdit={selection.openBulkEditor}
               onClear={selection.clear}
+              extra={bulkDelete}
             />
             <TenantPolicyTable
               items={filtered}

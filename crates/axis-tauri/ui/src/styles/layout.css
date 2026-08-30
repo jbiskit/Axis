@@ -356,6 +356,13 @@
 
 .workspace-inspector .inspector-with-tabs {
   min-height: 0;
+  overflow: hidden;
+}
+
+.workspace-inspector .inspector-with-tabs > .stack {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
 }
 
 .workspace-inspector .page-header h1 {
@@ -408,6 +415,37 @@
   margin: 0;
   font-size: 0.8125rem;
   font-weight: 600;
+}
+
+.compliance-setting-info {
+  display: inline-flex;
+  margin-left: 0.35rem;
+  vertical-align: middle;
+}
+
+.compliance-setting-info-btn {
+  display: inline-flex;
+  width: 1rem;
+  height: 1rem;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--axis-muted) 45%, var(--axis-border));
+  border-radius: 999px;
+  background: transparent;
+  color: var(--axis-muted);
+  font: inherit;
+  font-size: 0.625rem;
+  font-weight: 700;
+  font-style: italic;
+  line-height: 1;
+  cursor: help;
+}
+
+.compliance-setting-info-btn:hover,
+.compliance-setting-info-btn:focus-visible {
+  color: var(--axis-accent);
+  border-color: color-mix(in srgb, var(--axis-accent) 50%, var(--axis-border));
 }
 
 .setting-instance-desc {
@@ -1000,6 +1038,12 @@
   box-shadow: 0 0 0 1px var(--axis-ring);
 }
 
+.axis-input:disabled {
+  cursor: not-allowed;
+  color: var(--axis-muted);
+  background: var(--axis-surface-2);
+}
+
 .axis-pill {
   display: inline-flex;
   align-items: center;
@@ -1011,6 +1055,12 @@
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--axis-muted);
+}
+
+button.axis-pill {
+  border: 0;
+  cursor: pointer;
+  font-family: inherit;
 }
 
 .axis-pill-success {
@@ -1110,6 +1160,40 @@
 .device-card-row .device-card {
   flex: 1;
   min-width: 0;
+}
+
+.object-delete-icon {
+  border-color: var(--axis-danger);
+  background: transparent;
+  color: var(--axis-danger);
+}
+
+.object-delete-icon:hover:not(:disabled) {
+  background: var(--axis-danger-soft);
+}
+
+.object-delete-icon svg,
+.bulk-delete-button svg {
+  width: 1rem;
+  height: 1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.bulk-delete-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border-color: var(--axis-danger);
+  background: transparent;
+  color: var(--axis-danger);
+}
+
+.bulk-delete-button:hover {
+  background: var(--axis-danger-soft);
 }
 
 .meta-grid {
@@ -1711,6 +1795,109 @@
   min-width: 0;
 }
 
+.create-compliance-settings {
+  margin: 0;
+  padding: 0.65rem 0.75rem 0.75rem;
+  border: 1px solid var(--axis-border);
+  border-radius: var(--axis-radius);
+}
+
+.create-compliance-settings legend {
+  padding: 0 0.25rem;
+  font-size: 0.75rem;
+}
+
+.create-compliance-checks {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 0.4rem 0.85rem;
+}
+
+.compliance-setting-group + .compliance-setting-group {
+  margin-top: 0.35rem;
+}
+
+.compliance-setting-group-title {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.35rem 0 0;
+  padding: 0.4rem 0.15rem;
+  list-style: none;
+  cursor: pointer;
+  font-size: 0.6875rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--axis-muted);
+  border-radius: var(--axis-radius-sm);
+}
+
+.compliance-setting-group-title::-webkit-details-marker {
+  display: none;
+}
+
+.compliance-setting-group-title:hover,
+.compliance-setting-group-title:focus-visible {
+  color: var(--axis-muted-strong);
+}
+
+.compliance-setting-group-title:focus-visible {
+  outline: 2px solid var(--axis-ring);
+  outline-offset: 2px;
+}
+
+.compliance-setting-group-chevron {
+  display: inline-flex;
+  flex-shrink: 0;
+  transition: transform var(--axis-ease);
+}
+
+.compliance-setting-group[open] > .compliance-setting-group-title .compliance-setting-group-chevron {
+  transform: rotate(90deg);
+}
+
+.compliance-setting-group-count {
+  margin-left: auto;
+  font-size: 0.625rem;
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+
+.compliance-settings-view,
+.compliance-settings-panel,
+.compliance-setting-group {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.compliance-setting-head {
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+  align-items: center;
+}
+
+.compliance-setting-head > * {
+  min-width: 0;
+}
+
+.compliance-setting-head .setting-instance-name {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.15rem;
+}
+
+.compliance-setting-head .axis-input {
+  max-width: 100%;
+}
+
+.compliance-setting-head.is-child .setting-instance-name {
+  padding-left: 0.9rem;
+}
+
+.setting-instance-row.is-locked {
+  opacity: 0.5;
+}
+
 .create-script-body {
   min-height: 10rem;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -1944,6 +2131,10 @@ details.axis-panel > summary {
   background: var(--axis-danger);
   color: var(--axis-crust);
   outline: none;
+}
+
+.document-tab-refresh {
+  flex-shrink: 0;
 }
 
 .monaco-script-host {

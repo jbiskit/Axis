@@ -69,6 +69,23 @@ export function useDocumentTabs(
   }, [activeId, titleFor]);
 
   useEffect(() => {
+    function onObjectDeleted(event: Event) {
+      const id = (event as CustomEvent<{ id?: unknown }>).detail?.id;
+      if (typeof id !== "string") return;
+      setOpenIds((ids) => ids.filter((item) => item !== id));
+      setTitles((current) => {
+        if (!(id in current)) return current;
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
+      if (id === activeId) suppressReopenId.current = id;
+    }
+    window.addEventListener("axis:graph-object-deleted", onObjectDeleted);
+    return () => window.removeEventListener("axis:graph-object-deleted", onObjectDeleted);
+  }, [activeId]);
+
+  useEffect(() => {
     if (!storageKey) return;
     window.sessionStorage.setItem(`${storageKey}:ids`, JSON.stringify(openIds));
   }, [openIds, storageKey]);

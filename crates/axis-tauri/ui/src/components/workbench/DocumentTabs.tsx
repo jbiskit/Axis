@@ -1,5 +1,22 @@
 import { useRef, useState, type DragEvent, type ReactNode } from "react";
+import { requestObjectRefresh } from "../../lib/inspectorCache";
 import { useDocumentTabs, type DocumentTab, type TabDropPlace } from "../../hooks/useDocumentTabs";
+import { ContextMenu, type ContextMenuState } from "../ui/ContextMenu";
+
+function RefreshIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+      <path
+        d="M20 12a8 8 0 1 1-2.2-5.4M20 4v5h-5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
 
 export function DocumentTabs({
   tabs,
@@ -21,6 +38,7 @@ export function DocumentTabs({
   const dragId = useRef<string | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [hint, setHint] = useState<{ id: string; place: TabDropPlace } | null>(null);
+  const [menu, setMenu] = useState<ContextMenuState>(null);
 
   if (tabs.length === 0 && !onPopout) return null;
 
@@ -45,9 +63,33 @@ export function DocumentTabs({
               .join(" ")}
             role="tab"
             aria-selected={activeId === tab.id}
-            draggable={Boolean(onReorder)}
+            draggable={false}
             onMouseDown={(event) => {
               if (event.button === 1) event.preventDefault();
+              event.currentTarget.draggable = event.button === 0 && Boolean(onReorder);
+            }}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              setMenu({
+                x: event.clientX,
+                y: event.clientY,
+                items: [
+                  {
+                    id: "refresh",
+                    label: "Refresh",
+                    run: () => {
+                      onSelect(tab.id);
+                      requestObjectRefresh(tab.id);
+                    },
+                  },
+                  {
+                    id: "close",
+                    label: "Close",
+                    run: () => onClose(tab.id),
+                  },
+                ],
+              });
             }}
             onAuxClick={(event) => {
               if (event.button !== 1) return;
@@ -63,7 +105,8 @@ export function DocumentTabs({
               event.dataTransfer.setData("text/plain", tab.id);
               onSelect(tab.id);
             }}
-            onDragEnd={() => {
+            onDragEnd={(event) => {
+              event.currentTarget.draggable = false;
               dragId.current = null;
               setDraggingId(null);
               setHint(null);
@@ -111,6 +154,19 @@ export function DocumentTabs({
           </div>
         ))}
       </div>
+      <button
+        type="button"
+        className="axis-btn axis-btn-icon document-tab-refresh"
+        disabled={!activeId}
+        title={activeId ? "Refresh this object" : "Select a tab to refresh"}
+        aria-label="Refresh"
+        onClick={() => {
+          if (activeId) requestObjectRefresh(activeId);
+        }}
+      >
+        <RefreshIcon />
+      </button>
+      <ContextMenu state={menu} onClose={() => setMenu(null)} />
       {onPopout ? (
         <button
           type="button"

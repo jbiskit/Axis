@@ -18,6 +18,10 @@ import type {
   CatalogSearchResponse,
   CategorySettingsResponse,
   CreateCatalogPolicyResponse,
+  CreateCompliancePolicyInput,
+  CreateCompliancePolicyResponse,
+  CompliancePolicyStatusResponse,
+  CompliancePropertyDocsResponse,
   CreateTenantScriptInput,
   CreateTenantScriptResponse,
   DuplicateGraphObjectResponse,
@@ -316,6 +320,38 @@ export async function updateScriptContent(input: {
   return invoke("update_script_content_cmd", input);
 }
 
+export async function createCompliancePolicy(
+  input: CreateCompliancePolicyInput,
+): Promise<CreateCompliancePolicyResponse> {
+  return invoke<CreateCompliancePolicyResponse>("create_compliance_policy_cmd", { input });
+}
+
+export async function updateCompliancePolicy(input: {
+  id: string;
+  odataType: string;
+  settings: Record<string, unknown>;
+}): Promise<ActionResponse> {
+  return invoke<ActionResponse>("update_compliance_policy_cmd", { input });
+}
+
+export async function fetchCompliancePropertyDocs(
+  odataType: string,
+): Promise<CompliancePropertyDocsResponse> {
+  return invoke<CompliancePropertyDocsResponse>("fetch_compliance_property_docs_cmd", {
+    odataType,
+  });
+}
+
+export async function fetchCompliancePolicyStatus(
+  policyId: string,
+  generateSettings = false,
+): Promise<CompliancePolicyStatusResponse> {
+  return invoke<CompliancePolicyStatusResponse>("fetch_compliance_policy_status_cmd", {
+    policyId,
+    generateSettings,
+  });
+}
+
 export async function createTenantScript(
   input: CreateTenantScriptInput,
 ): Promise<CreateTenantScriptResponse> {
@@ -347,6 +383,10 @@ export async function updateObjectMetadata(input: {
   description?: string | null;
 }): Promise<UpdateObjectMetadataResponse> {
   return invoke<UpdateObjectMetadataResponse>("update_object_metadata_cmd", { input });
+}
+
+export async function deleteGraphObject(kind: string, id: string): Promise<ActionResponse> {
+  return invoke<ActionResponse>("delete_graph_object_cmd", { kind, id });
 }
 
 export async function lintScript(

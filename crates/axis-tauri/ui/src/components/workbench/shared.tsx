@@ -1,5 +1,7 @@
 import { Fragment, useState, type ReactNode, Component, type ErrorInfo } from "react";
 import type { AssignedFilter, ListFilterOption } from "../../lib/listSelection";
+import { requestObjectRefresh } from "../../lib/inspectorCache";
+import { useHeaderRefreshMenu } from "../ui/ContextMenu";
 import { PageHeader } from "../ui/PageChrome";
 import { SelectCheckbox } from "./PolicyBulkAssign";
 
@@ -370,9 +372,20 @@ export function CompactObjectList({
   };
   objectKind?: string;
 }) {
+  const refreshAll = onRefresh
+    ? () => {
+        onRefresh();
+        if (selectedId) requestObjectRefresh(selectedId);
+      }
+    : undefined;
+  const refreshMenu = useHeaderRefreshMenu(refreshAll, loading);
   return (
     <div className="device-list-compact">
-      <div className="device-inspector-head">
+      <div
+        className="device-inspector-head"
+        title={onRefresh ? "Right-click to refresh all" : undefined}
+        onContextMenu={refreshMenu.onContextMenu}
+      >
         <div>
           <h1 style={{ fontSize: "0.95rem" }}>{title}</h1>
           {description ? (
@@ -384,11 +397,12 @@ export function CompactObjectList({
         <div className="device-actions">
           {actions}
           {onRefresh ? (
-            <button type="button" className="axis-btn" onClick={onRefresh} disabled={loading}>
+            <button type="button" className="axis-btn" onClick={refreshAll} disabled={loading}>
               {loading ? "Refreshing…" : "Refresh"}
             </button>
           ) : null}
         </div>
+        {refreshMenu.menuNode}
       </div>
       {toolbar}
       {onQueryChange != null && query != null ? (

@@ -1,4 +1,5 @@
-import type { ReactNode } from "react";
+import type { MouseEvent, ReactNode } from "react";
+import { useHeaderRefreshMenu } from "./ContextMenu";
 
 export type SignalCardTone = "default" | "good" | "warn" | "bad";
 
@@ -27,20 +28,32 @@ export function PageHeader({
   title,
   description,
   actions,
+  onContextMenu,
+  onRefresh,
+  refreshing,
 }: {
   eyebrow?: ReactNode;
   title: ReactNode;
   description?: ReactNode;
   actions?: ReactNode;
+  onContextMenu?: (event: MouseEvent<HTMLDivElement>) => void;
+  onRefresh?: () => void;
+  refreshing?: boolean;
 }) {
+  const refreshMenu = useHeaderRefreshMenu(onRefresh, refreshing);
   return (
-    <div className="page-header">
+    <div
+      className="page-header"
+      title={onRefresh ? "Right-click to refresh all" : undefined}
+      onContextMenu={onContextMenu ?? refreshMenu.onContextMenu}
+    >
       <div className="page-header-copy">
         {eyebrow ? <div className="axis-kicker">{eyebrow}</div> : null}
         <h1>{title}</h1>
         {description ? <div className="page-header-desc">{description}</div> : null}
       </div>
       {actions ? <div className="page-header-actions">{actions}</div> : null}
+      {refreshMenu.menuNode}
     </div>
   );
 }

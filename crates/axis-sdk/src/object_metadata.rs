@@ -26,6 +26,25 @@ pub fn can_update_object_metadata(kind: &str) -> bool {
     !matches!(kind, "mobileApp" | "autopilotDevice") && object_path(kind, "id").is_ok()
 }
 
+pub fn can_delete_graph_object(kind: &str) -> bool {
+    matches!(
+        kind,
+        "configurationPolicy"
+            | "compliancePolicy"
+            | "groupPolicyConfiguration"
+            | "deviceConfiguration"
+            | "appProtection"
+            | "windowsUpdate:rings"
+            | "windowsUpdate:feature"
+            | "windowsUpdate:quality"
+            | "windowsUpdate:drivers"
+            | "script:platform-powershell"
+            | "script:platform-shell"
+            | "script:remediation"
+            | "script:compliance"
+    )
+}
+
 fn object_path(kind: &str, id: &str) -> Result<String, GraphError> {
     let id = urlencoding::encode(id);
     let collection = match kind {
@@ -53,6 +72,24 @@ fn object_path(kind: &str, id: &str) -> Result<String, GraphError> {
         }
     };
     Ok(format!("/{collection}/{id}"))
+}
+
+pub async fn delete_graph_object(
+    access_token: &str,
+    kind: &str,
+    id: &str,
+) -> Result<(), GraphError> {
+    if !can_delete_graph_object(kind) {
+        return Err(GraphError::Request {
+            status: 400,
+            code: None,
+            message: format!("Deletion is not available for {kind}."),
+            permission_related: false,
+        });
+    }
+    GraphClient::new()
+        .delete(access_token, &object_path(kind, id)?, "beta")
+        .await
 }
 
 pub async fn update_object_metadata(
@@ -114,6 +151,15 @@ mod tests {
         assert!(can_update_object_metadata("script:remediation"));
         assert!(!can_update_object_metadata("mobileApp"));
         assert!(!can_update_object_metadata("autopilotDevice"));
+    }
+
+    #[test]
+    fn deletable_kinds_include_policies_and_scripts_but_not_apps() {
+        assert!(can_delete_graph_object("configurationPolicy"));
+        assert!(can_delete_graph_object("compliancePolicy"));
+        assert!(can_delete_graph_object("script:remediation"));
+        assert!(!can_delete_graph_object("mobileApp"));
+        assert!(!can_delete_graph_object("autopilotProfile"));
     }
 
     #[test]

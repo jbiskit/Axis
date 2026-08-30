@@ -1,4 +1,13 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+} from "react";
 import { createPortal } from "react-dom";
 
 export type ContextMenuItem = {
@@ -15,6 +24,35 @@ export type ContextMenuState = {
   y: number;
   items: ContextMenuItem[];
 } | null;
+
+/** Right-click a list/page header to reload the whole inventory. */
+export function useHeaderRefreshMenu(onRefresh?: () => void, disabled?: boolean) {
+  const [menu, setMenu] = useState<ContextMenuState>(null);
+  const onContextMenu = useCallback(
+    (event: ReactMouseEvent<HTMLElement>) => {
+      if (!onRefresh) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setMenu({
+        x: event.clientX,
+        y: event.clientY,
+        items: [
+          {
+            id: "refresh-all",
+            label: "Refresh all",
+            disabled,
+            run: onRefresh,
+          },
+        ],
+      });
+    },
+    [disabled, onRefresh],
+  );
+  return {
+    onContextMenu: onRefresh ? onContextMenu : undefined,
+    menuNode: <ContextMenu state={menu} onClose={() => setMenu(null)} />,
+  };
+}
 
 export function ContextMenu({
   state,
