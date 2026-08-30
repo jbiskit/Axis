@@ -76,6 +76,12 @@ for command in git node npm npx cargo; do
   fi
 done
 
+node_major="$(node -p 'Number(process.versions.node.split(".")[0])')"
+if ((node_major != 24)); then
+  printf 'Node.js 24 is required; found %s.\n' "$(node --version)" >&2
+  exit 1
+fi
+
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ui_directory="$repository_root/crates/axis-tauri/ui"
 tauri_directory="$repository_root/crates/axis-tauri"

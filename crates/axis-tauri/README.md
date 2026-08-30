@@ -5,7 +5,7 @@ Native Windows shell for **Axis**. Graph calls run in Rust (`axis-sdk` crate). A
 ## Prerequisites
 
 - **Rust** 1.77.2+ (`rust-version` in `src-tauri/Cargo.toml`) and **cargo**
-- **Node.js** 20+ and **npm** (no `engines` field; Vite 7 expects Node 20)
+- **Node.js** 24.x and **npm** (enforced by the UI package and release tooling)
 - **WebView2** — included on Windows 11; on Windows 10 install the [Evergreen WebView2 runtime](https://developer.microsoft.com/microsoft-edge/webview2/)
 - **Tauri CLI 2** — `cargo install tauri-cli --version "^2"` (matches `tauri` 2 in this crate)
 

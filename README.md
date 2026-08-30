@@ -21,7 +21,7 @@ There is no `engines` field in `crates/axis-tauri/ui/package.json`. Versions bel
 | Dependency | Version / notes |
 |------------|-----------------|
 | **Windows** | Built around WebView2. |
-| **Node.js** + **npm** | **20+** (Vite 7 expects Node 20). Needed only for the desktop UI package. |
+| **Node.js** + **npm** | **24.x**. Needed only for the desktop UI package and release tooling. |
 | **Rust** + **cargo** | **1.77.2+** (`rust-version` on the Tauri crate). Edition 2021. |
 | **Tauri CLI 2** | `cargo install tauri-cli --version "^2"` (matches `tauri` / `tauri-build` `2` in Cargo.toml). |
 | **WebView2** | Included on Windows 11. On Windows 10 install the [Evergreen runtime](https://developer.microsoft.com/microsoft-edge/webview2/). |
