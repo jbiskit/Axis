@@ -27,7 +27,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Resolve release version
         id: release
@@ -50,9 +50,9 @@ jobs:
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
           cache-dependency-path: crates/axis-tauri/ui/package-lock.json
 
@@ -64,18 +64,12 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@v2.9.1
         with:
           workspaces: ". -> target"
 
-      - name: Install Tauri CLI
-        run: cargo install tauri-cli --version "^2" --locked
-
       - name: Verify version consistency
         run: node scripts/verify-release-version.mjs "${{ steps.release.outputs.version }}"
-
-      - name: Test Rust workspace
-        run: cargo test --workspace --locked
 
       - name: Type-check UI
         working-directory: crates/axis-tauri/ui
@@ -83,7 +77,10 @@ jobs:
 
       - name: Build portable executable
         working-directory: crates/axis-tauri
-        run: cargo tauri build --ci -- --locked
+        run: npx --yes @tauri-apps/cli@2.11.4 build --ci -- --locked
+
+      - name: Test Rust workspace
+        run: cargo test --workspace --release --locked
 
       - name: Generate checksum
         shell: bash
@@ -92,7 +89,7 @@ jobs:
           sha256sum axis.exe > axis.exe.sha256
 
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: axis-${{ steps.release.outputs.version }}-windows
           path: |
@@ -102,7 +99,7 @@ jobs:
 
       - name: Publish GitHub release
         if: steps.release.outputs.publish == 'true'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: Axis ${{ steps.release.outputs.version }}
           generate_release_notes: true
