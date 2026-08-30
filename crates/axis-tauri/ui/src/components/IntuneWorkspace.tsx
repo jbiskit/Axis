@@ -69,10 +69,15 @@ import { SettingsSearchView } from "./SettingsSearchView";
 import { SettingsCatalogWorkbench } from "./SettingsCatalogWorkbench";
 import { TenantOverview } from "./TenantOverview";
 import { PageHeader, SignalCard } from "./ui/PageChrome";
+import { CreateCompliancePolicyDialog } from "./workbench/CreateCompliancePolicyDialog";
 import { CreateScriptDialog, type ScriptFamily } from "./workbench/CreateScriptDialog";
 import { DocumentTabs, InspectorWithDocumentTabs } from "./workbench/DocumentTabs";
 import { GraphObjectInspector } from "./workbench/GraphObjectInspector";
-import { listTargetProps, ObjectListMenuHost } from "./workbench/ObjectListMenu";
+import {
+  BulkDeleteAction,
+  listTargetProps,
+  ObjectListMenuHost,
+} from "./workbench/ObjectListMenu";
 import {
   BulkAssignBar,
   AssignmentsDialog,
@@ -390,7 +395,8 @@ export function IntuneWorkspace({
         onSelect={(id) => navigate(hrefWithParam(pathname, search, "policy", id))}
         onRefresh={() => void compliance.reload()}
         objectKind="compliancePolicy"
-        incomplete="Compliance policy create/edit forms are not ported. The full Graph policy, scheduled actions, and assignments are shown."
+        createFamily={platform ?? "windows"}
+        incomplete="Create a policy here, then assign it from the inspector. Actions for noncompliance are set at create time."
       />
     );
   }
@@ -725,6 +731,11 @@ function WindowsUpdateWorkbench({
         setOverlay({ id: updated.id, family: sourceFamily, name: updated.title });
         onRefresh();
       }}
+      onDeleted={(target) => {
+        if (overlay?.id === target.id) setOverlay(null);
+        if (selectedId === target.id) selectPolicy("");
+        onRefresh();
+      }}
     >
       {selected ? (
           <CompactObjectList
@@ -748,9 +759,11 @@ function WindowsUpdateWorkbench({
               eyebrow="Windows Update"
               title={family ?? "Overview"}
               description="Update rings, feature, quality, and driver profiles from Graph."
+              onRefresh={onRefresh}
+              refreshing={loading}
               actions={
-                <button type="button" className="axis-btn" onClick={onRefresh}>
-                  Refresh
+                <button type="button" className="axis-btn" onClick={onRefresh} disabled={loading}>
+                  {loading ? "Refreshing…" : "Refresh"}
                 </button>
               }
             />
@@ -861,6 +874,11 @@ function AppProtectionWorkbench({
             });
             onRefresh();
           }}
+          onDeleted={(target) => {
+            if (overlay?.id === target.id) setOverlay(null);
+            if (selectedId === target.id) selectPolicy("");
+            onRefresh();
+          }}
         >
         {selected ? (
           <CompactObjectList
@@ -880,7 +898,18 @@ function AppProtectionWorkbench({
           />
         ) : (
           <div className="stack">
-            <PageHeader eyebrow="Apps" title="App protection" description="managedAppPolicies from Graph." />
+            <PageHeader
+              eyebrow="Apps"
+              title="App protection"
+              description="managedAppPolicies from Graph."
+              onRefresh={onRefresh}
+              refreshing={loading}
+              actions={
+                <button type="button" className="axis-btn" onClick={onRefresh} disabled={loading}>
+                  {loading ? "Refreshing…" : "Refresh"}
+                </button>
+              }
+            />
             {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
             <section className="axis-panel" style={{ overflow: "hidden" }}>
               <table className="axis-table">
@@ -978,6 +1007,21 @@ function PoliciesHub({
   const checkedPolicies = filtered.filter((item) => selection.checkedIds.has(item.id));
   const bulkPolicies = filtered.filter((item) => selection.bulkTargetIds.includes(item.id));
   const showBulk = selection.bulkEditorOpen && bulkPolicies.length > 0;
+  const bulkDelete = (
+    <BulkDeleteAction
+      targets={checkedPolicies.map((item) => ({
+        id: item.id,
+        title: item.name,
+        kind: "configurationPolicy",
+      }))}
+      onDeleted={(deleted) => {
+        if (deleted.some((target) => target.id === overlay?.id)) setOverlay(null);
+        if (deleted.some((target) => target.id === selectedId)) onSelect("");
+        selection.clear();
+        onRefresh();
+      }}
+    />
+  );
   const inspectorOpen = Boolean(selected);
   const titleFor = useCallback(
     (id: string) =>
@@ -1006,6 +1050,11 @@ function PoliciesHub({
             });
             onRefresh();
           }}
+          onDeleted={(target) => {
+            if (overlay?.id === target.id) setOverlay(null);
+            if (selectedId === target.id) onSelect("");
+            onRefresh();
+          }}
         >
         {selected ? (
           <div className="stack">
@@ -1013,6 +1062,7 @@ function PoliciesHub({
               count={checkedPolicies.length}
               onEdit={selection.openBulkEditor}
               onClear={selection.clear}
+              extra={bulkDelete}
             />
             <LoadedInventoryBanner truncated={truncated} />
             <CompactObjectList
@@ -1026,6 +1076,9 @@ function PoliciesHub({
               }))}
               selectedId={selected.id}
               onSelect={onSelect}
+              onRefresh={onRefresh}
+              loading={loading}
+              error={error}
               checkedIds={selection.checkedIds}
               onToggleChecked={selection.toggle}
               query={query}
@@ -1051,6 +1104,13 @@ function PoliciesHub({
               eyebrow="Policies"
               title={platform ? `${platform} policies` : "Policies"}
               description="Select a catalog row to edit its settings here; checkboxes bulk-edit assignments."
+              onRefresh={onRefresh}
+              refreshing={loading}
+              actions={
+                <button type="button" className="axis-btn" onClick={onRefresh} disabled={loading}>
+                  {loading ? "Refreshing…" : "Refresh"}
+                </button>
+              }
             />
             {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
             <LoadedInventoryBanner truncated={truncated} />
@@ -1063,6 +1123,7 @@ function PoliciesHub({
               count={checkedPolicies.length}
               onEdit={selection.openBulkEditor}
               onClear={selection.clear}
+              extra={bulkDelete}
             />
             <SearchableTable
               query={query}
@@ -1177,6 +1238,7 @@ function NamedPolicyList({
   onRefresh,
   incomplete,
   objectKind,
+  createFamily,
 }: {
   eyebrow: string;
   title: string;
@@ -1190,10 +1252,18 @@ function NamedPolicyList({
   onRefresh: () => void;
   incomplete: string;
   objectKind: string;
+  createFamily?: "windows" | "macos" | "ios" | "android";
 }) {
   const { query, setQuery, assignedFilter, setAssignedFilter, platformFilter, setPlatformFilter } =
     useListSearchState();
   const [overlay, setOverlay] = useState<CatalogPolicySummary | null>(null);
+  const [creating, setCreating] = useState(false);
+  const canCreate = objectKind === "compliancePolicy";
+  const createButton = canCreate ? (
+    <button type="button" className="axis-btn axis-btn-primary" onClick={() => setCreating(true)}>
+      New
+    </button>
+  ) : null;
   const listed = useMemo(() => withTransientItem(items, overlay), [items, overlay]);
   const selected = listed.find((item) => item.id === selectedId);
   const platformOptions = useMemo(
@@ -1209,6 +1279,21 @@ function NamedPolicyList({
   const bulkPolicies = filtered.filter((item) => selection.bulkTargetIds.includes(item.id));
   const showBulk = selection.bulkEditorOpen && bulkPolicies.length > 0;
   const inspectorOpen = Boolean(selected);
+  const bulkDelete = (
+    <BulkDeleteAction
+      targets={checkedPolicies.map((item) => ({
+        id: item.id,
+        title: item.name,
+        kind: objectKind,
+      }))}
+      onDeleted={(deleted) => {
+        if (deleted.some((target) => target.id === overlay?.id)) setOverlay(null);
+        if (deleted.some((target) => target.id === selectedId)) onSelect("");
+        selection.clear();
+        onRefresh();
+      }}
+    />
+  );
   const titleFor = useCallback(
     (id: string) => listed.find((item) => item.id === id)?.name ?? id,
     [listed],
@@ -1233,6 +1318,11 @@ function NamedPolicyList({
             });
             onRefresh();
           }}
+          onDeleted={(target) => {
+            if (overlay?.id === target.id) setOverlay(null);
+            if (selectedId === target.id) onSelect("");
+            onRefresh();
+          }}
         >
         {selected ? (
           <div className="stack">
@@ -1240,6 +1330,7 @@ function NamedPolicyList({
               count={checkedPolicies.length}
               onEdit={selection.openBulkEditor}
               onClear={selection.clear}
+              extra={bulkDelete}
             />
             <LoadedInventoryBanner truncated={truncated} />
             <CompactObjectList
@@ -1256,6 +1347,7 @@ function NamedPolicyList({
               onRefresh={onRefresh}
               loading={loading}
               error={error}
+              actions={createButton}
               checkedIds={selection.checkedIds}
               onToggleChecked={selection.toggle}
               query={query}
@@ -1281,10 +1373,15 @@ function NamedPolicyList({
               eyebrow={eyebrow}
               title={title}
               description={description}
+              onRefresh={onRefresh}
+              refreshing={loading}
               actions={
-                <button type="button" className="axis-btn" onClick={onRefresh} disabled={loading}>
-                  {loading ? "Refreshing…" : "Refresh"}
-                </button>
+                <>
+                  {createButton}
+                  <button type="button" className="axis-btn" onClick={onRefresh} disabled={loading}>
+                    {loading ? "Refreshing…" : "Refresh"}
+                  </button>
+                </>
               }
             />
             <IncompleteBanner>{incomplete}</IncompleteBanner>
@@ -1294,6 +1391,7 @@ function NamedPolicyList({
               count={checkedPolicies.length}
               onEdit={selection.openBulkEditor}
               onClear={selection.clear}
+              extra={bulkDelete}
             />
             <SearchableTable
               query={query}
@@ -1391,6 +1489,25 @@ function NamedPolicyList({
         selection.clear();
       }}
     />
+    {canCreate ? (
+      <CreateCompliancePolicyDialog
+        open={creating}
+        initialFamily={createFamily}
+        onClose={() => setCreating(false)}
+        onCreated={(created) => {
+          setOverlay({
+            id: created.id,
+            name: created.name,
+            description: created.description,
+            platforms: created.platforms,
+            isAssigned: false,
+            odataType: created.odataType,
+          });
+          onSelect(created.id);
+          onRefresh();
+        }}
+      />
+    ) : null}
     </>
   );
 }
@@ -1475,6 +1592,8 @@ function AppsList({
               eyebrow="Apps"
               title={title}
               description="Live Graph inventory. Local catalog / uploads remain host-only. Select a row to inspect it; checkboxes bulk-edit assignments."
+              onRefresh={onRefresh}
+              refreshing={loading}
               actions={
                 <button type="button" className="axis-btn" onClick={onRefresh} disabled={loading}>
                   {loading ? "Refreshing…" : "Refresh"}
@@ -1658,6 +1777,23 @@ function ScriptsWorkbench({
       count={checkedScripts.length}
       onEdit={selection.openBulkEditor}
       onClear={selection.clear}
+      extra={
+        <BulkDeleteAction
+          targets={checkedScripts.map((item) => ({
+            id: item.id,
+            title: item.displayName,
+            kind: inspectorKindForTenantScript(item.kind),
+          }))}
+          onDeleted={(deleted) => {
+            if (deleted.some((target) => target.id === createdOverlay?.id)) {
+              setCreatedOverlay(null);
+            }
+            if (deleted.some((target) => target.id === selectedId)) onClose();
+            selection.clear();
+            onRefresh();
+          }}
+        />
+      }
       editDisabled={bulkKindConflict}
       editHint={
         bulkKindConflict
@@ -1715,6 +1851,11 @@ function ScriptsWorkbench({
             });
             onRefresh();
           }}
+          onDeleted={(target) => {
+            if (createdOverlay?.id === target.id) setCreatedOverlay(null);
+            if (selectedId === target.id) onClose();
+            onRefresh();
+          }}
         >
         {selected ? (
           <div className="stack">
@@ -1756,6 +1897,8 @@ function ScriptsWorkbench({
               eyebrow="Devices"
               title={title}
               description="Live Graph inventory. Create a script here, then bulk-select rows to update assignments on multiple scripts at once."
+              onRefresh={onRefresh}
+              refreshing={loading}
               actions={
                 <>
                   {createButton}

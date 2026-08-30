@@ -188,10 +188,50 @@ export function intuneCompliancePoliciesListUrl(): string {
   return `${INTUNE_ORIGIN}/#view/Microsoft_Intune_DeviceSettings/DevicesComplianceMenu/~/policies`;
 }
 
-export function intuneCompliancePolicyUrl(policyId: string): string {
-  return `${INTUNE_ORIGIN}/#view/Microsoft_Intune_DeviceSettings/CompliancePolicyOverviewBlade/${encodeURIComponent(
-    policyId,
-  )}`;
+export type IntuneCompliancePolicyLinkOptions = {
+  displayName?: string | null;
+  odataType?: string | null;
+};
+
+/**
+ * Classic compliance object blade.
+ * Confirmed live URL:
+ *   …/CompliancePolicyOverview.ReactView/policyId/{id}/policyName/{name}/platform~/8/policyType~/35/policyJourneyState~/1
+ *
+ * `~/` marks a typed integer. policyJourneyState 1 = existing policy.
+ * policyType values come from Intune ObjectInfo (Micke-K/IntuneManagement).
+ * platform 8 + policyType 35 is Windows 10/11 (working tenant example).
+ */
+function compliancePortalIds(odataType?: string | null): { platform: number; policyType: number } {
+  const type = (odataType ?? "").toLowerCase();
+  if (type.includes("windows10") || type.includes("windows11") || type.includes("windows")) {
+    return { platform: 8, policyType: 35 };
+  }
+  if (type.includes("macos")) return { platform: 6, policyType: 34 };
+  if (type.includes("ios")) return { platform: 5, policyType: 33 };
+  if (type.includes("aosp")) return { platform: 4, policyType: 32 };
+  if (type.includes("androiddeviceowner")) return { platform: 3, policyType: 31 };
+  if (type.includes("androidworkprofile") || type.includes("androidforwork")) {
+    return { platform: 2, policyType: 30 };
+  }
+  if (type.includes("android")) return { platform: 1, policyType: 29 };
+  return { platform: 8, policyType: 35 };
+}
+
+export function intuneCompliancePolicyUrl(
+  policyId: string,
+  options?: IntuneCompliancePolicyLinkOptions,
+): string {
+  const name = encodeURIComponent(options?.displayName?.trim() || "Compliance");
+  const { platform, policyType } = compliancePortalIds(options?.odataType);
+  return (
+    `${INTUNE_ORIGIN}/#view/Microsoft_Intune_DeviceSettings/CompliancePolicyOverview.ReactView` +
+    `/policyId/${encodeURIComponent(policyId)}` +
+    `/policyName/${name}` +
+    `/platform~/${platform}` +
+    `/policyType~/${policyType}` +
+    `/policyJourneyState~/1`
+  );
 }
 
 function configurationOptionsFromObject(
@@ -225,7 +265,12 @@ export function intunePortalUrlForKind(
     return intuneConfigurationPolicyUrl(id, configurationOptionsFromObject(object));
   }
   if (kind === "groupPolicyConfiguration") return intuneAdminTemplatePolicyUrl(id);
-  if (kind === "compliancePolicy") return intuneCompliancePolicyUrl(id);
+  if (kind === "compliancePolicy") {
+    return intuneCompliancePolicyUrl(id, {
+      displayName: stringField(object, "displayName") ?? stringField(object, "name"),
+      odataType: stringField(object, "@odata.type"),
+    });
+  }
   if (kind === "deviceConfiguration") return intuneConfigurationPoliciesListUrl();
   if (kind === "enrollmentConfiguration") return intuneEnrollmentWindowsUrl();
   if (kind === "mobileApp") return intuneAppUrl(id);

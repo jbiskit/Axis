@@ -1,6 +1,9 @@
 mod assignments;
 mod auth;
 mod catalog_index;
+mod compliance_docs;
+mod compliance_policy;
+mod compliance_status;
 mod device_actions;
 mod device_compare;
 mod device_detail;
@@ -36,6 +39,18 @@ pub use auth::{
     DeviceCodePrompt, DeviceCodeTokens, PollResult, TokenClaims,
 };
 pub use catalog_index::*;
+pub use compliance_docs::{
+    fetch_compliance_property_docs, CompliancePropertyDoc, CompliancePropertyOption,
+};
+pub use compliance_policy::{
+    create_compliance_policy, platforms_from_compliance_odata, update_compliance_policy,
+    CreateCompliancePolicyInput, UpdateCompliancePolicyInput,
+};
+pub use compliance_status::{
+    fetch_compliance_policy_status, fetch_compliance_policy_status_with_options,
+    ComplianceDeviceStatus, ComplianceDeviceStatusOverview, CompliancePolicyStatusReport,
+    ComplianceSettingStatusSummary, ComplianceSettingsReportState, ComplianceUserStatus,
+};
 pub use device_actions::{
     collect_managed_device_diagnostics, delete_managed_device, initiate_on_demand_remediation,
     reboot_managed_device, remote_lock_managed_device, retire_managed_device, sync_managed_device,
@@ -68,8 +83,8 @@ pub use object_detail::{
     GraphObjectDetail,
 };
 pub use object_metadata::{
-    can_update_object_metadata, update_object_metadata, UpdateObjectMetadataInput,
-    UpdatedObjectMetadata,
+    can_delete_graph_object, can_update_object_metadata, delete_graph_object,
+    update_object_metadata, UpdateObjectMetadataInput, UpdatedObjectMetadata,
 };
 pub use object_duplicate::{
     can_duplicate_kind, duplicate_graph_object, copy_display_name, DuplicatedObject,

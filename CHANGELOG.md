@@ -4,7 +4,26 @@ Notable user-facing changes to Axis are recorded here.
 
 ## [Unreleased]
 
-Add release notes here before preparing the next version.
+### Added
+
+- Create classic device compliance policies from the Device compliance list (platform, starter settings, and actions for noncompliance).
+- A structured compliance settings editor: portal labels and info bubbles, collapsible groups, parent/child lock (password, passcode, firewall, threat level), and Intune character-set labels for password complexity.
+- Device status on a compliance policy: overview counts, per-device and per-user state, and a per-setting breakdown that uses Intune’s Generate report cached report (same as the portal).
+- Bulk delete from the selection bar, and a delete control on the open inspector.
+- Refresh all from a page or list header (right-click), plus refresh of the active inspector tab.
+
+### Changed
+
+- Open in Intune for classic compliance policies opens the live policy overview blade (platform and policy type included).
+- Setting names prefer official Microsoft copy: Graph definitions when present, Intune portal resources when Graph has values but no labels, and inferred titles only as a last resort.
+
+### Fixed
+
+- The Assigned column, Assigned filter, and inspector overview for compliance policies now follow Graph assignments. Classic `deviceCompliancePolicy` has no `isAssigned` property.
+- Opening a compliance policy no longer fails on actions for noncompliance. Graph does not support GET `scheduledActionsForRule`; Axis loads them with `$expand` on the policy.
+- Expanded compliance settings can be scrolled when they grow past the inspector.
+- Right-click delete on policies and scripts works again. Closing or deleting an object also closes its document tab.
+- Inspector tab refresh no longer starts a tab drag from a right-click.
 
 ## [0.1.3] - 2026-08-29
 

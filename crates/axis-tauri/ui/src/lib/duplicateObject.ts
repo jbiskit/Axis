@@ -16,6 +16,18 @@ export function canEditGraphMetadata(kind: string): boolean {
   return canDuplicateGraphKind(kind);
 }
 
+export function canDeleteGraphKind(kind: string): boolean {
+  return (
+    kind.startsWith("script:") ||
+    kind.startsWith("windowsUpdate:") ||
+    kind === "configurationPolicy" ||
+    kind === "compliancePolicy" ||
+    kind === "groupPolicyConfiguration" ||
+    kind === "deviceConfiguration" ||
+    kind === "appProtection"
+  );
+}
+
 export function canCopyGraphAssignments(kind: string): boolean {
   return (
     kind === "configurationPolicy" ||

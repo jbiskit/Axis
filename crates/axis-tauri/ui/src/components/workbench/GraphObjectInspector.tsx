@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { closeThisWindow, popOutObject } from "../../lib/popout";
 import { summarizeAssignmentDraft } from "../../lib/assignmentSummary";
 import { intunePortalUrlForKind } from "../../lib/intune/portalLinks";
@@ -8,17 +8,23 @@ import {
   updateScriptContent,
 } from "../../lib/tauri";
 import {
+  clearCachedObject,
   readCachedAssignmentDrafts,
   readCachedObjectDetail,
+  requestObjectRefresh,
   writeCachedAssignmentDrafts,
   writeCachedObjectDetail,
 } from "../../lib/inspectorCache";
 import { parseScriptInspectorKind } from "../../lib/scriptKinds";
 import type { AssignmentDraft, GraphObjectDetail } from "../../types/inventory";
 import { OpenInIntune } from "../intune/OpenInIntune";
+import { ContextMenu, type ContextMenuState } from "../ui/ContextMenu";
+import { ObjectDeleteButton } from "./ObjectListMenu";
 import { ScriptCodeEditor } from "../ui/ScriptCodeEditor";
 import { PageHeader } from "../ui/PageChrome";
 import { CatalogSettingInstances } from "./CatalogSettingInstances";
+import { CompliancePolicyStatus } from "./CompliancePolicyStatus";
+import { ComplianceSettingsView } from "./ComplianceSettingsView";
 import { PolicySettingsEditor } from "./PolicySettingsEditor";
 import { AssignmentsDialog } from "./PolicyBulkAssign";
 import { ScriptRunStatus } from "./RemediationDeviceStatus";
@@ -171,7 +177,6 @@ function overviewRows(detail: GraphObjectDetail): Array<{ label: string; value: 
     ["Publishing", "publishingState"],
     ["Platforms", "platforms"],
     ["Technologies", "technologies"],
-    ["Assigned", "isAssigned"],
     ["Settings", "settingCount"],
     ["Run as", "runAsAccount"],
     ["Join type", "deviceJoinType"],
@@ -192,6 +197,23 @@ function overviewRows(detail: GraphObjectDetail): Array<{ label: string; value: 
     { label: "Id", value: detail.id },
     { label: "Kind", value: detail.kind },
   ];
+  const assigned =
+    typeof object.isAssigned === "boolean"
+      ? object.isAssigned
+      : Array.isArray(detail.assignments)
+        ? detail.assignments.length > 0
+        : null;
+  if (assigned != null) {
+    rows.push({
+      label: "Assigned",
+      value:
+        assigned && detail.assignments.length > 1
+          ? `Yes (${detail.assignments.length})`
+          : assigned
+            ? "Yes"
+            : "No",
+    });
+  }
   for (const [label, key] of keys) {
     const raw = object[key];
     if (raw == null || raw === "") continue;
@@ -215,6 +237,7 @@ function defaultInspectorTab(kind: string): InspectorTab {
   if (kind === "script:remediation" || kind.startsWith("script:platform-")) return "status";
   if (
     kind === "configurationPolicy" ||
+    kind === "compliancePolicy" ||
     kind === "groupPolicyConfiguration" ||
     kind.startsWith("script:")
   ) {
@@ -267,6 +290,7 @@ export function GraphObjectInspector({
     () => readCachedAssignmentDrafts(kind, id) ?? [],
   );
   const [assignmentsLoading, setAssignmentsLoading] = useState(false);
+  const [headerMenu, setHeaderMenu] = useState<ContextMenuState>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -357,16 +381,35 @@ export function GraphObjectInspector({
     };
   }, [kind, detail?.id, assignments]);
 
-  async function reloadDetail() {
+  const reloadDetail = useCallback(async () => {
+    clearCachedObject(kind, id);
+    setLoading(true);
+    setError(null);
     try {
       const response = await fetchGraphObjectDetail(kind, id);
-      if (response.detail) writeCachedObjectDetail(response.detail);
-      setDetail(response.detail);
+      if (response.detail) {
+        writeCachedObjectDetail(response.detail);
+        setDetail(response.detail);
+        applyDetailToEditor(response.detail, setScriptText, setDetectionText, setRemediationText);
+      } else {
+        setDetail(null);
+      }
       setError(response.error);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to load object");
+    } finally {
+      setLoading(false);
     }
-  }
+  }, [id, kind]);
+
+  useEffect(() => {
+    function onRefresh(event: Event) {
+      const refreshId = (event as CustomEvent<{ id?: unknown }>).detail?.id;
+      if (refreshId === id) void reloadDetail();
+    }
+    window.addEventListener("axis:graph-object-refresh", onRefresh);
+    return () => window.removeEventListener("axis:graph-object-refresh", onRefresh);
+  }, [id, reloadDetail]);
 
   const scriptInfo = parseScriptInspectorKind(kind);
   const language = scriptInfo?.language ?? "powershell";
@@ -377,7 +420,9 @@ export function GraphObjectInspector({
   const rows = useMemo(() => (detail ? overviewRows(detail) : []), [detail]);
   const inspectorTabs: Array<[InspectorTab, string]> = [
     ["overview", "Overview"],
-    ...(kind === "script:remediation" || kind.startsWith("script:platform-")
+    ...(kind === "compliancePolicy" ||
+    kind === "script:remediation" ||
+    kind.startsWith("script:platform-")
       ? ([["status", "Device status"]] as Array<[InspectorTab, string]>)
       : []),
     ["assignments", `Assignments (${assignments.length})`],
@@ -447,6 +492,21 @@ export function GraphObjectInspector({
       <PageHeader
         eyebrow={popout ? "Popout" : editingPolicy ? "Edit policy" : "Inspector"}
         title={detail?.title ?? fallbackTitle ?? "Object"}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          setHeaderMenu({
+            x: event.clientX,
+            y: event.clientY,
+            items: [
+              {
+                id: "refresh",
+                label: "Refresh",
+                run: () => requestObjectRefresh(id),
+              },
+            ],
+          });
+        }}
         actions={
           <div className="device-actions">
             {canEditPolicy && detail && !editingPolicy ? (
@@ -501,9 +561,18 @@ export function GraphObjectInspector({
             {portalHref ? (
               <OpenInIntune href={portalHref} label={detail?.title ?? fallbackTitle} />
             ) : null}
+            <ObjectDeleteButton
+              target={{
+                id,
+                kind,
+                title: detail?.title ?? fallbackTitle ?? "this object",
+              }}
+              onDeleted={() => handleClose()}
+            />
           </div>
         }
       />
+      <ContextMenu state={headerMenu} onClose={() => setHeaderMenu(null)} />
       {incomplete && !editingPolicy ? <IncompleteBanner>{incomplete}</IncompleteBanner> : null}
       {loading && !detail ? <p className="muted">Loading Graph object…</p> : null}
       {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
@@ -546,6 +615,9 @@ export function GraphObjectInspector({
                 ))}
               </dl>
             </section>
+          ) : null}
+          {tab === "status" && kind === "compliancePolicy" ? (
+            <CompliancePolicyStatus policyId={detail.id} />
           ) : null}
           {tab === "status" &&
           (kind === "script:remediation" || kind.startsWith("script:platform-")) ? (
@@ -677,13 +749,21 @@ export function GraphObjectInspector({
                   <CatalogSettingInstances settings={settings} />
                 </section>
               ) : null}
-              {extras ? (
+              {kind === "compliancePolicy" ? (
+                <ComplianceSettingsView
+                  policyId={detail.id}
+                  object={detail.object}
+                  extras={extras}
+                  onSaved={() => void reloadDetail()}
+                />
+              ) : extras ? (
                 <section className="axis-panel" style={{ padding: "0.85rem" }}>
                   <h2 style={{ margin: "0 0 0.5rem", fontSize: "0.85rem" }}>Related Graph data</h2>
                   <pre className="inspector-code">{pretty(extras)}</pre>
                 </section>
               ) : null}
               {kind !== "configurationPolicy" &&
+              kind !== "compliancePolicy" &&
               !hasScript(detail) &&
               settings.length === 0 &&
               !extras ? (

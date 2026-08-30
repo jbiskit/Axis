@@ -2,7 +2,7 @@ use crate::AppState;
 use axis_sdk::{
     add_settings_to_policy, apply_filter_names, apply_group_metadata, assign_object_assignments,
     assignment_capabilities, collect_managed_device_diagnostics, create_directory_group,
-    create_policy_with_settings, create_tenant_script, delete_managed_device,
+    create_compliance_policy, create_policy_with_settings, create_tenant_script, delete_graph_object, delete_managed_device, fetch_compliance_policy_status_with_options, fetch_compliance_property_docs, update_compliance_policy,
     duplicate_graph_object,
     drafts_from_graph_assignments, fetch_app_protection_policies, fetch_autopilot_devices,
     fetch_applied_policy_settings, fetch_autopilot_profiles, fetch_baseline_export_json,
@@ -21,7 +21,8 @@ use axis_sdk::{
     AppliedPolicySettingsLoad, AssignmentCapabilities, AssignmentDraft, AssignmentFilter, AutopilotDevice, AutopilotProfile,
     BaselineReferenceSourceInput, BaselineReferenceSourceLoad, BitLockerRecoveryKeySummary,
     CatalogCategory, CatalogIndexState, CatalogPolicySummary, CatalogSearchResult,
-    CategorySettingsLoad, CreateDirectoryGroupInput, CreateTenantScriptInput, CreatedCatalogPolicy,
+    CompliancePolicyStatusReport,
+    CategorySettingsLoad, CreateCompliancePolicyInput, CreateDirectoryGroupInput, CreateTenantScriptInput, CreatedCatalogPolicy, UpdateCompliancePolicyInput,
     DirectoryGroup, DuplicatedObject,
     E8BaselineReference, E8BaselineSource, GraphObjectDetail, InventoryList, LapsCredentialInfo,
     MobileAppSummary, PolicySettingIssue, RemediationDeviceStatusReport, SettingConflictDetail,
@@ -1179,6 +1180,118 @@ pub struct CreateTenantScriptResponse {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateCompliancePolicyResponse {
+    pub policy: Option<CatalogPolicySummary>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompliancePropertyDocsResponse {
+    pub properties: Vec<axis_sdk::CompliancePropertyDoc>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompliancePolicyStatusResponse {
+    pub report: Option<CompliancePolicyStatusReport>,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn fetch_compliance_policy_status_cmd(
+    state: State<'_, AppState>,
+    policy_id: String,
+    generate_settings: Option<bool>,
+) -> Result<CompliancePolicyStatusResponse, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Ok(CompliancePolicyStatusResponse {
+            report: None,
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match fetch_compliance_policy_status_with_options(
+        &token,
+        &policy_id,
+        generate_settings.unwrap_or(false),
+    )
+    .await {
+        Ok(report) => Ok(CompliancePolicyStatusResponse {
+            report: Some(report),
+            error: None,
+        }),
+        Err(error) => Ok(CompliancePolicyStatusResponse {
+            report: None,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn fetch_compliance_property_docs_cmd(
+    odata_type: String,
+) -> Result<CompliancePropertyDocsResponse, String> {
+    match fetch_compliance_property_docs(&odata_type).await {
+        Ok(properties) => Ok(CompliancePropertyDocsResponse {
+            properties,
+            error: None,
+        }),
+        Err(error) => Ok(CompliancePropertyDocsResponse {
+            properties: Vec::new(),
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn create_compliance_policy_cmd(
+    state: State<'_, AppState>,
+    input: CreateCompliancePolicyInput,
+) -> Result<CreateCompliancePolicyResponse, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Ok(CreateCompliancePolicyResponse {
+            policy: None,
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match create_compliance_policy(&token, input).await {
+        Ok(policy) => Ok(CreateCompliancePolicyResponse {
+            policy: Some(policy),
+            error: None,
+        }),
+        Err(error) => Ok(CreateCompliancePolicyResponse {
+            policy: None,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn update_compliance_policy_cmd(
+    state: State<'_, AppState>,
+    input: UpdateCompliancePolicyInput,
+) -> Result<ActionResponse, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Ok(ActionResponse {
+            ok: false,
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match update_compliance_policy(&token, input).await {
+        Ok(()) => Ok(ActionResponse {
+            ok: true,
+            error: None,
+        }),
+        Err(error) => Ok(ActionResponse {
+            ok: false,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
 #[tauri::command]
 pub async fn create_tenant_script_cmd(
     state: State<'_, AppState>,
@@ -1270,6 +1383,30 @@ pub async fn update_object_metadata_cmd(
         }),
         Err(error) => Ok(UpdateObjectMetadataResponse {
             object: None,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn delete_graph_object_cmd(
+    state: State<'_, AppState>,
+    kind: String,
+    id: String,
+) -> Result<ActionResponse, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Ok(ActionResponse {
+            ok: false,
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match delete_graph_object(&token, &kind, &id).await {
+        Ok(()) => Ok(ActionResponse {
+            ok: true,
+            error: None,
+        }),
+        Err(error) => Ok(ActionResponse {
+            ok: false,
             error: Some(error.to_string()),
         }),
     }

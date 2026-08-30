@@ -1,5 +1,6 @@
 import type {
   AssignmentDraft,
+  CompliancePolicyStatusReport,
   GraphObjectDetail,
   RemediationDeviceStatusReport,
 } from "../types/inventory";
@@ -11,6 +12,7 @@ function key(kind: string, id: string): string {
 const details = new Map<string, GraphObjectDetail>();
 const assignmentDrafts = new Map<string, AssignmentDraft[]>();
 const runStatus = new Map<string, RemediationDeviceStatusReport>();
+const complianceStatus = new Map<string, CompliancePolicyStatusReport>();
 
 export function readCachedObjectDetail(
   kind: string,
@@ -51,4 +53,29 @@ export function writeCachedRunStatus(
   report: RemediationDeviceStatusReport,
 ): void {
   runStatus.set(key(kind, scriptId), report);
+}
+
+export function readCachedComplianceStatus(
+  policyId: string,
+): CompliancePolicyStatusReport | null {
+  return complianceStatus.get(policyId) ?? null;
+}
+
+export function writeCachedComplianceStatus(
+  policyId: string,
+  report: CompliancePolicyStatusReport,
+): void {
+  complianceStatus.set(policyId, report);
+}
+
+export function clearCachedObject(kind: string, id: string): void {
+  const cacheKey = key(kind, id);
+  details.delete(cacheKey);
+  assignmentDrafts.delete(cacheKey);
+  runStatus.delete(cacheKey);
+  complianceStatus.delete(id);
+}
+
+export function requestObjectRefresh(id: string): void {
+  window.dispatchEvent(new CustomEvent("axis:graph-object-refresh", { detail: { id } }));
 }
