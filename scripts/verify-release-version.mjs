@@ -49,6 +49,11 @@ const uiLock = JSON.parse(read("crates/axis-tauri/ui/package-lock.json"));
 expect("UI package lock", uiLock.version);
 expect("UI package lock root", uiLock.packages?.[""]?.version);
 
+const changelog = read("CHANGELOG.md");
+if (!new RegExp(`^## \\[${version.replaceAll(".", "\\.")}\\]\\s+-\\s+\\d{4}-\\d{2}-\\d{2}$`, "m").test(changelog)) {
+  failures.push(`CHANGELOG.md: missing dated ${version} section`);
+}
+
 if (failures.length > 0) {
   console.error("Release version mismatch:");
   for (const failure of failures) console.error(`- ${failure}`);
