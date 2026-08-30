@@ -4,6 +4,10 @@ Notable user-facing changes to Axis are recorded here.
 
 ## [Unreleased]
 
+Add release notes here before preparing the next version.
+
+## [0.1.4] - 2026-08-30
+
 ### Added
 
 - Create classic device compliance policies from the Device compliance list (platform, starter settings, and actions for noncompliance).
@@ -24,7 +28,6 @@ Notable user-facing changes to Axis are recorded here.
 - Expanded compliance settings can be scrolled when they grow past the inspector.
 - Right-click delete on policies and scripts works again. Closing or deleting an object also closes its document tab.
 - Inspector tab refresh no longer starts a tab drag from a right-click.
-
 ## [0.1.3] - 2026-08-29
 
 ### Added
