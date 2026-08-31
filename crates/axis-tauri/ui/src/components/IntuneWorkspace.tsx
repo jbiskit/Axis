@@ -2410,7 +2410,7 @@ function BaselinesWorkbench({
             <PageHeader
               eyebrow="Baselines"
               title="Baselines"
-              description="Built-in ASD E8 stays here. Add a GitHub pack or a local folder as an external source, grouped by platform (Windows, macOS, Android). A baseline JSON selects files already in the pack. Open a device and use Baselines to grade applied catalog settings."
+              description="Built-in ASD E8 stays here. Add a GitHub pack or a local folder as an external source. The public template is Windows-only for now (policies, scripts, and a baseline JSON that selects those files). Open a device and use Baselines to grade applied catalog settings."
               actions={
                 <div style={{ display: "flex", gap: "0.5rem" }}>
                   <button type="button" className="axis-btn" onClick={() => setSourceEditorOpen((open) => !open)}>
