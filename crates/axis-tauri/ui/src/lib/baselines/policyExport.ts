@@ -32,9 +32,23 @@ function looksLikeFullPolicy(value: unknown): boolean {
   return Boolean(row && isSettingsRowArray(row.settings));
 }
 
+export function looksLikeAxisBaselineSelection(raw: unknown): boolean {
+  const row = asRecord(raw);
+  return Boolean(row && Array.isArray(row.includes));
+}
+
 export function looksLikeAxisBaseline(raw: unknown): boolean {
   const row = asRecord(raw);
-  return Boolean(row && Array.isArray(row.checks));
+  return Boolean(row && (Array.isArray(row.checks) || Array.isArray(row.includes)));
+}
+
+export function baselineIncludePaths(raw: unknown): string[] {
+  const row = asRecord(raw);
+  if (!row || !Array.isArray(row.includes)) return [];
+  return row.includes
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.replace(/\\/g, "/").trim())
+    .filter(Boolean);
 }
 
 export function normalizeIntunePolicyExport(raw: unknown, fileLabel?: string): Record<string, unknown> {
@@ -65,7 +79,7 @@ export function policyExportToBaseline(
   raw: unknown,
   options?: { idPrefix?: string; source?: Baseline["source"]; version?: string; originLabel?: string },
 ): Baseline {
-  if (looksLikeAxisBaseline(raw)) {
+  if (looksLikeAxisBaseline(raw) && !looksLikeAxisBaselineSelection(raw)) {
     const row = asRecord(raw)!;
     return {
       id: typeof row.id === "string" ? row.id : slugify(fileName),
@@ -73,7 +87,7 @@ export function policyExportToBaseline(
       description: typeof row.description === "string" ? row.description : "",
       version: typeof row.version === "string" ? row.version : options?.version ?? "custom",
       source: options?.source ?? "custom",
-      checks: row.checks as BaselineCheck[],
+      checks: Array.isArray(row.checks) ? (row.checks as BaselineCheck[]) : [],
     };
   }
 

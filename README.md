@@ -101,12 +101,16 @@ pack-template/                     # Layout copied to https://github.com/jbiskit
 
 ## Baseline packs
 
-Axis lists Intune Settings Catalog exports from **GitHub** (Contents API, not git clone) and from a **local folder**. Both use the same layout:
+Axis treats a pack as an **external source** from **GitHub** (Contents API, not git clone) or a **local folder**. Layout is **platform first** (`windows/`, `macos/`, `android/`), then object type. Only `{platform}/policies/` is imported as Settings Catalog. Device compare can use those files, or a baseline JSON that **selects** them.
 
-- `axis-pack.json` — pack name and `paths.policies` / `paths.baselines`
-- `policies/` — `.json` / `.txt` catalog exports (import and device compare)
-- `baselines/` — reserved; not scanned as catalog policies
+- `axis-pack.json` — pack name and `paths.platforms`
+- `{platform}/policies/` — Settings Catalog exports
+- `{platform}/scripts/platform|remediation|compliance`
+- `{platform}/compliance/`, `endpoint-security/`, `windows-update/` (Windows), `enrollment/autopilot/`
+- `baselines/` — named selections (`includes` paths). Not a second copy of policies
 
-If the manifest is missing, Axis scans the source path or folder root and still skips `baselines/`. Built-in ASD E8 still uses its GitHub path under the ASD Blueprint repo.
+Pack layout is inspired by how [OpenIntuneBaseline](https://github.com/SkipToTheEndpoint/OpenIntuneBaseline) groups work by platform. The template itself only ships empty folders and tiny sample stubs.
+
+If the source path is empty, Axis scans those default folders. Built-in ASD E8 still uses its GitHub path under the ASD Blueprint repo and does not scan the extra folders.
 
 To start a pack, use the public template [jbiskit/axis-pack-template](https://github.com/jbiskit/axis-pack-template) (same files as `pack-template/` in this repo). In Axis: **Baselines → Manage sources → Add GitHub pack** and paste the repo URL, or **Add local folder**. Packs are read-only in this version.

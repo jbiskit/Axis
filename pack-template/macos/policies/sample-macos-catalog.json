@@ -1,0 +1,7 @@
+{
+  "name": "Sample macOS Settings Catalog",
+  "description": "Replace this file with an Intune Settings Catalog export (.json or .txt).",
+  "platforms": "macOS",
+  "technologies": "mdm",
+  "settings": []
+}

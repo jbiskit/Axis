@@ -21,7 +21,7 @@ crates/
 pack-template/                      # Axis pack layout (also published as jbiskit/axis-pack-template)
 ```
 
-Baseline packs: **Baselines → Manage sources**. GitHub uses the Contents API (PAT for private repos). Local folders stay on this machine. See the repo-root README **Baseline packs** section.
+Packs: **Baselines → Manage sources**. Platform folders, catalog import, and baseline JSON selections. See the repo-root README **Baseline packs** section.
 
 ## Install (UI)
 

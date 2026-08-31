@@ -68,6 +68,7 @@ import {
   tokenForSource,
 } from "../lib/baselines/sources";
 import { normalizeIntunePolicyExport } from "../lib/baselines/policyExport";
+import { groupPackArtifacts, isCatalogPackArtifact, packArtifactKindLabel } from "../lib/baselines/packArtifacts";
 import { DevicesList } from "./DevicesList";
 import { DeviceDetailView, type DeviceDetailCacheEntry } from "./DeviceDetailView";
 import { SettingsSearchView } from "./SettingsSearchView";
@@ -2393,13 +2394,13 @@ function BaselinesWorkbench({
       master={
         selectedReference ? (
           <CompactObjectList
-            title="Policies"
-            description="Select a policy from a baseline pack to inspect it here."
+            title="Pack items"
+            description="Select an item from an external pack to inspect it here."
             items={allReferences.map((reference) => ({
               id: `ref:${reference.sourceId}:${reference.id}`,
               title: reference.name,
               meta: baselineModifiedMeta(reference),
-              group: reference.sourceName,
+              group: `${reference.sourceName} · ${packArtifactKindLabel(reference.artifactKind)}`,
             }))}
             selectedId={selectedId ?? ""}
             onSelect={onSelect}
@@ -2409,7 +2410,7 @@ function BaselinesWorkbench({
             <PageHeader
               eyebrow="Baselines"
               title="Baselines"
-              description="Built-in ASD E8 stays here. Add a GitHub pack or a local folder; policies list under each pack. Open a device and use Baselines to grade applied settings."
+              description="Built-in ASD E8 stays here. Add a GitHub pack or a local folder as an external source, grouped by platform (Windows, macOS, Android). A baseline JSON selects files already in the pack. Open a device and use Baselines to grade applied catalog settings."
               actions={
                 <div style={{ display: "flex", gap: "0.5rem" }}>
                   <button type="button" className="axis-btn" onClick={() => setSourceEditorOpen((open) => !open)}>
@@ -2422,15 +2423,19 @@ function BaselinesWorkbench({
               }
             />
             <IncompleteBanner>
-              These listings do not write back to Graph. Compare a device against a selected export from Devices → Baselines.
+              Packs are an external listing. Import applies to Settings Catalog files under
+              each platform’s policies/ folder. A baseline JSON selects those files (and other pack
+              items) without duplicating them. Other folders are listed so you can open the source file.
             </IncompleteBanner>
             {sourceEditorOpen ? (
               <section className="axis-panel" style={{ padding: "0.85rem" }}>
                 <p className="muted" style={{ marginTop: 0 }}>
                   ASD E8 is built in. Add a GitHub URL (use{" "}
                   <code>https://github.com/jbiskit/axis-pack-template</code> as a starting repo) or a
-                  local folder. Axis reads <code>axis-pack.json</code> for the pack title and scans{" "}
-                  <code>policies/</code> for Intune exports. Packs are read-only in this version. For a
+                  local folder. Axis reads <code>axis-pack.json</code> and lists each folder as its own
+                  category (by platform, then policies, scripts, compliance, and so on). A baseline
+                  JSON names a standard and lists pack paths to include. Packs are read-only in this
+                  version. For a
                   private repo, mark the source private and paste a fine-grained PAT limited to that
                   repository.{" "}
                   <button
@@ -2634,7 +2639,7 @@ function BaselinesWorkbench({
                           ? `${pack.owner}/${pack.repo}`
                           : "Repository"}
                       {" · "}
-                      {pack.references.length} {pack.references.length === 1 ? "policy" : "policies"}
+                      {pack.references.length} {pack.references.length === 1 ? "item" : "items"}
                     </p>
                   </div>
                   <button type="button" className="axis-link" onClick={() => void openExternalUrl(pack.directoryUrl)}>
@@ -2651,38 +2656,43 @@ function BaselinesWorkbench({
                     {pack.warning}
                   </div>
                 ) : null}
-                <table className="axis-table">
-                  <thead>
-                    <tr>
-                      <th>Policy</th>
-                      <th>Version</th>
-                      <th>Repository modified</th>
-                      <th>Policy exported</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {pack.references.map((reference) => (
-                      <tr
-                        key={`${reference.sourceId}:${reference.id}`}
-                        className="row-link"
-                        onClick={() => onSelect(`ref:${reference.sourceId}:${reference.id}`)}
-                      >
-                        <td>{reference.name}</td>
-                        <td className="muted">{reference.version ?? "—"}</td>
-                        <td className="muted">
-                          {reference.repositoryLastModifiedDateTime
-                            ? formatRelative(reference.repositoryLastModifiedDateTime)
-                            : reference.policyExportedDateTime
-                              ? `Fallback: ${formatRelative(reference.policyExportedDateTime)}`
-                              : "—"}
-                        </td>
-                        <td className="muted">{formatRelative(reference.policyExportedDateTime)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                {groupPackArtifacts(pack.references).map((section) => (
+                  <div key={section.kind}>
+                    <p className="baseline-pack-kicker" style={{ padding: "0.75rem 0.75rem 0" }}>
+                      {section.label}
+                    </p>
+                    <table className="axis-table">
+                      <thead>
+                        <tr>
+                          <th>Name</th>
+                          <th>Version</th>
+                          <th>Modified</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {section.items.map((reference) => (
+                          <tr
+                            key={`${reference.sourceId}:${reference.id}`}
+                            className="row-link"
+                            onClick={() => onSelect(`ref:${reference.sourceId}:${reference.id}`)}
+                          >
+                            <td>{reference.name}</td>
+                            <td className="muted">{reference.version ?? "—"}</td>
+                            <td className="muted">
+                              {reference.repositoryLastModifiedDateTime
+                                ? formatRelative(reference.repositoryLastModifiedDateTime)
+                                : reference.policyExportedDateTime
+                                  ? formatRelative(reference.policyExportedDateTime)
+                                  : "—"}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ))}
                 {!e8Loading && !pack.error && pack.references.length === 0 ? (
-                  <p className="muted" style={{ padding: "1rem" }}>No policies were returned from this pack.</p>
+                  <p className="muted" style={{ padding: "1rem" }}>No items were returned from this pack.</p>
                 ) : null}
               </section>
             ))}
@@ -2697,13 +2707,15 @@ function BaselinesWorkbench({
               title={selectedReference.name}
               actions={
                 <div className="device-actions">
-                  <button
-                    type="button"
-                    className="axis-btn axis-btn-primary"
-                    onClick={() => setImportOpen(true)}
-                  >
-                    Import to Intune
-                  </button>
+                  {isCatalogPackArtifact(selectedReference.artifactKind) ? (
+                    <button
+                      type="button"
+                      className="axis-btn axis-btn-primary"
+                      onClick={() => setImportOpen(true)}
+                    >
+                      Import to Intune
+                    </button>
+                  ) : null}
                   <button type="button" className="axis-btn" onClick={() => onSelect("")}>
                     Close
                   </button>
@@ -2731,6 +2743,10 @@ function BaselinesWorkbench({
                   <dd>{formatRelative(selectedReference.policyExportedDateTime)}</dd>
                 </div>
                 <div>
+                  <dt>Category</dt>
+                  <dd>{packArtifactKindLabel(selectedReference.artifactKind)}</dd>
+                </div>
+                <div>
                   <dt>Pack</dt>
                   <dd>{selectedReference.sourceName}</dd>
                 </div>
@@ -2744,11 +2760,18 @@ function BaselinesWorkbench({
                 </button>
               </div>
             </section>
-            <IncompleteBanner>
-              Import creates a new Settings Catalog policy. Review its settings and assignments
-              before deployment.
-            </IncompleteBanner>
-            {importOpen ? (
+            {isCatalogPackArtifact(selectedReference.artifactKind) ? (
+              <IncompleteBanner>
+                Import creates a new Settings Catalog policy. Review its settings and assignments
+                before deployment.
+              </IncompleteBanner>
+            ) : (
+              <IncompleteBanner>
+                This item is listed from the pack as an external source. Axis does not import it as a
+                Settings Catalog policy.
+              </IncompleteBanner>
+            )}
+            {importOpen && isCatalogPackArtifact(selectedReference.artifactKind) ? (
               <BaselineImportDialog
                 reference={selectedReference}
                 sources={sourceEntries}
@@ -2757,7 +2780,7 @@ function BaselinesWorkbench({
             ) : null}
           </div>
         ) : (
-          <InspectorEmpty label="Select a policy under a baseline pack to inspect it here. Close clears the selection and stays on Baselines." />
+          <InspectorEmpty label="Select an item under a pack to inspect it here. Close clears the selection and stays on Baselines." />
         )
       }
     />
