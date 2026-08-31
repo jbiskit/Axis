@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::path::PathBuf;
 use uuid::Uuid;
 
 use crate::e8_baselines::apply_github_auth;
@@ -117,14 +118,21 @@ pub async fn fetch_baseline_export_json(
     token: Option<&str>,
 ) -> Result<Value, GraphError> {
     let url = download_url.trim();
-    if !url.starts_with("https://") {
+    if url.starts_with("https://") {
+        return fetch_https_baseline_export(url, token).await;
+    }
+    if url.starts_with("http://") {
         return Err(GraphError::Request {
             status: 400,
             code: None,
-            message: "Baseline download URL must be https.".into(),
+            message: "Remote baseline downloads must use https.".into(),
             permission_related: false,
         });
     }
+    fetch_local_baseline_export(url)
+}
+
+async fn fetch_https_baseline_export(url: &str, token: Option<&str>) -> Result<Value, GraphError> {
     let token = token.map(str::trim).filter(|value| !value.is_empty());
     let client = reqwest::Client::new();
     let response = apply_github_auth(client.get(url), token).send().await?;
@@ -148,6 +156,32 @@ pub async fn fetch_baseline_export_json(
     }
     let text = response.text().await?;
     parse_export_json(&text)
+}
+
+fn fetch_local_baseline_export(path: &str) -> Result<Value, GraphError> {
+    let file = local_export_path(path);
+    let text = std::fs::read_to_string(&file).map_err(|error| GraphError::Request {
+        status: 400,
+        code: None,
+        message: format!("Could not read local pack file {}: {error}", file.display()),
+        permission_related: false,
+    })?;
+    parse_export_json(&text)
+}
+
+fn local_export_path(key: &str) -> PathBuf {
+    let trimmed = key.trim();
+    if let Some(rest) = trimmed
+        .strip_prefix("file:///")
+        .or_else(|| trimmed.strip_prefix("file://"))
+    {
+        let rest = rest.trim_start_matches('/');
+        if rest.len() >= 2 && rest.as_bytes().get(1) == Some(&b':') {
+            return PathBuf::from(rest);
+        }
+        return PathBuf::from(format!("/{rest}"));
+    }
+    PathBuf::from(trimmed)
 }
 
 fn parse_export_json(text: &str) -> Result<Value, GraphError> {
@@ -175,5 +209,16 @@ mod tests {
         assert_eq!(object["name"], "Edge");
         let array = parse_export_json("[{\"settingInstance\":{\"settingDefinitionId\":\"a\"}}]").unwrap();
         assert!(array.is_array());
+    }
+
+    #[test]
+    fn reads_local_pack_export_files() {
+        let dir = std::env::temp_dir().join(format!("axis-local-export-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("edge.json");
+        std::fs::write(&path, "{\"name\":\"Edge\",\"settings\":[]}").unwrap();
+        let parsed = fetch_local_baseline_export(&path.to_string_lossy()).unwrap();
+        assert_eq!(parsed["name"], "Edge");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

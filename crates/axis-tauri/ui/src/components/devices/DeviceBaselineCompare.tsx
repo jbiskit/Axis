@@ -291,7 +291,7 @@ export function DeviceBaselineCompare({ device }: { device: ManagedDeviceDetail 
       <p className="muted" style={{ margin: 0 }}>
         Compare this device against a baseline export from the GitHub packs configured under
         Baselines. Axis reads the policies Intune reports as applied, loads their Settings Catalog
-        values, and grades each baseline setting. Private packs use the PAT stored with that source.
+        values, and grades each baseline setting. Private GitHub packs use the PAT stored with that source.
       </p>
       <div className="device-toolbar baseline-compare-toolbar">
         <label className="device-field">

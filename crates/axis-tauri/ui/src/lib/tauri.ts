@@ -248,6 +248,10 @@ export async function fetchBaselineReferenceSources(
   return invoke("fetch_baseline_reference_sources_cmd", { sources });
 }
 
+export async function pickLocalPackFolder(): Promise<string | null> {
+  return invoke<string | null>("pick_local_pack_folder_cmd");
+}
+
 export async function fetchBaselineExport(
   downloadUrl: string,
   token?: string,

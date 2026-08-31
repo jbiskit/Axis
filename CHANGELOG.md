@@ -4,7 +4,14 @@ Notable user-facing changes to Axis are recorded here.
 
 ## [Unreleased]
 
-Add release notes here before preparing the next version.
+### Added
+
+- Custom baseline packs from a local folder (folder picker) or a GitHub repo, using a shared `axis-pack.json` layout (`policies/` for catalog exports, `baselines/` skipped).
+- Public pack template at [jbiskit/axis-pack-template](https://github.com/jbiskit/axis-pack-template).
+
+### Changed
+
+- GitHub packs that point at a repo root honor `axis-pack.json` and scan `policies/` only. Built-in ASD E8 still uses its explicit Blueprint path.
 
 ## [0.1.4] - 2026-08-30
 

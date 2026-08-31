@@ -3,9 +3,16 @@ import type { BaselineReferenceSourceInput } from "../../types/inventory";
 export const SOURCE_STORAGE_KEY = "axis-baseline-reference-sources-v1";
 export const BUILTIN_E8_SOURCE_ID = "e8-github";
 
+/** GitHub form to create a fine-grained PAT (least privilege for Axis packs). */
+export const GITHUB_FINE_GRAINED_TOKEN_URL =
+  "https://github.com/settings/personal-access-tokens/new";
+export const GITHUB_FINE_GRAINED_TOKEN_DOCS_URL =
+  "https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens#creating-a-fine-grained-personal-access-token";
+
 export const DEFAULT_E8_SOURCE: BaselineReferenceSourceInput = {
   id: BUILTIN_E8_SOURCE_ID,
   name: "ASD E8",
+  kind: "github",
   url: "https://github.com/ASD-Blueprint/ASD-Blueprint-for-Secure-Cloud/tree/main/static/content/files/intune-config-policies",
   owner: "ASD-Blueprint",
   repo: "ASD-Blueprint-for-Secure-Cloud",
@@ -18,10 +25,29 @@ export function isBuiltinSource(source: { id?: string }): boolean {
   return source.id === BUILTIN_E8_SOURCE_ID;
 }
 
-export function packTitle(source: { id?: string; name?: string; owner?: string; repo?: string }): string {
+export function isLocalSource(source: {
+  kind?: string;
+  localPath?: string;
+}): boolean {
+  return (source.kind ?? "").toLowerCase() === "local" || Boolean(source.localPath?.trim());
+}
+
+export function packTitle(source: {
+  id?: string;
+  name?: string;
+  owner?: string;
+  repo?: string;
+  kind?: string;
+  localPath?: string;
+}): string {
   if (isBuiltinSource(source)) return "ASD E8";
   const name = source.name?.trim();
   if (name) return name;
+  if (isLocalSource(source)) {
+    const folder = source.localPath?.trim().replace(/[\\/]+$/, "");
+    const parts = folder?.split(/[\\/]/).filter(Boolean) ?? [];
+    return parts[parts.length - 1] || "Local pack";
+  }
   if (source.owner?.trim() && source.repo?.trim()) return `${source.owner}/${source.repo}`;
   return "Custom pack";
 }
@@ -42,6 +68,8 @@ export function ensureBuiltinSources(sources: BaselineReferenceSourceInput[]): B
       path: DEFAULT_E8_SOURCE.path,
       private: false,
       token: undefined,
+      kind: "github",
+      localPath: undefined,
     },
     ...rest,
   ];
@@ -130,11 +158,32 @@ export function applyGitHubRepoInput(
 }
 
 export function isSourceReady(source: BaselineReferenceSourceInput): boolean {
+  if (isLocalSource(source)) return Boolean(source.localPath?.trim());
   if (parseGitHubRepoInput(source.url ?? "")) return true;
   return Boolean(source.owner.trim() && source.repo.trim());
 }
 
 export function sanitizeSource(entry: BaselineReferenceSourceInput): BaselineReferenceSourceInput {
+  if (isLocalSource(entry) && !isBuiltinSource(entry)) {
+    const localPath = (entry.localPath ?? "").trim();
+    const path = (entry.path ?? "").trim().replace(/^[/\\]+|[/\\]+$/g, "").replace(/\\/g, "/");
+    const id =
+      entry.id?.trim() ||
+      (localPath ? `local:${localPath}:${path}` : undefined);
+    return {
+      id,
+      name: entry.name?.trim() || undefined,
+      kind: "local",
+      localPath,
+      url: "",
+      owner: "",
+      repo: "",
+      gitRef: "",
+      path,
+      private: false,
+      token: undefined,
+    };
+  }
   const parsed = parseGitHubRepoInput(entry.url ?? "");
   const owner = (parsed?.owner ?? entry.owner ?? "").trim();
   const repo = (parsed?.repo ?? entry.repo ?? "").trim().replace(/\.git$/i, "");
@@ -150,6 +199,7 @@ export function sanitizeSource(entry: BaselineReferenceSourceInput): BaselineRef
   return {
     id,
     name,
+    kind: "github",
     url,
     owner,
     repo,
@@ -167,6 +217,7 @@ export function newCustomSource(): BaselineReferenceSourceInput {
       : `custom-${Date.now()}`;
   return {
     id,
+    kind: "github",
     url: "",
     owner: "",
     repo: "",
@@ -174,6 +225,31 @@ export function newCustomSource(): BaselineReferenceSourceInput {
     path: "",
     private: false,
   };
+}
+
+export function newLocalSource(): BaselineReferenceSourceInput {
+  const id =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? `local-${crypto.randomUUID()}`
+      : `local-${Date.now()}`;
+  return {
+    id,
+    kind: "local",
+    localPath: "",
+    url: "",
+    owner: "",
+    repo: "",
+    gitRef: "",
+    path: "",
+    private: false,
+  };
+}
+
+export function sourceOpenUrl(source: BaselineReferenceSourceInput, directoryUrl?: string): string {
+  if (isLocalSource(source)) {
+    return directoryUrl?.trim() || source.localPath?.trim() || "";
+  }
+  return directoryUrl?.trim() || githubDirectoryUrl(source);
 }
 
 export function loadStoredSources(): BaselineReferenceSourceInput[] {

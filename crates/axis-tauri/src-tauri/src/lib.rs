@@ -194,9 +194,16 @@ async fn sign_out(state: State<'_, AppState>) -> Result<(), String> {
 
 #[tauri::command]
 async fn open_external_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
-    app.opener()
-        .open_url(url, None::<&str>)
-        .map_err(|error| error.to_string())
+    let trimmed = url.trim();
+    if trimmed.starts_with("https://") || trimmed.starts_with("http://") {
+        app.opener()
+            .open_url(trimmed, None::<&str>)
+            .map_err(|error| error.to_string())
+    } else {
+        app.opener()
+            .open_path(trimmed, None::<&str>)
+            .map_err(|error| error.to_string())
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -249,6 +256,7 @@ pub fn run() {
             commands::fetch_e8_baseline_references_cmd,
             commands::fetch_baseline_reference_sources_cmd,
             commands::fetch_baseline_export_cmd,
+            commands::pick_local_pack_folder_cmd,
             commands::fetch_applied_policy_settings_cmd,
             commands::desktop_capability,
             commands::list_catalog_categories_cmd,
