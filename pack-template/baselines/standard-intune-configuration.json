@@ -1,11 +1,10 @@
 {
   "id": "standard-intune-configuration",
   "name": "Standard Intune configuration",
-  "description": "Example baseline that selects files already in this pack. Add your exports under windows/, macos/, or android/, then list their pack-relative paths here.",
+  "description": "Example Windows baseline that selects the BitLocker catalog policy and Auto Timezone platform script in this pack. Replace or extend includes as you add your own exports.",
   "version": "0.1.0",
   "includes": [
-    "windows/policies/sample-windows-catalog.json",
-    "macos/policies/sample-macos-catalog.json",
-    "windows/scripts/platform/sample-platform.ps1"
+    "windows/policies/Win - OIB - ES - Encryption - D - BitLocker (OS Disk) - v3.7.json",
+    "windows/scripts/platform/Enable-AutoTimezone.ps1"
   ]
 }

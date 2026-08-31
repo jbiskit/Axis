@@ -96,12 +96,12 @@ crates/
   axis-tauri/
     src-tauri/                     # Tauri backend + tauri.conf.json (do not run cargo tauri here)
     ui/                            # Vite + React desktop frontend
-pack-template/                     # Layout copied to https://github.com/jbiskit/axis-pack-template
+pack-template/                     # Mirrored to https://github.com/jbiskit/axis-pack-template (including README)
 ```
 
 ## Baseline packs
 
-Axis treats a pack as an **external source** from **GitHub** (Contents API, not git clone) or a **local folder**. Layout is **platform first** (`windows/`, `macos/`, `android/`), then object type. Only `{platform}/policies/` is imported as Settings Catalog. Device compare can use those files, or a baseline JSON that **selects** them.
+Axis treats a pack as an **external source** from **GitHub** (Contents API, not git clone) or a **local folder**. Layout is **platform first** (Windows in the public template for now), then object type. Only `{platform}/policies/` is imported as Settings Catalog. Device compare can use those files, or a baseline JSON that **selects** them.
 
 - `axis-pack.json` — pack name and `paths.platforms`
 - `{platform}/policies/` — Settings Catalog exports
@@ -109,7 +109,9 @@ Axis treats a pack as an **external source** from **GitHub** (Contents API, not 
 - `{platform}/compliance/`, `endpoint-security/`, `windows-update/` (Windows), `enrollment/autopilot/`
 - `baselines/` — named selections (`includes` paths). Not a second copy of policies
 
-Pack layout is inspired by how [OpenIntuneBaseline](https://github.com/SkipToTheEndpoint/OpenIntuneBaseline) groups work by platform. The template itself only ships empty folders and tiny sample stubs.
+The public template ships two Windows samples from [OpenIntuneBaseline](https://github.com/SkipToTheEndpoint/OpenIntuneBaseline) (BitLocker catalog policy and Auto Timezone platform script; GPL-3.0). See `pack-template/NOTICE.md`.
+
+`pack-template/` is the source of truth for that GitHub template: Axis’s Action copies this folder to the template repo root, including `README.md`. `.github/` on the template repo is not overwritten.
 
 If the source path is empty, Axis scans those default folders. Built-in ASD E8 still uses its GitHub path under the ASD Blueprint repo and does not scan the extra folders.
 
