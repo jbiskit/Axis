@@ -1,7 +1,11 @@
 use crate::graph::GraphError;
+use chrono::{DateTime, Utc};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 const E8_OWNER: &str = "ASD-Blueprint";
 const E8_REPO: &str = "ASD-Blueprint-for-Secure-Cloud";
@@ -13,15 +17,24 @@ const E8_REF: &str = "main";
 pub struct E8BaselineSource {
     pub id: String,
     pub name: String,
+    /// `github` or `local`.
+    #[serde(default = "default_source_kind")]
+    pub kind: String,
     pub owner: String,
     pub repo: String,
     pub git_ref: String,
     pub path: String,
+    #[serde(default)]
+    pub local_path: String,
     pub repository_url: String,
     pub directory_url: String,
     pub api_url: String,
     #[serde(default)]
     pub has_token: bool,
+}
+
+fn default_source_kind() -> String {
+    "github".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,6 +64,12 @@ pub struct E8BaselineReferencesLoad {
 pub struct BaselineReferenceSourceInput {
     pub id: Option<String>,
     pub name: Option<String>,
+    /// `github` (default) or `local`.
+    #[serde(default)]
+    pub kind: String,
+    /// Absolute folder on this machine. Used when `kind` is `local`.
+    #[serde(default)]
+    pub local_path: String,
     /// GitHub repo URL or `owner/repo`. Parsed when owner/repo are empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
@@ -113,10 +132,11 @@ struct GitHubCommitAuthor {
     date: Option<String>,
 }
 
-const SKIP_GITHUB_DIRS: &[&str] = &[".git", ".github", ".vscode", "node_modules"];
-const MAX_GITHUB_DEPTH: u8 = 4;
-const MAX_GITHUB_FILES: usize = 200;
+const SKIP_PACK_DIRS: &[&str] = &[".git", ".github", ".vscode", "node_modules", "baselines"];
+const MAX_PACK_DEPTH: u8 = 4;
+const MAX_PACK_FILES: usize = 200;
 const AXIS_PACK_MANIFEST: &str = "axis-pack.json";
+const DEFAULT_POLICIES_DIR: &str = "policies";
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -140,6 +160,7 @@ struct AxisPackPaths {
     #[serde(default)]
     policies: Option<String>,
     #[serde(default)]
+    #[allow(dead_code)]
     baselines: Option<String>,
 }
 
@@ -161,24 +182,51 @@ impl AxisPackManifest {
             .or_else(|| self.display_name())
     }
 
-    fn scan_paths(&self) -> Vec<String> {
-        let mut paths = Vec::new();
-        if let Some(paths_spec) = &self.paths {
-            for value in [&paths_spec.policies, &paths_spec.baselines] {
-                if let Some(path) = value
-                    .as_deref()
-                    .map(str::trim)
-                    .map(|value| value.trim_matches('/'))
-                    .filter(|value| !value.is_empty())
-                {
-                    if !paths.iter().any(|existing| existing == path) {
-                        paths.push(path.to_string());
-                    }
-                }
-            }
-        }
-        paths
+    fn policy_path(&self) -> Option<String> {
+        self.paths
+            .as_ref()
+            .and_then(|paths| paths.policies.as_deref())
+            .map(str::trim)
+            .map(|value| value.trim_matches('/'))
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
     }
+}
+
+/// Policy folders to walk. An explicit source `path` wins (built-in E8). Otherwise a
+/// pack manifest uses `paths.policies`, defaulting to `policies/`. No manifest means
+/// the folder or repo root. `baselines/` is never included.
+fn resolve_policy_scan_roots(configured_path: &str, pack: Option<&AxisPackManifest>) -> Vec<String> {
+    let configured = configured_path.trim().trim_matches('/');
+    if !configured.is_empty() {
+        return vec![configured.to_string()];
+    }
+    if let Some(pack) = pack {
+        return vec![pack
+            .policy_path()
+            .unwrap_or_else(|| DEFAULT_POLICIES_DIR.to_string())];
+    }
+    vec![String::new()]
+}
+
+fn skip_pack_dir(name: &str) -> bool {
+    SKIP_PACK_DIRS
+        .iter()
+        .any(|skip| name.eq_ignore_ascii_case(skip))
+}
+
+fn looks_like_axis_checks_document(value: &Value) -> bool {
+    value.get("checks").and_then(Value::as_array).is_some()
+}
+
+fn rfc3339_from_system_time(time: SystemTime) -> Option<String> {
+    let datetime = DateTime::<Utc>::from(time);
+    Some(datetime.to_rfc3339())
+}
+
+fn is_local_source_input(input: &BaselineReferenceSourceInput) -> bool {
+    input.kind.trim().eq_ignore_ascii_case("local")
+        || nonempty(&input.local_path).is_some()
 }
 
 /// Returns owner, repo, git_ref, path.
@@ -291,10 +339,12 @@ fn default_source() -> E8BaselineSource {
     E8BaselineSource {
         id: "e8-github".into(),
         name: "ASD E8".into(),
+        kind: "github".into(),
         owner: E8_OWNER.into(),
         repo: E8_REPO.into(),
         git_ref: E8_REF.into(),
         path: E8_PATH.into(),
+        local_path: String::new(),
         repository_url,
         directory_url,
         api_url,
@@ -359,10 +409,12 @@ fn source_from_input(input: BaselineReferenceSourceInput) -> (E8BaselineSource, 
         E8BaselineSource {
             id,
             name,
+            kind: "github".into(),
             owner,
             repo,
             git_ref,
             path,
+            local_path: String::new(),
             repository_url,
             directory_url,
             api_url,
@@ -370,6 +422,56 @@ fn source_from_input(input: BaselineReferenceSourceInput) -> (E8BaselineSource, 
         },
         token,
     )
+}
+
+fn local_source_from_input(input: BaselineReferenceSourceInput) -> Result<E8BaselineSource, GraphError> {
+    let local_path = nonempty(&input.local_path).ok_or_else(|| GraphError::Request {
+        status: 400,
+        code: None,
+        message: "Choose a local folder for this pack.".into(),
+        permission_related: false,
+    })?;
+    let path = nonempty(&input.path)
+        .map(|value| value.trim_matches('/').replace('\\', "/"))
+        .unwrap_or_default();
+    let id = input
+        .id
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| format!("local:{local_path}:{path}"));
+    let folder_name = Path::new(&local_path)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Local pack");
+    let name = input
+        .name
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| folder_name.to_string());
+    let directory_url = if path.is_empty() {
+        local_path.clone()
+    } else {
+        Path::new(&local_path)
+            .join(path.replace('/', std::path::MAIN_SEPARATOR_STR))
+            .to_string_lossy()
+            .into_owned()
+    };
+    Ok(E8BaselineSource {
+        id,
+        name,
+        kind: "local".into(),
+        owner: String::new(),
+        repo: String::new(),
+        git_ref: String::new(),
+        path,
+        local_path: local_path.clone(),
+        repository_url: local_path,
+        directory_url,
+        api_url: String::new(),
+        has_token: false,
+    })
 }
 
 fn request_error(status: StatusCode, message: String) -> GraphError {
@@ -486,22 +588,19 @@ async fn collect_github_files(
     files: &mut Vec<GitHubContentItem>,
     warnings: &mut Vec<String>,
 ) -> Result<(), GraphError> {
-    if files.len() >= MAX_GITHUB_FILES || depth > MAX_GITHUB_DEPTH {
+    if files.len() >= MAX_PACK_FILES || depth > MAX_PACK_DEPTH {
         return Ok(());
     }
     let items = github_list_path(client, source, path, token).await?;
     for item in items {
-        if files.len() >= MAX_GITHUB_FILES {
+        if files.len() >= MAX_PACK_FILES {
             warnings.push(format!(
-                "Stopped after {MAX_GITHUB_FILES} files. Narrow the source path if this pack is larger."
+                "Stopped after {MAX_PACK_FILES} files. Narrow the source path if this pack is larger."
             ));
             break;
         }
         if item.item_type == "dir" {
-            if SKIP_GITHUB_DIRS
-                .iter()
-                .any(|name| item.name.eq_ignore_ascii_case(name))
-            {
+            if skip_pack_dir(&item.name) {
                 continue;
             }
             let child_path = if item.path.trim().is_empty() {
@@ -561,7 +660,12 @@ async fn fetch_source_references(
 ) -> Result<E8BaselineReferencesLoad, GraphError> {
     let client = reqwest::Client::new();
     let token_ref = token.as_deref();
-    let pack = load_axis_pack_manifest(&client, &source, token_ref).await;
+    let configured_path = source.path.clone();
+    let pack = if configured_path.is_empty() {
+        load_axis_pack_manifest(&client, &source, token_ref).await
+    } else {
+        None
+    };
     let source_label = pack
         .as_ref()
         .and_then(AxisPackManifest::resolved_source_label)
@@ -569,16 +673,7 @@ async fn fetch_source_references(
     if let Some(name) = pack.as_ref().and_then(AxisPackManifest::display_name) {
         source.name = name;
     }
-    let scan_paths = if !source.path.is_empty() {
-        vec![source.path.clone()]
-    } else {
-        let from_pack = pack.as_ref().map(AxisPackManifest::scan_paths).unwrap_or_default();
-        if from_pack.is_empty() {
-            vec![String::new()]
-        } else {
-            from_pack
-        }
-    };
+    let scan_paths = resolve_policy_scan_roots(&configured_path, pack.as_ref());
     if source.path.is_empty() {
         if let Some(first) = scan_paths.first().cloned() {
             source.path = first.clone();
@@ -591,8 +686,9 @@ async fn fetch_source_references(
 
     let mut files = Vec::new();
     let mut warnings = Vec::new();
+    let allow_missing_subdir = configured_path.is_empty();
     for path in &scan_paths {
-        collect_github_files(
+        match collect_github_files(
             &client,
             &source,
             path,
@@ -601,7 +697,18 @@ async fn fetch_source_references(
             &mut files,
             &mut warnings,
         )
-        .await?;
+        .await
+        {
+            Ok(()) => {}
+            Err(error)
+                if allow_missing_subdir && !path.is_empty() && error.status() == Some(404) =>
+            {
+                warnings.push(format!(
+                    "Folder `{path}` was not found. Add Intune exports under that path, or set paths.policies in axis-pack.json."
+                ));
+            }
+            Err(error) => return Err(error),
+        }
     }
     files.sort_by(|left, right| left.path.cmp(&right.path));
     files.dedup_by(|left, right| left.path == right.path && left.name == right.name);
@@ -633,6 +740,9 @@ async fn fetch_source_references(
                 continue;
             }
         };
+        if looks_like_axis_checks_document(&parsed) {
+            continue;
+        }
 
         let stem = item
             .name
@@ -712,6 +822,234 @@ async fn fetch_source_references(
     })
 }
 
+struct LocalPackFile {
+    name: String,
+    rel_path: String,
+    abs_path: PathBuf,
+    modified: Option<String>,
+}
+
+fn join_pack_rel(root: &Path, rel: &str) -> PathBuf {
+    if rel.is_empty() {
+        return root.to_path_buf();
+    }
+    let mut path = root.to_path_buf();
+    for segment in rel.split(['/', '\\']).filter(|segment| !segment.is_empty() && *segment != ".") {
+        if segment == ".." {
+            continue;
+        }
+        path.push(segment);
+    }
+    path
+}
+
+fn path_is_under(root: &Path, candidate: &Path) -> bool {
+    match (fs::canonicalize(root), fs::canonicalize(candidate)) {
+        (Ok(root), Ok(candidate)) => candidate.starts_with(root),
+        _ => false,
+    }
+}
+
+fn pack_io_error(message: impl Into<String>) -> GraphError {
+    GraphError::Request {
+        status: 400,
+        code: None,
+        message: message.into(),
+        permission_related: false,
+    }
+}
+
+fn collect_local_files(
+    root: &Path,
+    rel: &str,
+    depth: u8,
+    files: &mut Vec<LocalPackFile>,
+    warnings: &mut Vec<String>,
+) -> Result<(), GraphError> {
+    if files.len() >= MAX_PACK_FILES || depth > MAX_PACK_DEPTH {
+        return Ok(());
+    }
+    let dir = join_pack_rel(root, rel);
+    if !dir.exists() {
+        if rel.is_empty() {
+            return Err(pack_io_error(format!(
+                "Local pack folder was not found: {}",
+                root.display()
+            )));
+        }
+        warnings.push(format!(
+            "Folder `{rel}` was not found. Add Intune exports under that path, or set paths.policies in axis-pack.json."
+        ));
+        return Ok(());
+    }
+    let entries = fs::read_dir(&dir).map_err(|error| {
+        pack_io_error(format!("Could not read {}: {error}", dir.display()))
+    })?;
+    let mut listed = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            pack_io_error(format!("Could not read {}: {error}", dir.display()))
+        })?;
+        listed.push(entry);
+    }
+    listed.sort_by_key(|entry| entry.file_name());
+    for entry in listed {
+        if files.len() >= MAX_PACK_FILES {
+            warnings.push(format!(
+                "Stopped after {MAX_PACK_FILES} files. Narrow the source path if this pack is larger."
+            ));
+            break;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let file_type = entry.file_type().map_err(|error| {
+            pack_io_error(format!("Could not read {name}: {error}"))
+        })?;
+        let child_rel = if rel.is_empty() {
+            name.clone()
+        } else {
+            format!("{rel}/{name}")
+        };
+        if file_type.is_dir() {
+            if skip_pack_dir(&name) {
+                continue;
+            }
+            collect_local_files(root, &child_rel, depth + 1, files, warnings)?;
+            continue;
+        }
+        if file_type.is_file() && is_baseline_source_file(&name) {
+            let abs_path = entry.path();
+            if !path_is_under(root, &abs_path) {
+                continue;
+            }
+            let modified = fs::metadata(&abs_path)
+                .ok()
+                .and_then(|meta| meta.modified().ok())
+                .and_then(rfc3339_from_system_time);
+            files.push(LocalPackFile {
+                name,
+                rel_path: child_rel.replace('\\', "/"),
+                abs_path,
+                modified,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn load_local_pack_manifest(root: &Path) -> Option<AxisPackManifest> {
+    let path = root.join(AXIS_PACK_MANIFEST);
+    let text = fs::read_to_string(path).ok()?;
+    serde_json::from_str(strip_bom(&text)).ok()
+}
+
+fn fetch_local_source_references(
+    mut source: E8BaselineSource,
+) -> Result<E8BaselineReferencesLoad, GraphError> {
+    let root = PathBuf::from(&source.local_path);
+    if !root.is_dir() {
+        return Err(pack_io_error(format!(
+            "Local pack path is not a folder: {}",
+            root.display()
+        )));
+    }
+    let configured_path = source.path.clone();
+    let pack = if configured_path.is_empty() {
+        load_local_pack_manifest(&root)
+    } else {
+        None
+    };
+    let source_label = pack
+        .as_ref()
+        .and_then(AxisPackManifest::resolved_source_label)
+        .unwrap_or_else(|| source.name.clone());
+    if let Some(name) = pack.as_ref().and_then(AxisPackManifest::display_name) {
+        source.name = name;
+    }
+    let scan_paths = resolve_policy_scan_roots(&configured_path, pack.as_ref());
+    if source.path.is_empty() {
+        if let Some(first) = scan_paths.first().cloned() {
+            source.path = first.clone();
+            source.directory_url = if first.is_empty() {
+                source.local_path.clone()
+            } else {
+                join_pack_rel(&root, &first).to_string_lossy().into_owned()
+            };
+        }
+    }
+
+    let mut files = Vec::new();
+    let mut warnings = Vec::new();
+    for path in &scan_paths {
+        collect_local_files(&root, path, 0, &mut files, &mut warnings)?;
+    }
+    files.sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
+    files.dedup_by(|left, right| left.rel_path == right.rel_path);
+
+    let mut references = Vec::new();
+    for item in files {
+        let text = match fs::read_to_string(&item.abs_path) {
+            Ok(text) => text,
+            Err(error) => {
+                warnings.push(format!("{}: {error}", item.name));
+                continue;
+            }
+        };
+        let parsed = match parse_policy_json(&text) {
+            Ok(value) => value,
+            Err(error) => {
+                warnings.push(format!("{}: {}", item.name, error));
+                continue;
+            }
+        };
+        if looks_like_axis_checks_document(&parsed) {
+            continue;
+        }
+        let stem = item
+            .name
+            .trim_end_matches(".txt")
+            .trim_end_matches(".json");
+        let name = parsed
+            .get("name")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| parsed.get("displayName").and_then(Value::as_str))
+            .map(str::trim)
+            .map(str::to_string)
+            .unwrap_or_else(|| stem.to_string());
+        let version = parsed
+            .get("version")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        let policy_exported_date_time = parsed
+            .get("lastModifiedDateTime")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        let download_url = item.abs_path.to_string_lossy().into_owned();
+        references.push(E8BaselineReference {
+            id: item.rel_path.clone(),
+            name,
+            version,
+            last_modified_date_time: item.modified.clone().or_else(|| policy_exported_date_time.clone()),
+            repository_last_modified_date_time: item.modified,
+            policy_exported_date_time,
+            source: source_label.clone(),
+            source_url: download_url.clone(),
+            download_url,
+        });
+    }
+
+    references.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(E8BaselineReferencesLoad {
+        source,
+        references,
+        warnings,
+    })
+}
+
 pub async fn fetch_e8_baseline_references() -> Result<E8BaselineReferencesLoad, GraphError> {
     fetch_source_references(default_source(), None).await
 }
@@ -723,6 +1061,8 @@ pub async fn fetch_baseline_reference_sources(
         vec![BaselineReferenceSourceInput {
             id: Some("e8-github".into()),
             name: Some("ASD E8".into()),
+            kind: "github".into(),
+            local_path: String::new(),
             url: None,
             owner: E8_OWNER.into(),
             repo: E8_REPO.into(),
@@ -737,6 +1077,44 @@ pub async fn fetch_baseline_reference_sources(
 
     let mut loads = Vec::with_capacity(inputs.len());
     for input in inputs {
+        if is_local_source_input(&input) {
+            match local_source_from_input(input) {
+                Ok(source) => match fetch_local_source_references(source.clone()) {
+                    Ok(result) => loads.push(BaselineReferenceSourceLoad {
+                        source: result.source,
+                        references: result.references,
+                        warnings: result.warnings,
+                        error: None,
+                    }),
+                    Err(error) => loads.push(BaselineReferenceSourceLoad {
+                        source,
+                        references: Vec::new(),
+                        warnings: Vec::new(),
+                        error: Some(error.to_string()),
+                    }),
+                },
+                Err(error) => loads.push(BaselineReferenceSourceLoad {
+                    source: E8BaselineSource {
+                        id: "local".into(),
+                        name: "Local pack".into(),
+                        kind: "local".into(),
+                        owner: String::new(),
+                        repo: String::new(),
+                        git_ref: String::new(),
+                        path: String::new(),
+                        local_path: String::new(),
+                        repository_url: String::new(),
+                        directory_url: String::new(),
+                        api_url: String::new(),
+                        has_token: false,
+                    },
+                    references: Vec::new(),
+                    warnings: Vec::new(),
+                    error: Some(error.to_string()),
+                }),
+            }
+            continue;
+        }
         let (source, token) = source_from_input(input);
         match fetch_source_references(source.clone(), token).await {
             Ok(result) => loads.push(BaselineReferenceSourceLoad {
@@ -759,7 +1137,11 @@ pub async fn fetch_baseline_reference_sources(
 
 #[cfg(test)]
 mod tests {
-    use super::{github_contents_url, github_tree_url, is_baseline_source_file, parse_github_repo_url};
+    use super::{
+        github_contents_url, github_tree_url, is_baseline_source_file, looks_like_axis_checks_document,
+        parse_github_repo_url, resolve_policy_scan_roots, skip_pack_dir, AxisPackManifest, AxisPackPaths,
+    };
+    use serde_json::json;
 
     #[test]
     fn accepts_policy_exports_and_skips_pack_manifest() {
@@ -767,6 +1149,52 @@ mod tests {
         assert!(is_baseline_source_file("defender.json"));
         assert!(!is_baseline_source_file("axis-pack.json"));
         assert!(!is_baseline_source_file("README.md"));
+    }
+
+    #[test]
+    fn policy_scan_roots_honor_explicit_path_then_pack_then_root() {
+        let pack = AxisPackManifest {
+            id: None,
+            name: Some("Contoso".into()),
+            source_label: None,
+            version: None,
+            paths: Some(AxisPackPaths {
+                policies: Some("policies".into()),
+                baselines: Some("baselines".into()),
+            }),
+        };
+        assert_eq!(
+            resolve_policy_scan_roots("static/content/files/intune-config-policies", Some(&pack)),
+            vec!["static/content/files/intune-config-policies".to_string()]
+        );
+        assert_eq!(
+            resolve_policy_scan_roots("", Some(&pack)),
+            vec!["policies".to_string()]
+        );
+        let pack_default = AxisPackManifest {
+            id: None,
+            name: Some("Contoso".into()),
+            source_label: None,
+            version: None,
+            paths: None,
+        };
+        assert_eq!(
+            resolve_policy_scan_roots("", Some(&pack_default)),
+            vec!["policies".to_string()]
+        );
+        assert_eq!(resolve_policy_scan_roots("", None), vec![String::new()]);
+    }
+
+    #[test]
+    fn skips_reserved_pack_directories_and_checks_documents() {
+        assert!(skip_pack_dir("baselines"));
+        assert!(skip_pack_dir(".git"));
+        assert!(skip_pack_dir("node_modules"));
+        assert!(!skip_pack_dir("policies"));
+        assert!(looks_like_axis_checks_document(&json!({ "checks": [] })));
+        assert!(!looks_like_axis_checks_document(
+            &json!({ "name": "Edge", "settings": [] })
+        ));
     }
 
     #[test]
@@ -799,5 +1227,54 @@ mod tests {
             github_contents_url("owner", "repo", "policies/win", "main"),
             "https://api.github.com/repos/owner/repo/contents/policies/win?ref=main"
         );
+    }
+
+    #[test]
+    fn local_folder_scans_policies_and_skips_baselines() {
+        let dir = std::env::temp_dir().join(format!(
+            "axis-pack-scan-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|value| value.as_millis())
+                .unwrap_or(0)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("policies")).unwrap();
+        std::fs::create_dir_all(dir.join("baselines")).unwrap();
+        std::fs::write(
+            dir.join("axis-pack.json"),
+            r#"{"name":"Test pack","paths":{"policies":"policies","baselines":"baselines"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("policies").join("edge.json"),
+            r#"{"name":"Edge","settings":[]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("baselines").join("checks.json"),
+            r#"{"checks":[{"id":"a"}]}"#,
+        )
+        .unwrap();
+        let source = super::local_source_from_input(super::BaselineReferenceSourceInput {
+            id: Some("t".into()),
+            name: None,
+            kind: "local".into(),
+            local_path: dir.to_string_lossy().into_owned(),
+            url: None,
+            owner: String::new(),
+            repo: String::new(),
+            git_ref: String::new(),
+            path: String::new(),
+            private: false,
+            token: None,
+        })
+        .unwrap();
+        let load = super::fetch_local_source_references(source).unwrap();
+        assert_eq!(load.source.name, "Test pack");
+        assert_eq!(load.references.len(), 1);
+        assert_eq!(load.references[0].name, "Edge");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

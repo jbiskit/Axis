@@ -1,0 +1,10 @@
+{
+  "id": "my-axis-pack",
+  "name": "My Axis pack",
+  "version": "0.1.0",
+  "sourceLabel": "My Axis pack",
+  "paths": {
+    "policies": "policies",
+    "baselines": "baselines"
+  }
+}

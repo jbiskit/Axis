@@ -44,6 +44,7 @@ import {
   fetchGroupPolicyConfigurations,
   createSettingsCatalogPolicy,
   openExternalUrl,
+  pickLocalPackFolder,
   fetchStoreApps,
   fetchTenantScripts,
   fetchMobileApps,
@@ -52,14 +53,18 @@ import {
 import {
   applyGitHubRepoInput,
   DEFAULT_E8_SOURCE,
-  githubDirectoryUrl,
+  GITHUB_FINE_GRAINED_TOKEN_DOCS_URL,
+  GITHUB_FINE_GRAINED_TOKEN_URL,
   isBuiltinSource,
+  isLocalSource,
   isSourceReady,
   loadStoredSources,
   newCustomSource,
+  newLocalSource,
   packTitle,
   sanitizeSource,
   saveStoredSources,
+  sourceOpenUrl,
   tokenForSource,
 } from "../lib/baselines/sources";
 import { normalizeIntunePolicyExport } from "../lib/baselines/policyExport";
@@ -2213,6 +2218,48 @@ function AutopilotWorkbench({
   );
 }
 
+function GitHubLeastPrivilegePatHelp() {
+  return (
+    <div className="muted" style={{ marginTop: "0.45rem", fontSize: "0.75rem" }}>
+      <p style={{ margin: "0 0 0.4rem" }}>
+        Axis only reads files from this pack. Use a fine-grained token, not a classic PAT with the{" "}
+        <code>repo</code> scope.
+      </p>
+      <ol style={{ margin: "0 0 0.45rem", paddingLeft: "1.15rem" }}>
+        <li>Open GitHub’s fine-grained token form.</li>
+        <li>Resource owner: the user or organization that owns the pack.</li>
+        <li>Repository access: Only select repositories, then this pack.</li>
+        <li>
+          Under Permissions, open Repository permissions. Set <strong>Contents</strong> to{" "}
+          <strong>Read</strong> (the dropdown is No access, Read, or Read and write — there is no
+          “Read-only” permission name). Leave every other permission at No access. Metadata is
+          granted automatically.
+        </li>
+        <li>Generate the token and paste it above. It stays on this machine only.</li>
+      </ol>
+      <p style={{ margin: "0 0 0.45rem" }}>
+        Organization repos may require an owner to approve the token.
+      </p>
+      <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+        <button
+          type="button"
+          className="axis-link"
+          onClick={() => void openExternalUrl(GITHUB_FINE_GRAINED_TOKEN_URL)}
+        >
+          Create a fine-grained token
+        </button>
+        <button
+          type="button"
+          className="axis-link"
+          onClick={() => void openExternalUrl(GITHUB_FINE_GRAINED_TOKEN_DOCS_URL)}
+        >
+          GitHub documentation
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function BaselinesWorkbench({
   selectedId,
   onSelect,
@@ -2230,10 +2277,12 @@ function BaselinesWorkbench({
       source: {
         id: string;
         name: string;
+        kind?: string;
         owner: string;
         repo: string;
         gitRef: string;
         path: string;
+        localPath?: string;
         directoryUrl: string;
         hasToken?: boolean;
       };
@@ -2264,7 +2313,7 @@ function BaselinesWorkbench({
     const ready = sourceEntries.map(sanitizeSource).filter(isSourceReady);
     if (ready.length === 0) {
       setReferenceLoads([]);
-      setReferencesError("Paste a GitHub repository URL to load baseline packs.");
+      setReferencesError("Add a GitHub repository URL or a local pack folder to load baseline packs.");
       return;
     }
     setE8Loading(true);
@@ -2301,10 +2350,15 @@ function BaselinesWorkbench({
       return {
         id: normalizedEntry.id ?? source?.id ?? title,
         title,
-        kind: isBuiltinSource(entry) ? "Built-in" : "Custom pack",
+        kind: isBuiltinSource(entry)
+          ? "Built-in"
+          : isLocalSource(entry)
+            ? "Local folder"
+            : "GitHub pack",
         owner: source?.owner ?? entry.owner,
         repo: source?.repo ?? entry.repo,
-        directoryUrl: source?.directoryUrl ?? githubDirectoryUrl(entry),
+        local: isLocalSource(entry) || source?.kind === "local",
+        directoryUrl: source?.directoryUrl ?? sourceOpenUrl(entry),
         error: load?.error ?? null,
         warning: load?.warnings[0] ?? null,
         references: (load?.references ?? []).map((reference) => ({
@@ -2355,7 +2409,7 @@ function BaselinesWorkbench({
             <PageHeader
               eyebrow="Baselines"
               title="Baselines"
-              description="Built-in ASD E8 stays here. Add a GitHub pack URL for your own titles; policies list under each pack. Open a device and use Baselines to grade applied settings."
+              description="Built-in ASD E8 stays here. Add a GitHub pack or a local folder; policies list under each pack. Open a device and use Baselines to grade applied settings."
               actions={
                 <div style={{ display: "flex", gap: "0.5rem" }}>
                   <button type="button" className="axis-btn" onClick={() => setSourceEditorOpen((open) => !open)}>
@@ -2373,9 +2427,19 @@ function BaselinesWorkbench({
             {sourceEditorOpen ? (
               <section className="axis-panel" style={{ padding: "0.85rem" }}>
                 <p className="muted" style={{ marginTop: 0 }}>
-                  ASD E8 is built in. Add another GitHub URL for a custom pack — Axis uses{" "}
-                  <code>axis-pack.json</code> for that pack’s title and policy source label. Mark a source private
-                  only when the repo is private, then add a PAT with the <code>repo</code> scope.
+                  ASD E8 is built in. Add a GitHub URL (use{" "}
+                  <code>https://github.com/jbiskit/axis-pack-template</code> as a starting repo) or a
+                  local folder. Axis reads <code>axis-pack.json</code> for the pack title and scans{" "}
+                  <code>policies/</code> for Intune exports. Packs are read-only in this version. For a
+                  private repo, mark the source private and paste a fine-grained PAT limited to that
+                  repository.{" "}
+                  <button
+                    type="button"
+                    className="axis-link"
+                    onClick={() => void openExternalUrl(GITHUB_FINE_GRAINED_TOKEN_URL)}
+                  >
+                    Create a token
+                  </button>
                 </p>
                 <div className="stack" style={{ gap: "0.5rem" }}>
                   {sourceEntries.map((entry, index) => {
@@ -2383,12 +2447,76 @@ function BaselinesWorkbench({
                     const builtin = isBuiltinSource(entry);
                     return (
                     <div key={sourceKey} style={{ border: "1px solid var(--axis-border)", borderRadius: "0.5rem", padding: "0.6rem" }}>
-                      <p className="baseline-pack-kicker">{builtin ? "Built-in" : "Custom pack"}</p>
+                      <p className="baseline-pack-kicker">
+                        {builtin ? "Built-in" : isLocalSource(entry) ? "Local folder" : "GitHub pack"}
+                      </p>
                       <p style={{ margin: "0.2rem 0 0.5rem", fontWeight: 650 }}>{packTitle(entry)}</p>
                       {builtin ? (
                         <p className="muted" style={{ margin: 0, fontSize: "0.75rem" }}>
                           ASD Essential Eight reference from the ASD Blueprint repository.
                         </p>
+                      ) : isLocalSource(entry) ? (
+                        <>
+                          <input
+                            className="axis-input"
+                            value={entry.name ?? ""}
+                            placeholder="Pack name (optional)"
+                            onChange={(event) => {
+                              const value = event.target.value;
+                              setSourceEntries((current) =>
+                                current.map((row, rowIndex) =>
+                                  rowIndex === index ? { ...row, name: value } : row,
+                                ),
+                              );
+                            }}
+                          />
+                          <div style={{ display: "flex", gap: "0.4rem", marginTop: "0.4rem", alignItems: "center" }}>
+                            <input
+                              className="axis-input"
+                              style={{ flex: 1 }}
+                              value={entry.localPath ?? ""}
+                              placeholder="Folder path"
+                              onChange={(event) => {
+                                const value = event.target.value;
+                                setSourceEntries((current) =>
+                                  current.map((row, rowIndex) =>
+                                    rowIndex === index ? { ...row, kind: "local", localPath: value } : row,
+                                  ),
+                                );
+                              }}
+                            />
+                            <button
+                              type="button"
+                              className="axis-btn"
+                              onClick={() => {
+                                void pickLocalPackFolder().then((folder) => {
+                                  if (!folder) return;
+                                  setSourceEntries((current) =>
+                                    current.map((row, rowIndex) =>
+                                      rowIndex === index ? { ...row, kind: "local", localPath: folder } : row,
+                                    ),
+                                  );
+                                });
+                              }}
+                            >
+                              Browse
+                            </button>
+                          </div>
+                          <input
+                            className="axis-input"
+                            style={{ marginTop: "0.4rem" }}
+                            value={entry.path}
+                            placeholder="Optional subfolder (leave empty for pack layout)"
+                            onChange={(event) => {
+                              const value = event.target.value;
+                              setSourceEntries((current) =>
+                                current.map((row, rowIndex) =>
+                                  rowIndex === index ? { ...row, path: value } : row,
+                                ),
+                              );
+                            }}
+                          />
+                        </>
                       ) : (
                         <>
                           <input
@@ -2422,22 +2550,25 @@ function BaselinesWorkbench({
                             Private repository
                           </label>
                           {entry.private ? (
-                            <input
-                              className="axis-input"
-                              style={{ marginTop: "0.4rem" }}
-                              type="password"
-                              autoComplete="off"
-                              value={entry.token ?? ""}
-                              placeholder="GitHub PAT"
-                              onChange={(event) => {
-                                const value = event.target.value;
-                                setSourceEntries((current) =>
-                                  current.map((row, rowIndex) =>
-                                    rowIndex === index ? { ...row, token: value } : row,
-                                  ),
-                                );
-                              }}
-                            />
+                            <>
+                              <input
+                                className="axis-input"
+                                style={{ marginTop: "0.4rem" }}
+                                type="password"
+                                autoComplete="off"
+                                value={entry.token ?? ""}
+                                placeholder="Fine-grained PAT for this repository"
+                                onChange={(event) => {
+                                  const value = event.target.value;
+                                  setSourceEntries((current) =>
+                                    current.map((row, rowIndex) =>
+                                      rowIndex === index ? { ...row, token: value } : row,
+                                    ),
+                                  );
+                                }}
+                              />
+                              <GitHubLeastPrivilegePatHelp />
+                            </>
                           ) : null}
                         </>
                       )}
@@ -2446,9 +2577,9 @@ function BaselinesWorkbench({
                           type="button"
                           className="axis-link"
                           disabled={!isSourceReady(entry)}
-                          onClick={() => void openExternalUrl(githubDirectoryUrl(entry))}
+                          onClick={() => void openExternalUrl(sourceOpenUrl(entry))}
                         >
-                          Open repository
+                          {isLocalSource(entry) ? "Open folder" : "Open repository"}
                         </button>
                         {builtin ? (
                           <span className="muted" style={{ fontSize: "0.75rem" }}>Always available</span>
@@ -2476,6 +2607,13 @@ function BaselinesWorkbench({
                   >
                     Add GitHub pack
                   </button>
+                  <button
+                    type="button"
+                    className="axis-btn"
+                    onClick={() => setSourceEntries((current) => [...current, newLocalSource()])}
+                  >
+                    Add local folder
+                  </button>
                   <button type="button" className="axis-btn" onClick={() => void loadReferences()} disabled={e8Loading}>
                     Reload packs
                   </button>
@@ -2490,13 +2628,17 @@ function BaselinesWorkbench({
                     <p className="baseline-pack-kicker">{pack.kind}</p>
                     <h2>{pack.title}</h2>
                     <p className="muted" style={{ margin: "0.25rem 0 0", fontSize: "0.75rem" }}>
-                      {pack.owner && pack.repo ? `${pack.owner}/${pack.repo}` : "Repository"}
+                      {pack.local
+                        ? pack.directoryUrl || "This machine"
+                        : pack.owner && pack.repo
+                          ? `${pack.owner}/${pack.repo}`
+                          : "Repository"}
                       {" · "}
                       {pack.references.length} {pack.references.length === 1 ? "policy" : "policies"}
                     </p>
                   </div>
                   <button type="button" className="axis-link" onClick={() => void openExternalUrl(pack.directoryUrl)}>
-                    Open repository
+                    {pack.local ? "Open folder" : "Open repository"}
                   </button>
                 </div>
                 {pack.error ? (
@@ -2595,10 +2737,10 @@ function BaselinesWorkbench({
               </dl>
               <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.75rem" }}>
                 <button type="button" className="axis-btn" onClick={() => void openExternalUrl(selectedReference.sourceUrl)}>
-                  Open source entry
+                  {selectedReference.downloadUrl.startsWith("https://") ? "Open source entry" : "Open file"}
                 </button>
                 <button type="button" className="axis-btn" onClick={() => void openExternalUrl(selectedReference.downloadUrl)}>
-                  Open raw export
+                  {selectedReference.downloadUrl.startsWith("https://") ? "Open raw export" : "Open export file"}
                 </button>
               </div>
             </section>

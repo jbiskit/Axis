@@ -22,7 +22,8 @@ sha2 = "0.10"
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 tauri-plugin-shell = "2"
-tokio = { version = "1", features = ["sync", "fs", "io-util", "time"] }
+rfd = "0.15"
+tokio = { version = "1", features = ["sync", "fs", "io-util", "time", "rt"] }
 urlencoding = "2"
 
 [profile.dev]

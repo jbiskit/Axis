@@ -84,10 +84,12 @@ pub async fn fetch_e8_baseline_references_cmd() -> Result<E8BaselineReferencesRe
             source: E8BaselineSource {
                 id: "e8-github".into(),
                 name: "ASD E8".into(),
+                kind: "github".into(),
                 owner: "ASD-Blueprint".into(),
                 repo: "ASD-Blueprint-for-Secure-Cloud".into(),
                 git_ref: "main".into(),
                 path: "static/content/files/intune-config-policies".into(),
+                local_path: String::new(),
                 repository_url: "https://github.com/ASD-Blueprint/ASD-Blueprint-for-Secure-Cloud".into(),
                 directory_url: "https://github.com/ASD-Blueprint/ASD-Blueprint-for-Secure-Cloud/tree/main/static/content/files/intune-config-policies".into(),
                 api_url: "https://api.github.com/repos/ASD-Blueprint/ASD-Blueprint-for-Secure-Cloud/contents/static/content/files/intune-config-policies?ref=main".into(),
@@ -132,6 +134,18 @@ pub async fn fetch_baseline_export_cmd(
             error: Some(error.to_string()),
         }),
     }
+}
+
+#[tauri::command]
+pub async fn pick_local_pack_folder_cmd() -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(|| {
+        rfd::FileDialog::new()
+            .set_title("Choose an Axis pack folder")
+            .pick_folder()
+            .map(|path| path.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|error| error.to_string())
 }
 
 #[derive(Debug, Serialize)]

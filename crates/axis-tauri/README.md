@@ -18,7 +18,10 @@ crates/
   axis-tauri/
     src-tauri/                      # Tauri backend + tauri.conf.json
     ui/                             # Vite + React + TypeScript frontend
+pack-template/                      # Axis pack layout (also published as jbiskit/axis-pack-template)
 ```
+
+Baseline packs: **Baselines → Manage sources**. GitHub uses the Contents API (PAT for private repos). Local folders stay on this machine. See the repo-root README **Baseline packs** section.
 
 ## Install (UI)
 

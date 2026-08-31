@@ -470,10 +470,12 @@ export type CapabilityStatus = {
 export type E8BaselineSource = {
   id: string;
   name: string;
+  kind?: "github" | "local" | string;
   owner: string;
   repo: string;
   gitRef: string;
   path: string;
+  localPath?: string;
   repositoryUrl: string;
   directoryUrl: string;
   apiUrl: string;
@@ -502,6 +504,10 @@ export type E8BaselineReferencesResponse = {
 export type BaselineReferenceSourceInput = {
   id?: string;
   name?: string;
+  /** `github` (default) or `local`. */
+  kind?: "github" | "local";
+  /** Absolute folder on this machine when `kind` is `local`. */
+  localPath?: string;
   /** GitHub repo URL, `owner/repo`, or a `/tree/ref/path` link. */
   url?: string;
   owner: string;
@@ -510,7 +516,7 @@ export type BaselineReferenceSourceInput = {
   path: string;
   /** When true, Axis sends the stored PAT with GitHub requests. */
   private?: boolean;
-  /** GitHub PAT for private repos. Stored locally on this machine only. */
+  /** GitHub PAT for this private repo. Stored locally on this machine only. Prefer a fine-grained token limited to the repository. */
   token?: string;
 };
 

@@ -76,13 +76,14 @@ Release builds check GitHub Releases on launch and can replace `axis.exe` in pla
 
 ## Authentication
 
-Delegated Graph only. No client secret and no app-only permissions. **One** public-client device-code login. Graph permissions are whatever Entra issued for that client — Axis does not offer a Read-only product mode.
+Delegated Graph for Intune. No client secrets. Graph permissions are whatever Entra issued for that client — Axis does not offer a Read-only product mode.
 
 | | Desktop |
 |---|----------|
 | Default | Device code (Microsoft Graph Command Line Tools public client) |
 | Tokens | Refresh token in **Windows Credential Manager** via keyring (`com.axis.desktop` / `entra-device-code`). Not in git. Access token in process memory. |
 | Optional env | `AXIS_DEVICE_CODE_CLIENT_ID`, `AXIS_AZURE_TENANT_ID` |
+| GitHub packs | Per-source PAT (prefer a fine-grained token limited to that repo). Public repos need none. |
 
 Desktop auth details: [`crates/axis-tauri/README.md`](crates/axis-tauri/README.md).
 
@@ -95,4 +96,17 @@ crates/
   axis-tauri/
     src-tauri/                     # Tauri backend + tauri.conf.json (do not run cargo tauri here)
     ui/                            # Vite + React desktop frontend
+pack-template/                     # Layout copied to https://github.com/jbiskit/axis-pack-template
 ```
+
+## Baseline packs
+
+Axis lists Intune Settings Catalog exports from **GitHub** (Contents API, not git clone) and from a **local folder**. Both use the same layout:
+
+- `axis-pack.json` — pack name and `paths.policies` / `paths.baselines`
+- `policies/` — `.json` / `.txt` catalog exports (import and device compare)
+- `baselines/` — reserved; not scanned as catalog policies
+
+If the manifest is missing, Axis scans the source path or folder root and still skips `baselines/`. Built-in ASD E8 still uses its GitHub path under the ASD Blueprint repo.
+
+To start a pack, use the public template [jbiskit/axis-pack-template](https://github.com/jbiskit/axis-pack-template) (same files as `pack-template/` in this repo). In Axis: **Baselines → Manage sources → Add GitHub pack** and paste the repo URL, or **Add local folder**. Packs are read-only in this version.
