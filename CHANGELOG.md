@@ -6,12 +6,13 @@ Notable user-facing changes to Axis are recorded here.
 
 ### Added
 
-- Custom baseline packs from a local folder (folder picker) or a GitHub repo, using a shared `axis-pack.json` layout (`policies/` for catalog exports, `baselines/` skipped).
+- Custom packs from a local folder or GitHub repo. Layout is platform-first (`windows/`, `macos/`, `android/`) with policies, scripts, compliance, Endpoint Security, Windows Update, and Autopilot under each OS.
+- Pack `baselines/` JSON that **selects** pack files (`includes`) instead of duplicating policies. Device compare expands catalog paths from that list.
 - Public pack template at [jbiskit/axis-pack-template](https://github.com/jbiskit/axis-pack-template).
 
 ### Changed
 
-- GitHub packs that point at a repo root honor `axis-pack.json` and scan `policies/` only. Built-in ASD E8 still uses its explicit Blueprint path.
+- GitHub packs that point at a repo root honor `axis-pack.json` and list each platform folder as its own category. Import stays Settings Catalog-only. Device compare can use catalog files or a baseline selection. Built-in ASD E8 still uses its explicit Blueprint path.
 
 ## [0.1.4] - 2026-08-30
 

@@ -492,6 +492,8 @@ export type E8BaselineReference = {
   source: string;
   sourceUrl: string;
   downloadUrl: string;
+  /** Catalog policies vs other pack objects. */
+  artifactKind?: string;
 };
 
 export type E8BaselineReferencesResponse = {

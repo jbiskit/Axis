@@ -1,0 +1,11 @@
+{
+  "id": "standard-intune-configuration",
+  "name": "Standard Intune configuration",
+  "description": "Example baseline that selects files already in this pack. Add your exports under windows/, macos/, or android/, then list their pack-relative paths here.",
+  "version": "0.1.0",
+  "includes": [
+    "windows/policies/sample-windows-catalog.json",
+    "macos/policies/sample-macos-catalog.json",
+    "windows/scripts/platform/sample-platform.ps1"
+  ]
+}

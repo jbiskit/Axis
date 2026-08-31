@@ -10,7 +10,13 @@ import {
   evaluateDeviceBaseline,
   type AppliedSettingOccurrence,
 } from "../../lib/baselines/deviceCompare";
-import { policyExportToBaseline } from "../../lib/baselines/policyExport";
+import {
+  baselineIncludePaths,
+  looksLikeAxisBaselineSelection,
+  policyExportToBaseline,
+} from "../../lib/baselines/policyExport";
+import { isBaselinePackArtifact, isCatalogPackArtifact, packRelativeDownloadUrl } from "../../lib/baselines/packArtifacts";
+import type { Baseline } from "../../lib/baselines/schema";
 import type { CheckResultStatus, DeviceBaselineEvaluation } from "../../lib/baselines/schema";
 import { leavesFromSettingRows } from "../../lib/baselines/settingLeaves";
 import {
@@ -195,30 +201,74 @@ export function DeviceBaselineCompare({ device }: { device: ManagedDeviceDetail 
           notes.push(`Failed to read ${applied.load.failed} policy setting collection${applied.load.failed === 1 ? "" : "s"}.`);
         }
 
+        const catalog = references.filter((reference) => isCatalogPackArtifact(reference.artifactKind));
+        const comparable = references.filter(
+          (reference) =>
+            isCatalogPackArtifact(reference.artifactKind) || isBaselinePackArtifact(reference.artifactKind),
+        );
         const targets =
           baselineKey === COMPARE_ALL_ID
-            ? references
-            : references.filter((reference) => `${reference.sourceId}:${reference.id}` === baselineKey);
+            ? catalog
+            : comparable.filter((reference) => `${reference.sourceId}:${reference.id}` === baselineKey);
         if (targets.length === 0) throw new Error("Pick a baseline export to compare.");
 
         const nextEvaluations: DeviceBaselineEvaluation[] = [];
         for (let index = 0; index < targets.length; index++) {
           const reference = targets[index]!;
           setProgress(`Comparing ${index + 1} of ${targets.length}: ${reference.name}`);
-          const exportResponse = await fetchBaselineExport(
-            reference.downloadUrl,
-            tokenForSource(sources, reference.sourceId),
-          );
+          const token = tokenForSource(sources, reference.sourceId);
+          const exportResponse = await fetchBaselineExport(reference.downloadUrl, token);
           if (exportResponse.error || exportResponse.document == null) {
             throw new Error(exportResponse.error ?? `Failed to download “${reference.name}”.`);
           }
-          const fileName = reference.downloadUrl.split("/").pop() ?? `${reference.name}.txt`;
-          const baseline = policyExportToBaseline(fileName, exportResponse.document, {
+          const originLabel = reference.sourceName || reference.source;
+          const options = {
             idPrefix: reference.sourceId || "asd",
-            source: "asd",
-            version: reference.version ?? "asd-blueprint-main",
-            originLabel: reference.sourceName || reference.source,
-          });
+            source: "custom" as const,
+            version: reference.version ?? "pack",
+            originLabel,
+          };
+          const document = exportResponse.document;
+          let baseline: Baseline;
+          if (looksLikeAxisBaselineSelection(document)) {
+            const packRoot = sources.find((row) => (row.id ?? "") === reference.sourceId)?.localPath;
+            const included = baselineIncludePaths(document).filter((path) =>
+              /\/policies\//i.test(`/${path}`),
+            );
+            if (included.length === 0) {
+              throw new Error(
+                `Baseline “${reference.name}” has no Settings Catalog includes under policies/.`,
+              );
+            }
+            const parts: Baseline[] = [];
+            for (const rel of included) {
+              const url = packRelativeDownloadUrl(reference.downloadUrl, rel, packRoot);
+              setProgress(`Comparing ${index + 1} of ${targets.length}: ${reference.name} (${rel})`);
+              const includedExport = await fetchBaselineExport(url, token);
+              if (includedExport.error || includedExport.document == null) {
+                throw new Error(includedExport.error ?? `Failed to download included file “${rel}”.`);
+              }
+              parts.push(
+                policyExportToBaseline(rel.split("/").pop() ?? rel, includedExport.document, options),
+              );
+            }
+            const row = document as { id?: string; name?: string; description?: string; version?: string };
+            baseline = {
+              id: typeof row.id === "string" ? row.id : reference.id,
+              name: typeof row.name === "string" ? row.name : reference.name,
+              description: typeof row.description === "string" ? row.description : "",
+              version: typeof row.version === "string" ? row.version : options.version,
+              source: "custom",
+              checks: parts.flatMap((part) => part.checks),
+            };
+          } else {
+            const fileName = reference.downloadUrl.split(/[/\\]/).pop() ?? `${reference.name}.txt`;
+            baseline = policyExportToBaseline(fileName, document, {
+              ...options,
+              source: "asd",
+              version: reference.version ?? "asd-blueprint-main",
+            });
+          }
           nextEvaluations.push(evaluateDeviceBaseline(baseline, device, applied.occurrences, notes));
         }
         setEvaluations(nextEvaluations);
@@ -268,14 +318,28 @@ export function DeviceBaselineCompare({ device }: { device: ManagedDeviceDetail 
     return combined.results.filter((result) => filters.has(normalizeFilter(result.status)));
   }, [combined, filters]);
 
+  const comparableReferences = useMemo(
+    () =>
+      references.filter(
+        (reference) =>
+          isCatalogPackArtifact(reference.artifactKind) || isBaselinePackArtifact(reference.artifactKind),
+      ),
+    [references],
+  );
+
+  const catalogReferences = useMemo(
+    () => references.filter((reference) => isCatalogPackArtifact(reference.artifactKind)),
+    [references],
+  );
+
   const busy = Boolean(progress);
   const referenceGroups = useMemo(() => {
     const groups: Array<{
       id: string;
       title: string;
-      references: typeof references;
+      references: typeof comparableReferences;
     }> = [];
-    for (const reference of references) {
+    for (const reference of comparableReferences) {
       let group = groups.find((entry) => entry.id === reference.sourceId);
       if (!group) {
         group = { id: reference.sourceId, title: reference.sourceName, references: [] };
@@ -284,14 +348,14 @@ export function DeviceBaselineCompare({ device }: { device: ManagedDeviceDetail 
       group.references.push(reference);
     }
     return groups;
-  }, [references]);
+  }, [comparableReferences]);
 
   return (
     <section className="stack">
       <p className="muted" style={{ margin: 0 }}>
-        Compare this device against a baseline export from the GitHub packs configured under
-        Baselines. Axis reads the policies Intune reports as applied, loads their Settings Catalog
-        values, and grades each baseline setting. Private GitHub packs use the PAT stored with that source.
+        Compare this device against a Settings Catalog export or a pack baseline that selects those
+        exports. Scripts, compliance, Endpoint Security, Windows Update, and Autopilot files in a
+        pack are listed under Baselines only; they are not graded here.
       </p>
       <div className="device-toolbar baseline-compare-toolbar">
         <label className="device-field">
@@ -299,7 +363,7 @@ export function DeviceBaselineCompare({ device }: { device: ManagedDeviceDetail 
           <select
             className="axis-input"
             value={selectedId}
-            disabled={referencesLoading || busy || references.length === 0}
+            disabled={referencesLoading || busy || comparableReferences.length === 0}
             onChange={(event) => {
               const next = event.target.value;
               setSelectedId(next);
@@ -307,7 +371,9 @@ export function DeviceBaselineCompare({ device }: { device: ManagedDeviceDetail 
             }}
           >
             <option value="">{referencesLoading ? "Loading baselines…" : "Select a baseline…"}</option>
-            {references.length > 1 ? <option value={COMPARE_ALL_ID}>Compare all ({references.length})</option> : null}
+            {comparableReferences.length > 1 ? (
+              <option value={COMPARE_ALL_ID}>Compare all catalog policies ({catalogReferences.length})</option>
+            ) : null}
             {referenceGroups.map((group) => (
               <optgroup key={group.id} label={group.title}>
                 {group.references.map((reference) => (
