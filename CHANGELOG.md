@@ -6,8 +6,9 @@ Notable user-facing changes to Axis are recorded here.
 
 ### Added
 
-- Custom packs from a local folder or GitHub repo. Layout is platform-first (`windows/`, `macos/`, `android/`) with policies, scripts, compliance, Endpoint Security, Windows Update, and Autopilot under each OS.
+- Custom packs from a local folder or GitHub repo. Layout is platform-first (`windows/` in the public template for now) with policies, scripts, compliance, Endpoint Security, Windows Update, and Autopilot under each OS.
 - Pack `baselines/` JSON that **selects** pack files (`includes`) instead of duplicating policies. Device compare expands catalog paths from that list.
+- Two Windows samples in the pack template from [OpenIntuneBaseline](https://github.com/SkipToTheEndpoint/OpenIntuneBaseline) (BitLocker catalog policy and Auto Timezone script; GPL-3.0).
 - Public pack template at [jbiskit/axis-pack-template](https://github.com/jbiskit/axis-pack-template).
 
 ### Changed

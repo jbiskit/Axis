@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "sourceLabel": "My Axis pack",
   "paths": {
-    "platforms": ["windows", "macos", "android"],
+    "platforms": ["windows"],
     "baselines": "baselines"
   }
 }
