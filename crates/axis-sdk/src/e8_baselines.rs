@@ -296,6 +296,10 @@ fn resolve_artifact_scans(configured_path: &str, pack: Option<&AxisPackManifest>
         }
         if platform == "windows" {
             scans.push((
+                format!("{platform}/group-policy"),
+                format!("{platform}/group-policy"),
+            ));
+            scans.push((
                 format!("{platform}/windows-update"),
                 format!("{platform}/windows-update"),
             ));
@@ -1540,6 +1544,9 @@ mod tests {
         }));
         assert!(scans.iter().any(|(kind, path)| {
             kind == "windows/enrollment-autopilot" && path == "windows/enrollment/autopilot"
+        }));
+        assert!(scans.iter().any(|(kind, path)| {
+            kind == "windows/group-policy" && path == "windows/group-policy"
         }));
         assert!(scans.iter().any(|(kind, path)| kind == "baseline" && path == "baselines"));
     }

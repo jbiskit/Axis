@@ -1,6 +1,13 @@
 import { useMemo, useState } from "react";
 import { STALE_DEVICE_DAYS, type ManagedDeviceSummary } from "../types/glance";
+import {
+  compareBool,
+  compareIso,
+  compareText,
+  sortRows,
+} from "../lib/listSelection";
 import { PageHeader } from "./ui/PageChrome";
+import { SortableTh, useColumnSort } from "./workbench/shared";
 
 const STALE_SYNC_MS = STALE_DEVICE_DAYS * 24 * 60 * 60 * 1000;
 
@@ -73,6 +80,9 @@ export function DevicesList({
   const [osFilter, setOsFilter] = useState("all");
   const [complianceFilter, setComplianceFilter] = useState("all");
   const [attentionFilter, setAttentionFilter] = useState<AttentionFilter>("");
+  const { sort, toggle: toggleSort } = useColumnSort<
+    "name" | "user" | "os" | "compliance" | "lastCheckIn" | "model" | "encrypted"
+  >("name");
   const now = useMemo(() => Date.now(), [devices]);
 
   const osOptions = useMemo(() => {
@@ -91,7 +101,7 @@ export function DevicesList({
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    return devices.filter((device) => {
+    const rows = devices.filter((device) => {
       if (
         osFilter !== "all" &&
         (device.operatingSystem?.trim() || "Unknown") !== osFilter
@@ -124,7 +134,32 @@ export function DevicesList({
         .toLowerCase();
       return haystack.includes(needle);
     });
-  }, [attentionFilter, complianceFilter, devices, now, osFilter, query]);
+    return sortRows(rows, sort.dir, (a, b) => {
+      switch (sort.key) {
+        case "user":
+          return compareText(a.userPrincipalName, b.userPrincipalName) || compareText(a.deviceName, b.deviceName);
+        case "os":
+          return (
+            compareText(a.operatingSystem, b.operatingSystem) ||
+            compareText(a.osVersion, b.osVersion) ||
+            compareText(a.deviceName, b.deviceName)
+          );
+        case "compliance":
+          return compareText(a.complianceState, b.complianceState) || compareText(a.deviceName, b.deviceName);
+        case "lastCheckIn":
+          return compareIso(a.lastSyncDateTime, b.lastSyncDateTime) || compareText(a.deviceName, b.deviceName);
+        case "model":
+          return (
+            compareText([a.manufacturer, a.model].filter(Boolean).join(" "), [b.manufacturer, b.model].filter(Boolean).join(" ")) ||
+            compareText(a.deviceName, b.deviceName)
+          );
+        case "encrypted":
+          return compareBool(a.isEncrypted, b.isEncrypted) || compareText(a.deviceName, b.deviceName);
+        default:
+          return compareText(a.deviceName, b.deviceName) || compareText(a.id, b.id);
+      }
+    });
+  }, [attentionFilter, complianceFilter, devices, now, osFilter, query, sort]);
 
   const countLabel = loading
     ? "Loading…"
@@ -299,13 +334,13 @@ export function DevicesList({
             <table className="axis-table">
               <thead>
                 <tr>
-                  <th>Name</th>
-                  <th>User</th>
-                  <th>OS</th>
-                  <th>Compliance</th>
-                  <th>Last check-in</th>
-                  <th>Model</th>
-                  <th>Encrypted</th>
+                  <SortableTh column="name" label="Name" sort={sort} onSort={toggleSort} />
+                  <SortableTh column="user" label="User" sort={sort} onSort={toggleSort} />
+                  <SortableTh column="os" label="OS" sort={sort} onSort={toggleSort} />
+                  <SortableTh column="compliance" label="Compliance" sort={sort} onSort={toggleSort} />
+                  <SortableTh column="lastCheckIn" label="Last check-in" sort={sort} onSort={toggleSort} />
+                  <SortableTh column="model" label="Model" sort={sort} onSort={toggleSort} />
+                  <SortableTh column="encrypted" label="Encrypted" sort={sort} onSort={toggleSort} />
                 </tr>
               </thead>
               <tbody>

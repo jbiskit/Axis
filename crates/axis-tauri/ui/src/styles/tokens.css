@@ -417,6 +417,32 @@ body {
   color: var(--axis-muted);
 }
 
+.axis-th-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.axis-th-sort:hover,
+.axis-th-sort[data-active="true"] {
+  color: var(--axis-fg);
+}
+
+.axis-th-sort-mark {
+  font-size: 0.7em;
+  opacity: 0.75;
+}
+
 .axis-table td {
   border-bottom: 1px solid var(--axis-border);
   padding: 0.55rem 0.75rem;

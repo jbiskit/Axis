@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { TenantGlance } from "../types/glance";
 import type {
   BaselineReferenceSourceInput,
   CatalogPolicySummary,
   E8BaselineReference,
   MobileAppSummary,
+  PackExportProgress,
+  PackExportResult,
   TenantScriptSummary,
   WindowsUpdatePolicy,
   AppProtectionPolicy,
@@ -15,9 +18,16 @@ import { useDocumentTabs } from "../hooks/useDocumentTabs";
 import { matchesIntunePlatform, platformFromSearchParam, INTUNE_PLATFORM_LABELS } from "../lib/platforms";
 import { appKindFromSearchParam, APP_KIND_LABELS } from "../lib/appKinds";
 import {
+  compareBool,
+  compareCatalogPolicy,
+  compareIso,
+  compareNumber,
+  compareText,
   matchesAppFilters,
   matchesCatalogPolicyFilters,
   platformFilterOptionsFromList,
+  sortRows,
+  type CatalogPolicySortKey,
 } from "../lib/listSelection";
 import { hrefWithParam, navigate, type AppRoute } from "../lib/route";
 import {
@@ -43,6 +53,7 @@ import {
   fetchBaselineExport,
   fetchGroupPolicyConfigurations,
   createSettingsCatalogPolicy,
+  exportTenantPack,
   openExternalUrl,
   pickLocalPackFolder,
   fetchStoreApps,
@@ -67,20 +78,22 @@ import {
   sourceOpenUrl,
   tokenForSource,
 } from "../lib/baselines/sources";
-import { normalizeIntunePolicyExport } from "../lib/baselines/policyExport";
+import { normalizeIntunePolicyExport, catalogDescriptionFromPolicy, catalogPlatformFromPolicy, catalogSettingsFromPolicy } from "../lib/baselines/policyExport";
 import { groupPackArtifacts, isCatalogPackArtifact, packArtifactKindLabel } from "../lib/baselines/packArtifacts";
 import { DevicesList } from "./DevicesList";
 import { DeviceDetailView, type DeviceDetailCacheEntry } from "./DeviceDetailView";
 import { SettingsSearchView } from "./SettingsSearchView";
 import { SettingsCatalogWorkbench } from "./SettingsCatalogWorkbench";
 import { TenantOverview } from "./TenantOverview";
+import { GraphObjectInspector } from "./workbench/GraphObjectInspector";
 import { PageHeader, SignalCard } from "./ui/PageChrome";
 import { CreateCompliancePolicyDialog } from "./workbench/CreateCompliancePolicyDialog";
 import { CreateScriptDialog, type ScriptFamily } from "./workbench/CreateScriptDialog";
 import { DocumentTabs, InspectorWithDocumentTabs } from "./workbench/DocumentTabs";
-import { GraphObjectInspector } from "./workbench/GraphObjectInspector";
+import { useCatalogFileImport } from "./workbench/CatalogFileImportDialog";
+import { useScriptFileImport } from "./workbench/ScriptFileImportDialog";
 import {
-  BulkDeleteAction,
+  BulkListActions,
   listTargetProps,
   ObjectListMenuHost,
 } from "./workbench/ObjectListMenu";
@@ -98,6 +111,8 @@ import {
   InspectorEmpty,
   InspectorErrorBoundary,
   SearchableTable,
+  SortableTh,
+  useColumnSort,
   useListSearchState,
   WorkspaceSplit,
 } from "./workbench/shared";
@@ -541,6 +556,8 @@ export function IntuneWorkspace({
       <BaselinesWorkbench
         selectedId={search.get("check")}
         onSelect={(id) => navigate(hrefWithParam(pathname, search, "check", id))}
+        signedIn={signedIn}
+        organizationName={glance?.organizationName ?? null}
       />
     );
   }
@@ -710,6 +727,18 @@ function WindowsUpdateWorkbench({
 }) {
   const [overlay, setOverlay] = useState<WindowsUpdatePolicy | null>(null);
   const listed = useMemo(() => withTransientItem(items, overlay), [items, overlay]);
+  const { sort, toggle: toggleSort } = useColumnSort<"name" | "family" | "modified">("name");
+  const sorted = useMemo(
+    () =>
+      sortRows(listed, sort.dir, (a, b) => {
+        if (sort.key === "family") return compareText(a.family, b.family) || compareText(a.name, b.name);
+        if (sort.key === "modified") {
+          return compareIso(a.lastModifiedDateTime, b.lastModifiedDateTime) || compareText(a.name, b.name);
+        }
+        return compareText(a.name, b.name) || compareText(a.id, b.id);
+      }),
+    [listed, sort],
+  );
   const selected = listed.find((item) => item.id === selectedId);
   const titleFor = useCallback(
     (id: string) => listed.find((item) => item.id === id)?.name ?? id,
@@ -747,7 +776,7 @@ function WindowsUpdateWorkbench({
           <CompactObjectList
             title={family ?? "Windows Update"}
             description="Select a profile to inspect it here."
-            items={listed.map((item) => ({
+            items={sorted.map((item) => ({
               id: item.id,
               title: item.name,
               kind: `windowsUpdate:${item.family}`,
@@ -778,13 +807,13 @@ function WindowsUpdateWorkbench({
               <table className="axis-table">
                 <thead>
                   <tr>
-                    <th>Name</th>
-                    <th>Family</th>
-                    <th>Modified</th>
+                    <SortableTh column="name" label="Name" sort={sort} onSort={toggleSort} />
+                    <SortableTh column="family" label="Family" sort={sort} onSort={toggleSort} />
+                    <SortableTh column="modified" label="Modified" sort={sort} onSort={toggleSort} />
                   </tr>
                 </thead>
                 <tbody>
-                  {listed.map((item) => (
+                  {sorted.map((item) => (
                     <tr
                       key={item.id}
                       className="row-link"
@@ -855,6 +884,18 @@ function AppProtectionWorkbench({
 }) {
   const [overlay, setOverlay] = useState<AppProtectionPolicy | null>(null);
   const listed = useMemo(() => withTransientItem(items, overlay), [items, overlay]);
+  const { sort, toggle: toggleSort } = useColumnSort<"name" | "type" | "modified">("name");
+  const sorted = useMemo(
+    () =>
+      sortRows(listed, sort.dir, (a, b) => {
+        if (sort.key === "type") return compareText(a.odataType, b.odataType) || compareText(a.displayName, b.displayName);
+        if (sort.key === "modified") {
+          return compareIso(a.lastModifiedDateTime, b.lastModifiedDateTime) || compareText(a.displayName, b.displayName);
+        }
+        return compareText(a.displayName, b.displayName) || compareText(a.id, b.id);
+      }),
+    [listed, sort],
+  );
   const selected = listed.find((item) => item.id === selectedId);
   const titleFor = useCallback(
     (id: string) => listed.find((item) => item.id === id)?.displayName ?? id,
@@ -891,7 +932,7 @@ function AppProtectionWorkbench({
             title="App protection"
             description="Select a policy to inspect it here."
             objectKind="appProtection"
-            items={listed.map((item) => ({
+            items={sorted.map((item) => ({
               id: item.id,
               title: item.displayName,
               meta: item.odataType ?? undefined,
@@ -921,12 +962,13 @@ function AppProtectionWorkbench({
               <table className="axis-table">
                 <thead>
                   <tr>
-                    <th>Name</th>
-                    <th>Type</th>
+                    <SortableTh column="name" label="Name" sort={sort} onSort={toggleSort} />
+                    <SortableTh column="type" label="Type" sort={sort} onSort={toggleSort} />
+                    <SortableTh column="modified" label="Modified" sort={sort} onSort={toggleSort} />
                   </tr>
                 </thead>
                 <tbody>
-                  {listed.map((item) => (
+                  {sorted.map((item) => (
                     <tr
                       key={item.id}
                       className="row-link"
@@ -935,6 +977,7 @@ function AppProtectionWorkbench({
                     >
                       <td>{item.displayName}</td>
                       <td className="muted">{item.odataType ?? "—"}</td>
+                      <td className="muted">{formatRelative(item.lastModifiedDateTime)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -993,6 +1036,7 @@ function PoliciesHub({
 }) {
   const { query, setQuery, assignedFilter, setAssignedFilter, platformFilter, setPlatformFilter } =
     useListSearchState();
+  const { sort, toggle: toggleSort } = useColumnSort<CatalogPolicySortKey>("name");
   const [overlay, setOverlay] = useState<CatalogPolicySummary | null>(null);
   const listed = useMemo(() => withTransientItem(items, overlay), [items, overlay]);
   const scoped = platform
@@ -1002,9 +1046,12 @@ function PoliciesHub({
     () => platformFilterOptionsFromList(scoped.map((item) => item.platforms)),
     [scoped],
   );
-  const filtered = scoped.filter((item) =>
-    matchesCatalogPolicyFilters(item, query, assignedFilter, platformFilter),
-  );
+  const filtered = useMemo(() => {
+    const rows = scoped.filter((item) =>
+      matchesCatalogPolicyFilters(item, query, assignedFilter, platformFilter),
+    );
+    return sortRows(rows, sort.dir, (a, b) => compareCatalogPolicy(a, b, sort.key));
+  }, [assignedFilter, platformFilter, query, scoped, sort]);
   const selected =
     filtered.find((item) => item.id === selectedId) ?? scoped.find((item) => item.id === selectedId);
   const assigned = scoped.filter((item) => item.isAssigned).length;
@@ -1014,7 +1061,7 @@ function PoliciesHub({
   const bulkPolicies = filtered.filter((item) => selection.bulkTargetIds.includes(item.id));
   const showBulk = selection.bulkEditorOpen && bulkPolicies.length > 0;
   const bulkDelete = (
-    <BulkDeleteAction
+    <BulkListActions
       targets={checkedPolicies.map((item) => ({
         id: item.id,
         title: item.name,
@@ -1035,6 +1082,22 @@ function PoliciesHub({
       items.find((item) => item.id === id)?.name ??
       id,
     [items, scoped],
+  );
+  const catalogImport = useCatalogFileImport((created) => {
+    const first = created[0];
+    if (first) {
+      setOverlay({
+        id: first.id,
+        name: first.name,
+        isAssigned: false,
+      });
+    }
+    window.setTimeout(() => onRefresh(), 0);
+  }, platform === "macos" ? "macos" : "windows");
+  const importButton = (
+    <button type="button" className="axis-btn" onClick={() => void catalogImport.openPicker()}>
+      Import
+    </button>
   );
   return (
     <>
@@ -1085,6 +1148,7 @@ function PoliciesHub({
               onRefresh={onRefresh}
               loading={loading}
               error={error}
+              actions={importButton}
               checkedIds={selection.checkedIds}
               onToggleChecked={selection.toggle}
               query={query}
@@ -1113,9 +1177,12 @@ function PoliciesHub({
               onRefresh={onRefresh}
               refreshing={loading}
               actions={
-                <button type="button" className="axis-btn" onClick={onRefresh} disabled={loading}>
-                  {loading ? "Refreshing…" : "Refresh"}
-                </button>
+                <div className="device-actions">
+                  {importButton}
+                  <button type="button" className="axis-btn" onClick={onRefresh} disabled={loading}>
+                    {loading ? "Refreshing…" : "Refresh"}
+                  </button>
+                </div>
               }
             />
             {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
@@ -1155,11 +1222,11 @@ function PoliciesHub({
                         onChange={selection.toggleAll}
                       />
                     </th>
-                    <th>Name</th>
-                    <th>Platform</th>
-                    <th>Settings</th>
-                    <th>Assigned</th>
-                    <th>Last modified</th>
+                    <SortableTh column="name" label="Name" sort={sort} onSort={toggleSort} />
+                    <SortableTh column="platform" label="Platform" sort={sort} onSort={toggleSort} />
+                    <SortableTh column="settings" label="Settings" sort={sort} onSort={toggleSort} />
+                    <SortableTh column="assigned" label="Assigned" sort={sort} onSort={toggleSort} />
+                    <SortableTh column="modified" label="Last modified" sort={sort} onSort={toggleSort} />
                   </tr>
                 </thead>
                 <tbody>
@@ -1227,6 +1294,7 @@ function PoliciesHub({
         selection.clear();
       }}
     />
+    {catalogImport.dialog}
     </>
   );
 }
@@ -1262,6 +1330,7 @@ function NamedPolicyList({
 }) {
   const { query, setQuery, assignedFilter, setAssignedFilter, platformFilter, setPlatformFilter } =
     useListSearchState();
+  const { sort, toggle: toggleSort } = useColumnSort<CatalogPolicySortKey>("name");
   const [overlay, setOverlay] = useState<CatalogPolicySummary | null>(null);
   const [creating, setCreating] = useState(false);
   const canCreate = objectKind === "compliancePolicy";
@@ -1276,9 +1345,12 @@ function NamedPolicyList({
     () => platformFilterOptionsFromList(listed.map((item) => item.platforms)),
     [listed],
   );
-  const filtered = listed.filter((item) =>
-    matchesCatalogPolicyFilters(item, query, assignedFilter, platformFilter),
-  );
+  const filtered = useMemo(() => {
+    const rows = listed.filter((item) =>
+      matchesCatalogPolicyFilters(item, query, assignedFilter, platformFilter),
+    );
+    return sortRows(rows, sort.dir, (a, b) => compareCatalogPolicy(a, b, sort.key));
+  }, [assignedFilter, listed, platformFilter, query, sort]);
   const filteredIds = useMemo(() => filtered.map((item) => item.id), [filtered]);
   const selection = useCheckedIds(filteredIds);
   const checkedPolicies = filtered.filter((item) => selection.checkedIds.has(item.id));
@@ -1286,7 +1358,7 @@ function NamedPolicyList({
   const showBulk = selection.bulkEditorOpen && bulkPolicies.length > 0;
   const inspectorOpen = Boolean(selected);
   const bulkDelete = (
-    <BulkDeleteAction
+    <BulkListActions
       targets={checkedPolicies.map((item) => ({
         id: item.id,
         title: item.name,
@@ -1423,11 +1495,11 @@ function NamedPolicyList({
                         onChange={selection.toggleAll}
                       />
                     </th>
-                    <th>Name</th>
-                    <th>Platform</th>
-                    <th>Settings</th>
-                    <th>Assigned</th>
-                    <th>Last modified</th>
+                    <SortableTh column="name" label="Name" sort={sort} onSort={toggleSort} />
+                    <SortableTh column="platform" label="Platform" sort={sort} onSort={toggleSort} />
+                    <SortableTh column="settings" label="Settings" sort={sort} onSort={toggleSort} />
+                    <SortableTh column="assigned" label="Assigned" sort={sort} onSort={toggleSort} />
+                    <SortableTh column="modified" label="Last modified" sort={sort} onSort={toggleSort} />
                   </tr>
                 </thead>
                 <tbody>
@@ -1538,7 +1610,30 @@ function AppsList({
   onRefresh: () => void;
 }) {
   const { query, setQuery, assignedFilter, setAssignedFilter } = useListSearchState();
-  const filtered = items.filter((item) => matchesAppFilters(item, query, assignedFilter));
+  const { sort, toggle: toggleSort } = useColumnSort<
+    "name" | "type" | "platform" | "publisher" | "version" | "assigned" | "modified"
+  >("name");
+  const filtered = useMemo(() => {
+    const rows = items.filter((item) => matchesAppFilters(item, query, assignedFilter));
+    return sortRows(rows, sort.dir, (a, b) => {
+      switch (sort.key) {
+        case "type":
+          return compareText(a.appTypeLabel ?? a.kind, b.appTypeLabel ?? b.kind) || compareText(a.displayName, b.displayName);
+        case "platform":
+          return compareText(a.platform, b.platform) || compareText(a.displayName, b.displayName);
+        case "publisher":
+          return compareText(a.publisher, b.publisher) || compareText(a.displayName, b.displayName);
+        case "version":
+          return compareText(a.displayVersion, b.displayVersion) || compareText(a.displayName, b.displayName);
+        case "assigned":
+          return compareBool(a.isAssigned, b.isAssigned) || compareText(a.displayName, b.displayName);
+        case "modified":
+          return compareIso(a.lastModifiedDateTime, b.lastModifiedDateTime) || compareText(a.displayName, b.displayName);
+        default:
+          return compareText(a.displayName, b.displayName) || compareText(a.id, b.id);
+      }
+    });
+  }, [assignedFilter, items, query, sort]);
   const selected = items.find((item) => item.id === selectedId);
   const filteredIds = useMemo(() => filtered.map((item) => item.id), [filtered]);
   const selection = useCheckedIds(filteredIds);
@@ -1562,6 +1657,15 @@ function AppsList({
               count={checkedApps.length}
               onEdit={selection.openBulkEditor}
               onClear={selection.clear}
+              extra={
+                <BulkListActions
+                  targets={checkedApps.map((item) => ({
+                    id: item.id,
+                    title: item.displayName,
+                    kind: "mobileApp",
+                  }))}
+                />
+              }
             />
             <LoadedInventoryBanner truncated={truncated} />
             <CompactObjectList
@@ -1612,6 +1716,15 @@ function AppsList({
               count={checkedApps.length}
               onEdit={selection.openBulkEditor}
               onClear={selection.clear}
+              extra={
+                <BulkListActions
+                  targets={checkedApps.map((item) => ({
+                    id: item.id,
+                    title: item.displayName,
+                    kind: "mobileApp",
+                  }))}
+                />
+              }
             />
             <SearchableTable
               query={query}
@@ -1633,12 +1746,13 @@ function AppsList({
                         onChange={selection.toggleAll}
                       />
                     </th>
-                    <th>Name</th>
-                    <th>Type</th>
-                    <th>Platform</th>
-                    <th>Publisher</th>
-                    <th>Version</th>
-                    <th>Assigned</th>
+                    <SortableTh column="name" label="Name" sort={sort} onSort={toggleSort} />
+                    <SortableTh column="type" label="Type" sort={sort} onSort={toggleSort} />
+                    <SortableTh column="platform" label="Platform" sort={sort} onSort={toggleSort} />
+                    <SortableTh column="publisher" label="Publisher" sort={sort} onSort={toggleSort} />
+                    <SortableTh column="version" label="Version" sort={sort} onSort={toggleSort} />
+                    <SortableTh column="assigned" label="Assigned" sort={sort} onSort={toggleSort} />
+                    <SortableTh column="modified" label="Last modified" sort={sort} onSort={toggleSort} />
                   </tr>
                 </thead>
                 <tbody>
@@ -1661,6 +1775,7 @@ function AppsList({
                       <td className="muted">{item.publisher ?? "—"}</td>
                       <td className="muted">{item.displayVersion ?? "—"}</td>
                       <td className="muted">{item.isAssigned ? "Yes" : "No"}</td>
+                      <td className="muted">{formatRelative(item.lastModifiedDateTime)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -1728,6 +1843,9 @@ function ScriptsWorkbench({
     scope === "remediation" ? "Remediations" : scope === "compliance" ? "Compliance scripts" : "Scripts";
   const family: ScriptFamily = scope;
   const { query, setQuery, assignedFilter, setAssignedFilter } = useListSearchState();
+  const { sort, toggle: toggleSort } = useColumnSort<
+    "name" | "kind" | "runAs" | "assignments" | "modified"
+  >("name");
   const [kindFilter, setKindFilter] = useState<ScriptKindFilter>("all");
   const [creating, setCreating] = useState(false);
   const [createdOverlay, setCreatedOverlay] = useState<TenantScriptSummary | null>(null);
@@ -1737,8 +1855,24 @@ function ScriptsWorkbench({
     return [createdOverlay, ...scoped];
   }, [createdOverlay, scoped]);
   const filtered = useMemo(
-    () => visible.filter((item) => matchesScriptFilters(item, query, assignedFilter, kindFilter)),
-    [visible, query, assignedFilter, kindFilter],
+    () => {
+      const rows = visible.filter((item) => matchesScriptFilters(item, query, assignedFilter, kindFilter));
+      return sortRows(rows, sort.dir, (a, b) => {
+        switch (sort.key) {
+          case "kind":
+            return compareText(tenantScriptKindLabel(a.kind), tenantScriptKindLabel(b.kind)) || compareText(a.displayName, b.displayName);
+          case "runAs":
+            return compareText(a.runAsAccount, b.runAsAccount) || compareText(a.displayName, b.displayName);
+          case "assignments":
+            return compareNumber(a.assignmentCount, b.assignmentCount) || compareText(a.displayName, b.displayName);
+          case "modified":
+            return compareIso(a.lastModifiedDateTime, b.lastModifiedDateTime) || compareText(a.displayName, b.displayName);
+          default:
+            return compareText(a.displayName, b.displayName) || compareText(a.id, b.id);
+        }
+      });
+    },
+    [visible, query, assignedFilter, kindFilter, sort],
   );
   const selected =
     visible.find((item) => item.id === selectedId) ??
@@ -1784,7 +1918,7 @@ function ScriptsWorkbench({
       onEdit={selection.openBulkEditor}
       onClear={selection.clear}
       extra={
-        <BulkDeleteAction
+        <BulkListActions
           targets={checkedScripts.map((item) => ({
             id: item.id,
             title: item.displayName,
@@ -1811,6 +1945,16 @@ function ScriptsWorkbench({
   const createButton = (
     <button type="button" className="axis-btn axis-btn-primary" onClick={() => setCreating(true)}>
       New
+    </button>
+  );
+  const scriptImport = useScriptFileImport(family, (created) => {
+    const first = created[0];
+    if (first) setCreatedOverlay(first);
+    window.setTimeout(() => onRefresh(), 0);
+  });
+  const importButton = (
+    <button type="button" className="axis-btn" onClick={() => void scriptImport.openPicker()}>
+      Import
     </button>
   );
   const searchPlaceholder =
@@ -1880,7 +2024,12 @@ function ScriptsWorkbench({
               onRefresh={onRefresh}
               loading={loading}
               error={error}
-              actions={createButton}
+              actions={
+                <div className="device-actions">
+                  {importButton}
+                  {createButton}
+                </div>
+              }
               checkedIds={selection.checkedIds}
               onToggleChecked={selection.toggle}
               query={query}
@@ -1907,6 +2056,7 @@ function ScriptsWorkbench({
               refreshing={loading}
               actions={
                 <>
+                  {importButton}
                   {createButton}
                   <button type="button" className="axis-btn" onClick={onRefresh} disabled={loading}>
                     Refresh
@@ -1937,10 +2087,11 @@ function ScriptsWorkbench({
                         onChange={selection.toggleAll}
                       />
                     </th>
-                    <th>Name</th>
-                    <th>Kind</th>
-                    <th>Run as</th>
-                    <th>Assignments</th>
+                    <SortableTh column="name" label="Name" sort={sort} onSort={toggleSort} />
+                    <SortableTh column="kind" label="Kind" sort={sort} onSort={toggleSort} />
+                    <SortableTh column="runAs" label="Run as" sort={sort} onSort={toggleSort} />
+                    <SortableTh column="assignments" label="Assignments" sort={sort} onSort={toggleSort} />
+                    <SortableTh column="modified" label="Last modified" sort={sort} onSort={toggleSort} />
                   </tr>
                 </thead>
                 <tbody>
@@ -1966,6 +2117,7 @@ function ScriptsWorkbench({
                       <td className="muted">{tenantScriptKindLabel(item.kind)}</td>
                       <td className="muted">{item.runAsAccount ?? "—"}</td>
                       <td className="muted">{item.assignmentCount ?? "—"}</td>
+                      <td className="muted">{formatRelative(item.lastModifiedDateTime)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -2037,6 +2189,7 @@ function ScriptsWorkbench({
         onRefresh();
       }}
     />
+    {scriptImport.dialog}
     </>
   );
 }
@@ -2061,6 +2214,29 @@ function AutopilotWorkbench({
     () => withTransientItem(profiles.items, profileOverlay),
     [profiles.items, profileOverlay],
   );
+  const { sort: deviceSort, toggle: toggleDeviceSort } = useColumnSort<"serial" | "tag" | "state">("serial");
+  const { sort: profileSort, toggle: toggleProfileSort } = useColumnSort<"name" | "modified">("name");
+  const sortedDevices = useMemo(
+    () =>
+      sortRows(devices.items, deviceSort.dir, (a, b) => {
+        const aName = a.serialNumber ?? a.displayName ?? a.id;
+        const bName = b.serialNumber ?? b.displayName ?? b.id;
+        if (deviceSort.key === "tag") return compareText(a.groupTag, b.groupTag) || compareText(aName, bName);
+        if (deviceSort.key === "state") return compareText(a.enrollmentState, b.enrollmentState) || compareText(aName, bName);
+        return compareText(aName, bName) || compareText(a.id, b.id);
+      }),
+    [deviceSort, devices.items],
+  );
+  const sortedProfiles = useMemo(
+    () =>
+      sortRows(profileItems, profileSort.dir, (a, b) => {
+        if (profileSort.key === "modified") {
+          return compareIso(a.lastModifiedDateTime, b.lastModifiedDateTime) || compareText(a.displayName, b.displayName);
+        }
+        return compareText(a.displayName, b.displayName) || compareText(a.id, b.id);
+      }),
+    [profileItems, profileSort],
+  );
   const device = devices.items.find((item) => item.id === selectedDevice);
   const profile = profileItems.find((item) => item.id === selectedProfile);
   const selected = Boolean(device || profile);
@@ -2068,7 +2244,7 @@ function AutopilotWorkbench({
     <>
       <CompactObjectList
         title="Devices"
-        items={devices.items.map((item) => ({
+        items={sortedDevices.map((item) => ({
           id: item.id,
           title: item.serialNumber ?? item.displayName ?? item.id,
           meta: [item.groupTag, item.enrollmentState].filter(Boolean).join(" · "),
@@ -2085,7 +2261,7 @@ function AutopilotWorkbench({
       <CompactObjectList
         title="Profiles"
         objectKind="autopilotProfile"
-        items={profileItems.map((item) => ({
+        items={sortedProfiles.map((item) => ({
           id: item.id,
           title: item.displayName,
           meta: formatRelative(item.lastModifiedDateTime),
@@ -2147,13 +2323,13 @@ function AutopilotWorkbench({
                 <table className="axis-table">
                   <thead>
                     <tr>
-                      <th>Serial</th>
-                      <th>Tag</th>
-                      <th>State</th>
+                      <SortableTh column="serial" label="Serial" sort={deviceSort} onSort={toggleDeviceSort} />
+                      <SortableTh column="tag" label="Tag" sort={deviceSort} onSort={toggleDeviceSort} />
+                      <SortableTh column="state" label="State" sort={deviceSort} onSort={toggleDeviceSort} />
                     </tr>
                   </thead>
                   <tbody>
-                    {devices.items.map((item) => (
+                    {sortedDevices.map((item) => (
                       <tr key={item.id} className="row-link" onClick={() => onSelectDevice(item.id)}>
                         <td>{item.serialNumber ?? item.displayName ?? item.id}</td>
                         <td className="muted">{item.groupTag ?? "—"}</td>
@@ -2168,12 +2344,12 @@ function AutopilotWorkbench({
                 <table className="axis-table">
                   <thead>
                     <tr>
-                      <th>Name</th>
-                      <th>Modified</th>
+                      <SortableTh column="name" label="Name" sort={profileSort} onSort={toggleProfileSort} />
+                      <SortableTh column="modified" label="Modified" sort={profileSort} onSort={toggleProfileSort} />
                     </tr>
                   </thead>
                   <tbody>
-                    {profileItems.map((item) => (
+                    {sortedProfiles.map((item) => (
                       <tr
                         key={item.id}
                         className="row-link"
@@ -2264,9 +2440,13 @@ function GitHubLeastPrivilegePatHelp() {
 function BaselinesWorkbench({
   selectedId,
   onSelect,
+  signedIn,
+  organizationName,
 }: {
   selectedId: string | null;
   onSelect: (id: string) => void;
+  signedIn: boolean;
+  organizationName: string | null;
 }) {
   const [sourceEntries, setSourceEntries] = useState<BaselineReferenceSourceInput[]>([
     DEFAULT_E8_SOURCE,
@@ -2295,6 +2475,25 @@ function BaselinesWorkbench({
   const [e8Loading, setE8Loading] = useState(false);
   const [referencesError, setReferencesError] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+  const [exportBusy, setExportBusy] = useState(false);
+  const [exportProgress, setExportProgress] = useState<PackExportProgress | null>(null);
+  const [exportResult, setExportResult] = useState<PackExportResult | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: UnlistenFn | undefined;
+    void listen<PackExportProgress>("axis-pack-export-progress", (event) => {
+      if (!cancelled) setExportProgress(event.payload);
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
 
   useEffect(() => {
     setSourceEntries(loadStoredSources());
@@ -2335,6 +2534,48 @@ function BaselinesWorkbench({
     const timer = window.setTimeout(() => void loadReferences(), 500);
     return () => window.clearTimeout(timer);
   }, [loadReferences, sourcesHydrated]);
+
+  const sameLocalPath = (left: string, right: string) =>
+    left.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase() ===
+    right.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+
+  const runTenantExport = useCallback(async () => {
+    if (!signedIn || exportBusy) return;
+    setExportBusy(true);
+    setExportError(null);
+    setExportResult(null);
+    setExportProgress({ phase: "listing", current: 0, total: 0, message: "Choose where to save…" });
+    try {
+      const packName = organizationName
+        ? `${organizationName} Intune export`
+        : "Tenant Intune export";
+      const result = await exportTenantPack({ packName });
+      if (!result) {
+        setExportProgress(null);
+        return;
+      }
+      setExportResult(result);
+      setSourceEntries((current) => {
+        if (current.some((row) => isLocalSource(row) && sameLocalPath(row.localPath ?? "", result.root))) {
+          return current;
+        }
+        return [
+          ...current,
+          {
+            ...newLocalSource(),
+            name: packName,
+            localPath: result.root,
+            kind: "local",
+          },
+        ];
+      });
+      setSourceEditorOpen(true);
+    } catch (error) {
+      setExportError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setExportBusy(false);
+    }
+  }, [exportBusy, organizationName, signedIn]);
 
   const packs = useMemo(() => {
     const loadsById = new Map(referenceLoads.map((load) => [load.source.id, load]));
@@ -2410,9 +2651,18 @@ function BaselinesWorkbench({
             <PageHeader
               eyebrow="Baselines"
               title="Baselines"
-              description="Built-in ASD E8 stays here. Add a GitHub pack or a local folder as an external source. The public template is Windows-only for now (policies, scripts, and a baseline JSON that selects those files). Open a device and use Baselines to grade applied catalog settings."
+              description="Built-in ASD E8 stays here. Add a GitHub pack or a local folder as an external source, or export this tenant into pack folders so Axis can list and later import them. Open a device and use Baselines to grade applied catalog settings."
               actions={
-                <div style={{ display: "flex", gap: "0.5rem" }}>
+                <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    className="axis-btn axis-btn-primary"
+                    onClick={() => void runTenantExport()}
+                    disabled={!signedIn || exportBusy}
+                    title={signedIn ? undefined : "Sign in to export this tenant"}
+                  >
+                    {exportBusy ? "Exporting…" : "Export tenant pack"}
+                  </button>
                   <button type="button" className="axis-btn" onClick={() => setSourceEditorOpen((open) => !open)}>
                     {sourceEditorOpen ? "Hide sources" : "Manage sources"}
                   </button>
@@ -2424,9 +2674,52 @@ function BaselinesWorkbench({
             />
             <IncompleteBanner>
               Packs are an external listing. Import applies to Settings Catalog files under
-              each platform’s policies/ folder. A baseline JSON selects those files (and other pack
-              items) without duplicating them. Other folders are listed so you can open the source file.
+              each platform’s policies/ folder. Tenant export writes the same layout (catalog JSON,
+              scripts with an <code>@axis-pack</code> header, compliance, Endpoint Security, Group
+              Policy, Windows Update, Autopilot) plus baseline JSON that selects those files.
+              iOS, Linux, apps, and classic device configuration profiles are not exported.
             </IncompleteBanner>
+            {exportBusy || exportProgress || exportResult || exportError ? (
+              <section className="axis-panel" style={{ padding: "0.85rem" }}>
+                <p className="baseline-pack-kicker" style={{ marginTop: 0 }}>
+                  Tenant export
+                </p>
+                {exportBusy && exportProgress ? (
+                  <p style={{ margin: "0.2rem 0 0" }}>
+                    {exportProgress.total > 0
+                      ? `${exportProgress.current} / ${exportProgress.total} · ${exportProgress.message}`
+                      : exportProgress.message}
+                  </p>
+                ) : null}
+                {exportError ? (
+                  <p className="muted" style={{ margin: "0.35rem 0 0", color: "var(--axis-danger, #b42318)" }}>
+                    {exportError}
+                  </p>
+                ) : null}
+                {exportResult && !exportBusy ? (
+                  <div className="muted" style={{ marginTop: "0.35rem" }}>
+                    <p style={{ margin: 0 }}>
+                      Wrote {exportResult.filesWritten} files ({exportResult.catalogCount} Settings Catalog)
+                      under {exportResult.root}.
+                    </p>
+                    {exportResult.skipped.length ? (
+                      <p style={{ margin: "0.35rem 0 0" }}>
+                        Skipped {exportResult.skipped.length} (unsupported platform):{" "}
+                        {exportResult.skipped.slice(0, 8).join(", ")}
+                        {exportResult.skipped.length > 8 ? "…" : ""}
+                      </p>
+                    ) : null}
+                    {exportResult.warnings.length ? (
+                      <p style={{ margin: "0.35rem 0 0" }}>
+                        {exportResult.warnings.length} warning
+                        {exportResult.warnings.length === 1 ? "" : "s"} (Graph gaps or empty objects).
+                        First: {exportResult.warnings[0]}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
+              </section>
+            ) : null}
             {sourceEditorOpen ? (
               <section className="axis-panel" style={{ padding: "0.85rem" }}>
                 <p className="muted" style={{ marginTop: 0 }}>
@@ -2821,29 +3114,10 @@ function BaselineImportDialog({
           (typeof policy.name === "string" && policy.name.trim()) ||
           (typeof policy.displayName === "string" && policy.displayName.trim()) ||
           reference.name;
-        const importedDescription =
-          typeof policy.description === "string" ? policy.description : "";
-        const importedPlatform =
-          typeof policy.platforms === "string" &&
-          policy.platforms.toLowerCase().includes("mac")
-            ? "macos"
-            : "windows";
-        const importedSettings = Array.isArray(policy.settings)
-          ? policy.settings.flatMap((value) => {
-              if (!value || typeof value !== "object" || Array.isArray(value)) return [];
-              const {
-                id: _id,
-                settingDefinitions: _definitions,
-                settingDefinition: _definition,
-                ...setting
-              } = value as Record<string, unknown>;
-              return [setting];
-            })
-          : [];
         setName(importedName);
-        setDescription(importedDescription);
-        setPlatform(importedPlatform);
-        setSettings(importedSettings);
+        setDescription(catalogDescriptionFromPolicy(policy));
+        setPlatform(catalogPlatformFromPolicy(policy));
+        setSettings(catalogSettingsFromPolicy(policy));
       })
       .catch((err: unknown) => {
         if (!cancelled) {

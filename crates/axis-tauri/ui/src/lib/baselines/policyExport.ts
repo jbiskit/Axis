@@ -146,3 +146,32 @@ export function policyExportToBaseline(
     checks,
   };
 }
+
+export function fileStemLabel(fileName: string): string {
+  const base = fileName.replace(/^.*[\\/]/, "").trim();
+  const stem = base.replace(/\.(json|txt)$/i, "").trim();
+  return stem || base || "Imported policy";
+}
+
+export function catalogPlatformFromPolicy(policy: Record<string, unknown>): "windows" | "macos" {
+  const platforms = typeof policy.platforms === "string" ? policy.platforms : "";
+  return platforms.toLowerCase().includes("mac") ? "macos" : "windows";
+}
+
+export function catalogDescriptionFromPolicy(policy: Record<string, unknown>): string {
+  return typeof policy.description === "string" ? policy.description : "";
+}
+
+export function catalogSettingsFromPolicy(policy: Record<string, unknown>): Record<string, unknown>[] {
+  if (!Array.isArray(policy.settings)) return [];
+  return policy.settings.flatMap((value) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+    const {
+      id: _id,
+      settingDefinitions: _definitions,
+      settingDefinition: _definition,
+      ...setting
+    } = value as Record<string, unknown>;
+    return [setting];
+  });
+}

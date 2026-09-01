@@ -31,6 +31,10 @@ import type {
   BaselineExportResponse,
   BaselineReferenceSourceInput,
   BaselineReferenceSourcesResponse,
+  PackExportResult,
+  SelectedExportResult,
+  PickedJsonFile,
+  PickedTextFile,
   AppliedPolicySettingsResponse,
   ActionResponse,
   AssignmentDraft,
@@ -248,8 +252,52 @@ export async function fetchBaselineReferenceSources(
   return invoke("fetch_baseline_reference_sources_cmd", { sources });
 }
 
-export async function pickLocalPackFolder(): Promise<string | null> {
-  return invoke<string | null>("pick_local_pack_folder_cmd");
+export async function pickLocalPackFolder(title?: string): Promise<string | null> {
+  return invoke<string | null>("pick_local_pack_folder_cmd", {
+    title: title?.trim() ? title : null,
+  });
+}
+
+export async function pickJsonFiles(title?: string): Promise<PickedJsonFile[] | null> {
+  return invoke<PickedJsonFile[] | null>("pick_json_files_cmd", {
+    title: title?.trim() ? title : null,
+  });
+}
+
+export async function pickScriptFiles(title?: string): Promise<PickedTextFile[] | null> {
+  return invoke<PickedTextFile[] | null>("pick_script_files_cmd", {
+    title: title?.trim() ? title : null,
+  });
+}
+
+export async function saveTextFile(input: {
+  contents: string;
+  suggestedName?: string;
+  title?: string;
+}): Promise<string | null> {
+  return invoke<string | null>("save_text_file_cmd", {
+    contents: input.contents,
+    suggestedName: input.suggestedName ?? null,
+    title: input.title ?? null,
+  });
+}
+
+export async function exportTenantPack(input: {
+  dest?: string;
+  packName?: string;
+  packId?: string;
+}): Promise<PackExportResult | null> {
+  return invoke("export_tenant_pack_cmd", {
+    dest: input.dest ?? null,
+    packName: input.packName ?? null,
+    packId: input.packId ?? null,
+  });
+}
+
+export async function exportSelectedObjects(
+  objects: Array<{ kind: string; id: string; title?: string }>,
+): Promise<SelectedExportResult | null> {
+  return invoke("export_selected_objects_cmd", { objects });
 }
 
 export async function fetchBaselineExport(

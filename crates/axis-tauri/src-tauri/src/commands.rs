@@ -12,6 +12,8 @@ use axis_sdk::{
     fetch_group_policy_configurations, fetch_managed_device_detail, fetch_policy_setting_issues,
     fetch_mobile_apps, fetch_script_run_status, fetch_remediation_scripts, fetch_setting_conflict_details, fetch_store_apps,
     fetch_tenant_scripts, fetch_win32_apps, fetch_windows_update_policies,
+    dest_dir_from_save_as, export_selected_graph_objects, export_tenant_pack, PackExportObject,
+    PackExportOptions, PackExportProgress, PackExportResult, SelectedExportResult,
     get_laps_credential_info, initiate_on_demand_remediation, list_assignment_filters,
     list_bitlocker_recovery_keys, list_catalog_categories, load_category_settings,
     reboot_managed_device, remote_lock_managed_device, resolve_directory_groups,
@@ -31,7 +33,7 @@ use axis_sdk::{
 };
 use serde::Serialize;
 use serde_json::Value;
-use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -137,14 +139,285 @@ pub async fn fetch_baseline_export_cmd(
 }
 
 #[tauri::command]
-pub async fn pick_local_pack_folder_cmd() -> Result<Option<String>, String> {
-    tokio::task::spawn_blocking(|| {
+pub async fn pick_local_pack_folder_cmd(title: Option<String>) -> Result<Option<String>, String> {
+    let title = title
+        .and_then(|value| {
+            let trimmed = value.trim().to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        })
+        .unwrap_or_else(|| "Choose an Axis pack folder".into());
+    tokio::task::spawn_blocking(move || {
         rfd::FileDialog::new()
-            .set_title("Choose an Axis pack folder")
+            .set_title(&title)
             .pick_folder()
             .map(|path| path.to_string_lossy().into_owned())
     })
     .await
+    .map_err(|error| error.to_string())
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PickedJsonFile {
+    pub path: String,
+    pub file_name: String,
+    pub document: Option<Value>,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn pick_json_files_cmd(title: Option<String>) -> Result<Option<Vec<PickedJsonFile>>, String> {
+    let title = dialog_title(title, "Import Settings Catalog policies");
+    let paths = tokio::task::spawn_blocking(move || {
+        rfd::FileDialog::new()
+            .set_title(&title)
+            .add_filter("JSON", &["json"])
+            .pick_files()
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    let Some(paths) = paths else {
+        return Ok(None);
+    };
+    Ok(Some(
+            paths
+                .into_iter()
+                .map(|path| {
+                    let file_name = path
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "policy.json".into());
+                    match std::fs::read_to_string(&path) {
+                        Ok(text) => match serde_json::from_str::<Value>(text.trim_start_matches('\u{FEFF}')) {
+                            Ok(document) => PickedJsonFile {
+                                path: path.to_string_lossy().into_owned(),
+                                file_name,
+                                document: Some(document),
+                                error: None,
+                            },
+                            Err(error) => PickedJsonFile {
+                                path: path.to_string_lossy().into_owned(),
+                                file_name,
+                                document: None,
+                                error: Some(format!("Invalid JSON: {error}")),
+                            },
+                        },
+                        Err(error) => PickedJsonFile {
+                            path: path.to_string_lossy().into_owned(),
+                            file_name,
+                            document: None,
+                            error: Some(error.to_string()),
+                        },
+                    }
+                })
+                .collect(),
+        ))
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PickedTextFile {
+    pub path: String,
+    pub file_name: String,
+    pub text: Option<String>,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn pick_script_files_cmd(title: Option<String>) -> Result<Option<Vec<PickedTextFile>>, String> {
+    let title = dialog_title(title, "Import scripts");
+    let paths = tokio::task::spawn_blocking(move || {
+        rfd::FileDialog::new()
+            .set_title(&title)
+            .add_filter("Scripts", &["ps1", "sh", "zsh", "bash", "json"])
+            .add_filter("JSON", &["json"])
+            .pick_files()
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    let Some(paths) = paths else {
+        return Ok(None);
+    };
+    Ok(Some(
+        paths
+            .into_iter()
+            .map(|path| {
+                let file_name = path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "script.ps1".into());
+                match std::fs::read_to_string(&path) {
+                    Ok(text) => PickedTextFile {
+                        path: path.to_string_lossy().into_owned(),
+                        file_name,
+                        text: Some(text),
+                        error: None,
+                    },
+                    Err(error) => PickedTextFile {
+                        path: path.to_string_lossy().into_owned(),
+                        file_name,
+                        text: None,
+                        error: Some(error.to_string()),
+                    },
+                }
+            })
+            .collect(),
+    ))
+}
+
+const PACK_EXPORT_PROGRESS_EVENT: &str = "axis-pack-export-progress";
+
+fn dialog_title(title: Option<String>, fallback: &str) -> String {
+    title
+        .and_then(|value| {
+            let trimmed = value.trim().to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        })
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+async fn save_as_path(
+    title: String,
+    suggested_name: String,
+    json_filter: bool,
+) -> Result<Option<std::path::PathBuf>, String> {
+    tokio::task::spawn_blocking(move || {
+        let mut dialog = rfd::FileDialog::new()
+            .set_title(&title)
+            .set_file_name(&suggested_name);
+        if json_filter {
+            dialog = dialog.add_filter("JSON", &["json"]);
+        }
+        dialog.save_file()
+    })
+    .await
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn save_text_file_cmd(
+    contents: String,
+    suggested_name: Option<String>,
+    title: Option<String>,
+) -> Result<Option<String>, String> {
+    let title = dialog_title(title, "Save as");
+    let suggested = suggested_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("export.json")
+        .to_string();
+    let Some(path) = save_as_path(title, suggested, true).await? else {
+        return Ok(None);
+    };
+    tokio::task::spawn_blocking(move || {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        std::fs::write(&path, contents).map_err(|error| error.to_string())?;
+        Ok(Some(path.to_string_lossy().into_owned()))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn export_tenant_pack_cmd(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    dest: Option<String>,
+    pack_name: Option<String>,
+    pack_id: Option<String>,
+) -> Result<Option<PackExportResult>, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Err("Sign in to export this tenant.".into());
+    };
+    let suggested = pack_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Tenant Intune export")
+        .to_string();
+    let dest = if let Some(dest) = dest.filter(|value| !value.trim().is_empty()) {
+        std::path::PathBuf::from(dest.trim())
+    } else {
+        let Some(path) = save_as_path("Save tenant pack as".into(), suggested.clone(), false).await?
+        else {
+            return Ok(None);
+        };
+        dest_dir_from_save_as(&path)
+    };
+    if dest.is_file() {
+        return Err("That path is an existing file. Choose a new folder name in Save As.".into());
+    }
+    let options = PackExportOptions {
+        pack_id,
+        pack_name: Some(suggested),
+    };
+    let result = export_tenant_pack(
+        &token,
+        &dest,
+        options,
+        |progress: PackExportProgress| {
+            let _ = app.emit(PACK_EXPORT_PROGRESS_EVENT, &progress);
+        },
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(Some(result))
+}
+
+#[tauri::command]
+pub async fn export_selected_objects_cmd(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    objects: Vec<PackExportObject>,
+) -> Result<Option<SelectedExportResult>, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Err("Sign in to export.".into());
+    };
+    if objects.is_empty() {
+        return Err("Select at least one object to export.".into());
+    }
+    let dest = if objects.len() == 1 {
+        let suggested = format!(
+            "{}.json",
+            objects[0]
+                .title
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("export")
+        );
+        let Some(path) = save_as_path("Save export as".into(), suggested, true).await? else {
+            return Ok(None);
+        };
+        path
+    } else {
+        let Some(path) = save_as_path(
+            "Save selected exports as".into(),
+            "Intune export".into(),
+            false,
+        )
+        .await?
+        else {
+            return Ok(None);
+        };
+        dest_dir_from_save_as(&path)
+    };
+    export_selected_graph_objects(&token, &dest, &objects, |progress: PackExportProgress| {
+        let _ = app.emit(PACK_EXPORT_PROGRESS_EVENT, &progress);
+    })
+    .await
+    .map(Some)
     .map_err(|error| error.to_string())
 }
 

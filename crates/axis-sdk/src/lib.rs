@@ -17,6 +17,7 @@ mod inventory;
 mod object_detail;
 mod object_metadata;
 mod object_duplicate;
+mod pack_export;
 mod script_status;
 mod session_store;
 mod settings_catalog;
@@ -88,6 +89,11 @@ pub use object_metadata::{
 };
 pub use object_duplicate::{
     can_duplicate_kind, duplicate_graph_object, copy_display_name, DuplicatedObject,
+};
+pub use pack_export::{
+    dest_dir_from_save_as, export_selected_graph_objects, export_tenant_pack, pretty_json,
+    PackExportError, PackExportObject, PackExportOptions, PackExportProgress, PackExportResult,
+    SelectedExportResult,
 };
 pub use script_status::{
     fetch_remediation_device_status, fetch_script_run_status, RemediationDeviceRunState,

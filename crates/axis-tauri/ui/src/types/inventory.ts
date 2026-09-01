@@ -538,6 +538,37 @@ export type BaselineExportResponse = {
   error: string | null;
 };
 
+export type PackExportProgress = {
+  phase: string;
+  current: number;
+  total: number;
+  message: string;
+};
+
+export type PackExportResult = {
+  root: string;
+  filesWritten: number;
+  includeCount: number;
+  catalogCount: number;
+  skipped: string[];
+  warnings: string[];
+  baselinePath: string;
+  catalogBaselinePath: string;
+  platforms: string[];
+};
+
+export type PackExportObject = {
+  kind: string;
+  id: string;
+  title?: string | null;
+};
+
+export type SelectedExportResult = {
+  path: string;
+  filesWritten: number;
+  warnings: string[];
+};
+
 export type AppliedPolicySettings = {
   policyId: string;
   name?: string | null;
@@ -625,6 +656,20 @@ export type CategorySettingsLoad = {
 export type CatalogSearchResult = {
   settings: CatalogSettingSummary[];
   mode: string;
+};
+
+export type PickedJsonFile = {
+  path: string;
+  fileName: string;
+  document: Record<string, unknown> | unknown[] | null;
+  error: string | null;
+};
+
+export type PickedTextFile = {
+  path: string;
+  fileName: string;
+  text: string | null;
+  error: string | null;
 };
 
 export type CreatedCatalogPolicy = {
