@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { InventoryResponse } from "../types/inventory";
 
 export function useInventory<T>(
@@ -11,20 +11,24 @@ export function useInventory<T>(
   const [error, setError] = useState<string | null>(null);
   const [truncated, setTruncated] = useState(false);
   const [fetchedAt, setFetchedAt] = useState<string | null>(null);
+  const loadGen = useRef(0);
 
   const load = useCallback(async () => {
+    const gen = ++loadGen.current;
     setLoading(true);
     try {
       const response = await loader();
+      if (gen !== loadGen.current) return;
       setItems(response.list.items);
       setTruncated(response.list.truncated);
       setFetchedAt(response.list.fetchedAt);
       setError(response.error);
     } catch (err) {
+      if (gen !== loadGen.current) return;
       setError(err instanceof Error ? err.message : "Failed to load inventory");
       setItems([]);
     } finally {
-      setLoading(false);
+      if (gen === loadGen.current) setLoading(false);
     }
   }, [loader]);
 

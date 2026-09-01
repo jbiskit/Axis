@@ -10,11 +10,21 @@ Notable user-facing changes to Axis are recorded here.
 - Pack `baselines/` JSON that **selects** pack files (`includes`) instead of duplicating policies. Device compare expands catalog paths from that list.
 - Two Windows samples in the pack template from [OpenIntuneBaseline](https://github.com/SkipToTheEndpoint/OpenIntuneBaseline) (BitLocker catalog policy and Auto Timezone script; GPL-3.0).
 - Public pack template at [jbiskit/axis-pack-template](https://github.com/jbiskit/axis-pack-template).
+- Tenant pack export from **Baselines → Export tenant pack** (Save As a folder): writes Settings Catalog, scripts, compliance, Endpoint Security, Group Policy, Windows Update, and Autopilot into the pack folder layout, plus baseline JSON that selects those files for later import and device compare.
+- Save As on inspector Export (Graph JSON to a file), and bulk export of checked list rows (one Save As JSON, or a folder of JSON files).
+- Settings Catalog **Import** from the tenant list: Open one or more JSON files, edit names (default is the file name), and apply one assignment list to every created policy.
+- Scripts, remediations, and compliance scripts **Import** from `.ps1` / `.sh` / JSON (including pack `@axis-pack` headers). Detect/remediate pairs from a tenant pack export are merged.
 
 ### Changed
 
-- GitHub packs that point at a repo root honor `axis-pack.json` and list each platform folder as its own category. Import stays Settings Catalog-only. Device compare can use catalog files or a baseline selection. Built-in ASD E8 still uses its explicit Blueprint path.
+- GitHub packs that point at a repo root honor `axis-pack.json` and list each platform folder as its own category. Device compare can use catalog files or a baseline selection. Built-in ASD E8 still uses its explicit Blueprint path.
 - The GitHub repository is [jbiskit/Axis](https://github.com/jbiskit/Axis) (formerly `policy-axis`). In-app update checks use that name.
+- Inspector, bulk, and tenant pack exports omit Graph assignments.
+
+### Fixed
+
+- Settings Catalog import no longer loops while loading assignment filters, so group search works and Import does not crash the window.
+- After import, Axis no longer opens the new policy and refreshes the list at the same time, which could leave Refresh stuck and crash the window.
 
 ## [0.1.4] - 2026-08-30
 

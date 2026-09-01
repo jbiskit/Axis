@@ -5,6 +5,7 @@ import { intunePortalUrlForKind } from "../../lib/intune/portalLinks";
 import {
   fetchGraphObjectDetail,
   loadAssignmentWorkspace,
+  saveTextFile,
   updateScriptContent,
 } from "../../lib/tauri";
 import {
@@ -54,10 +55,10 @@ function pretty(value: unknown): string {
 }
 
 function exportPayload(detail: GraphObjectDetail): Record<string, unknown> {
-  const object = asRecord(detail.object) ?? {};
+  const object = { ...(asRecord(detail.object) ?? {}) };
+  delete object.assignments;
   return {
     ...object,
-    assignments: detail.assignments,
     ...(detail.settings?.length ? { settings: detail.settings } : {}),
     ...(detail.extras ? { extras: detail.extras } : {}),
     ...(detail.scriptText != null ? { scriptText: detail.scriptText } : {}),
@@ -101,11 +102,13 @@ function ExportJsonDialog({
   onClose: () => void;
 }) {
   const [copied, setCopied] = useState(false);
+  const [saved, setSaved] = useState(false);
   const [copyError, setCopyError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) {
       setCopied(false);
+      setSaved(false);
       setCopyError(null);
       return;
     }
@@ -124,6 +127,22 @@ function ExportJsonDialog({
       window.setTimeout(() => setCopied(false), 1400);
     } catch (err) {
       setCopyError(err instanceof Error ? err.message : "Could not copy JSON.");
+    }
+  }
+
+  async function saveAs() {
+    setCopyError(null);
+    try {
+      const path = await saveTextFile({
+        contents: json,
+        suggestedName: `${title.replace(/[<>:"/\\|?*]+/g, "-").slice(0, 120) || "export"}.json`,
+        title: "Save export as",
+      });
+      if (!path) return;
+      setSaved(true);
+      window.setTimeout(() => setSaved(false), 1600);
+    } catch (err) {
+      setCopyError(err instanceof Error ? err.message : "Could not save JSON.");
     }
   }
 
@@ -147,11 +166,14 @@ function ExportJsonDialog({
             <p className="axis-kicker">Export</p>
             <h2 id="export-json-title">{title}</h2>
             <p className="muted" style={{ margin: "0.35rem 0 0", fontSize: "0.75rem" }}>
-              Graph JSON for this object. Copy puts it on the clipboard.
+              Graph JSON for this object. Copy puts it on the clipboard. Save as writes a file.
             </p>
           </div>
           <div className="device-actions">
-            <button type="button" className="axis-btn axis-btn-primary" onClick={() => void copyJson()}>
+            <button type="button" className="axis-btn axis-btn-primary" onClick={() => void saveAs()}>
+              {saved ? "Saved" : "Save as"}
+            </button>
+            <button type="button" className="axis-btn" onClick={() => void copyJson()}>
               {copied ? "Copied" : "Copy JSON"}
             </button>
             <button type="button" className="axis-btn" onClick={onClose}>
@@ -339,7 +361,7 @@ export function GraphObjectInspector({
     return () => {
       cancelled = true;
     };
-  }, [fallbackTitle, kind, id]);
+  }, [kind, id]);
 
   const assignments = useMemo(
     () => (Array.isArray(detail?.assignments) ? detail.assignments : []),
@@ -538,7 +560,7 @@ export function GraphObjectInspector({
               <button
                 type="button"
                 className="axis-btn"
-                title="Show Graph JSON and copy it"
+                title="Show Graph JSON, copy it, or save as a file"
                 onClick={() => setExportOpen(true)}
               >
                 Export

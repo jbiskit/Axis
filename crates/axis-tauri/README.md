@@ -21,7 +21,7 @@ crates/
 pack-template/                      # Axis pack layout (also published as jbiskit/axis-pack-template)
 ```
 
-Packs: **Baselines → Manage sources**. Platform folders, catalog import, and baseline JSON selections. See the repo-root README **Baseline packs** section.
+Packs: **Baselines → Manage sources**, or **Export tenant pack** to write this tenant into the pack folders. See the repo-root README **Baseline packs** section.
 
 ## Install (UI)
 

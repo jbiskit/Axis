@@ -150,3 +150,69 @@ export function pruneSelectionIds(
   }
   return next;
 }
+
+export type SortDir = "asc" | "desc";
+
+export type ColumnSort<K extends string> = { key: K; dir: SortDir };
+
+export function compareText(a?: string | null, b?: string | null): number {
+  return (a ?? "").localeCompare(b ?? "", undefined, { numeric: true, sensitivity: "base" });
+}
+
+export function compareNumber(a?: number | null, b?: number | null): number {
+  const av = a ?? Number.NEGATIVE_INFINITY;
+  const bv = b ?? Number.NEGATIVE_INFINITY;
+  return av === bv ? 0 : av < bv ? -1 : 1;
+}
+
+export function compareIso(a?: string | null, b?: string | null): number {
+  const av = a ? Date.parse(a) : Number.NEGATIVE_INFINITY;
+  const bv = b ? Date.parse(b) : Number.NEGATIVE_INFINITY;
+  const left = Number.isNaN(av) ? Number.NEGATIVE_INFINITY : av;
+  const right = Number.isNaN(bv) ? Number.NEGATIVE_INFINITY : bv;
+  return left === right ? 0 : left < right ? -1 : 1;
+}
+
+export function compareBool(a?: boolean | null, b?: boolean | null): number {
+  return Number(a === true) - Number(b === true);
+}
+
+export function sortRows<T>(
+  rows: readonly T[],
+  dir: SortDir,
+  compare: (a: T, b: T) => number,
+): T[] {
+  return [...rows].sort((a, b) => {
+    const n = compare(a, b);
+    return dir === "asc" ? n : -n;
+  });
+}
+
+export type CatalogPolicySortKey =
+  | "name"
+  | "platform"
+  | "settings"
+  | "assigned"
+  | "family"
+  | "modified";
+
+export function compareCatalogPolicy(
+  a: CatalogPolicySummary,
+  b: CatalogPolicySummary,
+  key: CatalogPolicySortKey,
+): number {
+  switch (key) {
+    case "name":
+      return compareText(a.name, b.name) || compareText(a.id, b.id);
+    case "platform":
+      return compareText(a.platforms, b.platforms) || compareText(a.name, b.name);
+    case "settings":
+      return compareNumber(a.settingCount, b.settingCount) || compareText(a.name, b.name);
+    case "assigned":
+      return compareBool(a.isAssigned, b.isAssigned) || compareText(a.name, b.name);
+    case "family":
+      return compareText(a.templateFamily ?? "none", b.templateFamily ?? "none") || compareText(a.name, b.name);
+    case "modified":
+      return compareIso(a.lastModifiedDateTime, b.lastModifiedDateTime) || compareText(a.name, b.name);
+  }
+}

@@ -1,15 +1,16 @@
 import { useCallback, useMemo, useState } from "react";
 import type { CatalogPolicySummary } from "../types/inventory";
 import { BrowseCatalogPanel } from "./BrowseCatalogPanel";
+import { GraphObjectInspector } from "./workbench/GraphObjectInspector";
 import { PageHeader } from "./ui/PageChrome";
 import { settingsCatalogPlatformFromScope } from "../lib/catalog";
-import { matchesCatalogPolicyFilters, platformFilterOptionsFromList, type AssignedFilter, type ListFilterOption } from "../lib/listSelection";
+import { matchesCatalogPolicyFilters, platformFilterOptionsFromList, compareCatalogPolicy, sortRows, type AssignedFilter, type CatalogPolicySortKey, type ColumnSort, type ListFilterOption } from "../lib/listSelection";
 import { INTUNE_PLATFORM_LABELS, type IntunePlatform } from "../lib/platforms";
 import { hrefWithParam, navigate } from "../lib/route";
 import { withTransientItem } from "../lib/duplicateObject";
-import { GraphObjectInspector } from "./workbench/GraphObjectInspector";
+import { useCatalogFileImport } from "./workbench/CatalogFileImportDialog";
 import {
-  BulkDeleteAction,
+  BulkListActions,
   listTargetProps,
   ObjectListMenuHost,
 } from "./workbench/ObjectListMenu";
@@ -20,7 +21,7 @@ import {
   SelectCheckbox,
   useCheckedIds,
 } from "./workbench/PolicyBulkAssign";
-import { IncompleteBanner, InspectorEmpty, SearchableTable, CompactObjectList, formatRelative, useListSearchState, WorkspaceSplit } from "./workbench/shared";
+import { IncompleteBanner, InspectorEmpty, SearchableTable, CompactObjectList, SortableTh, formatRelative, useColumnSort, useListSearchState, WorkspaceSplit } from "./workbench/shared";
 
 export function SettingsCatalogWorkbench({
   tab,
@@ -48,6 +49,7 @@ export function SettingsCatalogWorkbench({
   const catalogPlatform = settingsCatalogPlatformFromScope(platform);
   const { query, setQuery, assignedFilter, setAssignedFilter, platformFilter, setPlatformFilter } =
     useListSearchState();
+  const { sort, toggle: toggleSort } = useColumnSort<CatalogPolicySortKey>("name");
   const scoped = useMemo(() => {
     if (!catalogPlatform) return policies;
     return policies.filter((item) => {
@@ -63,13 +65,12 @@ export function SettingsCatalogWorkbench({
     () => platformFilterOptionsFromList(listed.map((item) => item.platforms)),
     [listed],
   );
-  const filtered = useMemo(
-    () =>
-      listed.filter((item) =>
-        matchesCatalogPolicyFilters(item, query, assignedFilter, platformFilter),
-      ),
-    [assignedFilter, listed, platformFilter, query],
-  );
+  const filtered = useMemo(() => {
+    const rows = listed.filter((item) =>
+      matchesCatalogPolicyFilters(item, query, assignedFilter, platformFilter),
+    );
+    return sortRows(rows, sort.dir, (a, b) => compareCatalogPolicy(a, b, sort.key));
+  }, [assignedFilter, listed, platformFilter, query, sort]);
 
   const selected = filtered.find((item) => item.id === selectedId) ?? listed.find((item) => item.id === selectedId) ?? policies.find((item) => item.id === selectedId);
   const filteredIds = useMemo(() => filtered.map((item) => item.id), [filtered]);
@@ -78,7 +79,7 @@ export function SettingsCatalogWorkbench({
   const bulkPolicies = filtered.filter((item) => selection.bulkTargetIds.includes(item.id));
   const showBulk = selection.bulkEditorOpen && bulkPolicies.length > 0;
   const bulkDelete = (
-    <BulkDeleteAction
+    <BulkListActions
       targets={checkedPolicies.map((item) => ({
         id: item.id,
         title: item.name,
@@ -101,6 +102,22 @@ export function SettingsCatalogWorkbench({
     [listed, policies],
   );
   const selectPolicy = (id: string) => navigate(hrefWithParam(pathname, search, "policy", id || null));
+  const catalogImport = useCatalogFileImport((created) => {
+    const first = created[0];
+    if (first) {
+      setOverlay({
+        id: first.id,
+        name: first.name,
+        isAssigned: false,
+      });
+    }
+    window.setTimeout(() => onRefresh(), 0);
+  }, catalogPlatform ?? "windows");
+  const importButton = (
+    <button type="button" className="axis-btn" onClick={() => void catalogImport.openPicker()}>
+      Import
+    </button>
+  );
   const loadedLimitBanner = truncated ? (
     <IncompleteBanner>
       Filter and select all apply to loaded Settings Catalog rows. Axis keeps at most 500 items from Graph for this list.
@@ -254,7 +271,12 @@ export function SettingsCatalogWorkbench({
               onRefresh={onRefresh}
               loading={loading}
               error={error}
-              actions={platformSwitcher}
+              actions={
+                <div className="device-actions">
+                  {importButton}
+                  {platformSwitcher}
+                </div>
+              }
               toolbar={catalogTabs}
               checkedIds={selection.checkedIds}
               onToggleChecked={selection.toggle}
@@ -285,6 +307,7 @@ export function SettingsCatalogWorkbench({
               actions={
                 <div className="device-actions">
                   {platformSwitcher}
+                  {importButton}
                   <button type="button" className="axis-btn" onClick={onRefresh} disabled={loading}>
                     {loading ? "Refreshing…" : "Refresh"}
                   </button>
@@ -317,6 +340,8 @@ export function SettingsCatalogWorkbench({
               allSelected={selection.allSelected}
               onToggle={selection.toggle}
               onToggleAll={selection.toggleAll}
+              sort={sort}
+              onSort={toggleSort}
             />
           </div>
         )}
@@ -356,6 +381,7 @@ export function SettingsCatalogWorkbench({
         selection.clear();
       }}
     />
+    {catalogImport.dialog}
     </>
   );
 }
@@ -377,6 +403,8 @@ function TenantPolicyTable({
   allSelected,
   onToggle,
   onToggleAll,
+  sort,
+  onSort,
 }: {
   items: CatalogPolicySummary[];
   loadedCount: number;
@@ -394,6 +422,8 @@ function TenantPolicyTable({
   allSelected: boolean;
   onToggle: (id: string) => void;
   onToggleAll: () => void;
+  sort: ColumnSort<CatalogPolicySortKey>;
+  onSort: (key: CatalogPolicySortKey) => void;
 }) {
   const selectedCount = items.filter((item) => checkedIds.has(item.id)).length;
   return (
@@ -421,12 +451,12 @@ function TenantPolicyTable({
                 onChange={onToggleAll}
               />
             </th>
-            <th>Name</th>
-            <th>Platform</th>
-            <th>Settings</th>
-            <th>Assigned</th>
-            <th>Family</th>
-            <th>Last modified</th>
+            <SortableTh column="name" label="Name" sort={sort} onSort={onSort} />
+            <SortableTh column="platform" label="Platform" sort={sort} onSort={onSort} />
+            <SortableTh column="settings" label="Settings" sort={sort} onSort={onSort} />
+            <SortableTh column="assigned" label="Assigned" sort={sort} onSort={onSort} />
+            <SortableTh column="family" label="Family" sort={sort} onSort={onSort} />
+            <SortableTh column="modified" label="Last modified" sort={sort} onSort={onSort} />
           </tr>
         </thead>
         <tbody>

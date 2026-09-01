@@ -18,6 +18,7 @@ import {
   assignObjectAssignments,
   deleteGraphObject,
   duplicateGraphObject,
+  exportSelectedObjects,
   fetchGraphObjectDetail,
   updateObjectMetadata,
 } from "../../lib/tauri";
@@ -475,6 +476,86 @@ function DeleteObjectDialog({
         </div>
       </div>
     </div>
+  );
+}
+
+export function BulkExportAction({ targets }: { targets: ObjectListTarget[] }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+
+  if (targets.length === 0) return null;
+
+  async function runExport() {
+    setBusy(true);
+    setError(null);
+    setDone(null);
+    try {
+      const result = await exportSelectedObjects(
+        targets.map((target) => ({
+          kind: target.kind,
+          id: target.id,
+          title: target.title,
+        })),
+      );
+      if (!result) return;
+      const warning =
+        result.warnings.length > 0
+          ? ` ${result.warnings.length} warning${result.warnings.length === 1 ? "" : "s"}.`
+          : "";
+      setDone(
+        result.filesWritten === 1
+          ? `Saved ${result.path}.${warning}`
+          : `Saved ${result.filesWritten} files to ${result.path}.${warning}`,
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Export failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        className="axis-btn"
+        disabled={busy}
+        title={
+          targets.length === 1
+            ? "Save this object as JSON"
+            : "Save each selected object as JSON in a folder"
+        }
+        onClick={() => void runExport()}
+      >
+        {busy ? "Exporting…" : targets.length === 1 ? "Export" : `Export ${targets.length}`}
+      </button>
+      {error ? (
+        <span className="muted" style={{ color: "var(--axis-danger)", fontSize: "0.75rem" }}>
+          {error}
+        </span>
+      ) : null}
+      {done && !busy ? (
+        <span className="muted" style={{ fontSize: "0.75rem" }} title={done}>
+          Saved
+        </span>
+      ) : null}
+    </>
+  );
+}
+
+export function BulkListActions({
+  targets,
+  onDeleted,
+}: {
+  targets: ObjectListTarget[];
+  onDeleted?: (deleted: ObjectListTarget[]) => void;
+}) {
+  return (
+    <>
+      <BulkExportAction targets={targets} />
+      {onDeleted ? <BulkDeleteAction targets={targets} onDeleted={onDeleted} /> : null}
+    </>
   );
 }
 

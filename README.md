@@ -107,7 +107,12 @@ Axis treats a pack as an **external source** from **GitHub** (Contents API, not 
 - `{platform}/policies/` — Settings Catalog exports
 - `{platform}/scripts/platform|remediation|compliance`
 - `{platform}/compliance/`, `endpoint-security/`, `windows-update/` (Windows), `enrollment/autopilot/`
+- `windows/group-policy/` — ADMX / Group Policy configurations (listed; import later)
 - `baselines/` — named selections (`includes` paths). Not a second copy of policies
+
+**Export this tenant** from **Baselines → Export tenant pack** (native Save As). Axis writes the layout above (Settings Catalog JSON that import already understands, scripts with an `@axis-pack` metadata header, plus Graph JSON for the other types). It also writes `baselines/tenant-export.json` (everything) and `baselines/tenant-export-catalog.json` (catalog only). iOS, Linux, apps, and classic device configuration profiles are skipped. The chosen folder is added as a local pack source.
+
+Inspector **Export** still shows Graph JSON; **Save as** writes that file. Checked rows on policy, script, and app lists can **Export** one JSON (Save As) or a folder of JSON files.
 
 The public template ships two Windows samples from [OpenIntuneBaseline](https://github.com/SkipToTheEndpoint/OpenIntuneBaseline) (BitLocker catalog policy and Auto Timezone platform script; GPL-3.0). See `pack-template/NOTICE.md`.
 
@@ -115,4 +120,4 @@ The public template ships two Windows samples from [OpenIntuneBaseline](https://
 
 If the source path is empty, Axis scans those default folders. Built-in ASD E8 still uses its GitHub path under the ASD Blueprint repo and does not scan the extra folders.
 
-To start a pack, use the public template [jbiskit/axis-pack-template](https://github.com/jbiskit/axis-pack-template) (same files as `pack-template/` in this repo). In Axis: **Baselines → Manage sources → Add GitHub pack** and paste the repo URL, or **Add local folder**. Packs are read-only in this version.
+To start a pack, use the public template [jbiskit/axis-pack-template](https://github.com/jbiskit/axis-pack-template) (same files as `pack-template/` in this repo), or export a tenant from Axis. In Axis: **Baselines → Manage sources → Add GitHub pack** and paste the repo URL, or **Add local folder**. Packs are read-only in this version. Import Settings Catalog JSON from the Policies list, and import scripts from Scripts / Remediations / Compliance scripts.

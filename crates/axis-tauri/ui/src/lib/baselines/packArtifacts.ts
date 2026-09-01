@@ -10,6 +10,7 @@ export const PACK_CONTENT_ORDER = [
   "script-compliance",
   "compliance",
   "endpoint-security",
+  "group-policy",
   "windows-update",
   "enrollment-autopilot",
 ] as const;
@@ -54,6 +55,8 @@ function contentLabel(content: string): string {
       return "Compliance settings";
     case "endpoint-security":
       return "Endpoint Security";
+    case "group-policy":
+      return "Group Policy";
     case "windows-update":
       return "Windows Update";
     case "enrollment-autopilot":

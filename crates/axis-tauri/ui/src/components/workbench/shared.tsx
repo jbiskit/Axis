@@ -1,5 +1,5 @@
-import { Fragment, useState, type ReactNode, Component, type ErrorInfo } from "react";
-import type { AssignedFilter, ListFilterOption } from "../../lib/listSelection";
+import { Fragment, useCallback, useState, type ReactNode, Component, type ErrorInfo } from "react";
+import type { AssignedFilter, ColumnSort, ListFilterOption } from "../../lib/listSelection";
 import { requestObjectRefresh } from "../../lib/inspectorCache";
 import { useHeaderRefreshMenu } from "../ui/ContextMenu";
 import { PageHeader } from "../ui/PageChrome";
@@ -10,6 +10,60 @@ export function useListSearchState() {
   const [assignedFilter, setAssignedFilter] = useState<AssignedFilter>("all");
   const [platformFilter, setPlatformFilter] = useState("all");
   return { query, setQuery, assignedFilter, setAssignedFilter, platformFilter, setPlatformFilter };
+}
+
+const DESC_FIRST_SORT_KEYS = new Set(["modified", "lastCheckIn", "created", "lastContact"]);
+
+export function useColumnSort<K extends string>(initialKey: K) {
+  const [sort, setSort] = useState<ColumnSort<K>>(() => ({
+    key: initialKey,
+    dir: DESC_FIRST_SORT_KEYS.has(initialKey) ? "desc" : "asc",
+  }));
+  const toggle = useCallback((key: K) => {
+    setSort((current) => {
+      if (current.key === key) {
+        return { key, dir: current.dir === "asc" ? "desc" : "asc" };
+      }
+      return { key, dir: DESC_FIRST_SORT_KEYS.has(key) ? "desc" : "asc" };
+    });
+  }, []);
+  return { sort, toggle };
+}
+
+export function SortableTh<K extends string>({
+  column,
+  label,
+  sort,
+  onSort,
+}: {
+  column: K;
+  label: string;
+  sort: ColumnSort<K>;
+  onSort: (key: K) => void;
+}) {
+  const active = sort.key === column;
+  const ariaSort: "ascending" | "descending" | "none" = active
+    ? sort.dir === "asc"
+      ? "ascending"
+      : "descending"
+    : "none";
+  return (
+    <th aria-sort={ariaSort}>
+      <button
+        type="button"
+        className="axis-th-sort"
+        data-active={active ? "true" : "false"}
+        onClick={() => onSort(column)}
+      >
+        {label}
+        {active ? (
+          <span className="axis-th-sort-mark" aria-hidden>
+            {sort.dir === "asc" ? "▲" : "▼"}
+          </span>
+        ) : null}
+      </button>
+    </th>
+  );
 }
 
 export function formatRelative(iso?: string | null): string {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   assignmentTargetLabel,
   summarizeAssignmentDraft,
@@ -154,6 +154,7 @@ export function AssignmentsEditor({
   objectOdataType,
   onSaved,
   draftMode = false,
+  draftHint,
   onDraftChange,
 }: {
   kind: string;
@@ -164,6 +165,7 @@ export function AssignmentsEditor({
   objectOdataType?: string | null;
   onSaved?: () => void;
   draftMode?: boolean;
+  draftHint?: string;
   onDraftChange?: (drafts: AssignmentDraft[], writable: boolean) => void;
 }) {
   const resolvedTargets = useMemo<AssignmentEditorTarget[]>(() => {
@@ -173,6 +175,9 @@ export function AssignmentsEditor({
   }, [targets, id, title]);
   const isBulk = resolvedTargets.length > 1;
   const workspaceId = resolvedTargets.map((target) => target.id).join("\0");
+  const assignmentsKey = useMemo(() => JSON.stringify(assignments ?? []), [assignments]);
+  const onDraftChangeRef = useRef(onDraftChange);
+  onDraftChangeRef.current = onDraftChange;
   const [rows, setRows] = useState<AssignmentRow[]>([]);
   const [baselineFingerprint, setBaselineFingerprint] = useState("");
   const [filters, setFilters] = useState<AssignmentFilter[]>([]);
@@ -197,9 +202,7 @@ export function AssignmentsEditor({
     setLoadError(null);
     setSaveError(null);
     setSaveMessage(null);
-    setGroupQuery("");
-    setGroupHits([]);
-    void loadAssignmentWorkspace(kind, isBulk ? [] : assignments)
+    void loadAssignmentWorkspace(kind, isBulk || draftMode ? [] : assignments)
       .then((response) => {
         if (cancelled) return;
         const nextRows = draftsToRows(
@@ -226,7 +229,12 @@ export function AssignmentsEditor({
     return () => {
       cancelled = true;
     };
-  }, [kind, workspaceId, isBulk, assignments]);
+  }, [kind, workspaceId, isBulk, draftMode, assignmentsKey]);
+
+  useEffect(() => {
+    setGroupQuery("");
+    setGroupHits([]);
+  }, [kind, workspaceId]);
 
   useEffect(() => {
     if (groupQuery.trim().length < 2) {
@@ -268,12 +276,12 @@ export function AssignmentsEditor({
   );
 
   useEffect(() => {
-    if (!draftMode || !onDraftChange || filtersLoading) return;
-    onDraftChange(
+    if (!draftMode || filtersLoading) return;
+    onDraftChangeRef.current?.(
       rows.map(({ key: _key, ...draft }) => draft),
       writable,
     );
-  }, [draftMode, filtersLoading, onDraftChange, rows, writable]);
+  }, [draftMode, filtersLoading, rows, writable]);
 
   const addRow = (targetKind: AssignmentTargetKind, group?: DirectoryGroup) => {
     const intent = supportsIntent ? "required" : undefined;
@@ -529,7 +537,8 @@ export function AssignmentsEditor({
         <div>
           <p className="muted" style={{ margin: 0 }}>
             {draftMode
-              ? `${title} — adjust the assignments that will be applied to the new copy.`
+              ? draftHint ??
+                `${title} — adjust the assignments that will be applied to the new copy.`
               : isBulk
               ? `Save writes this assignment list to ${resolvedTargets.length} selected policies (includes and excludes). Leave empty and save to clear assignments on all of them.`
               : `${title} — save writes the assignment list below to Intune (includes and excludes). Leave empty and save to clear all assignments.`}
