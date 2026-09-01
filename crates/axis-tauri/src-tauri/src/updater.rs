@@ -8,7 +8,7 @@ use tauri::{AppHandle, Emitter, State};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 
-const DEFAULT_GITHUB_REPO: &str = "jbiskit/policy-axis";
+const DEFAULT_GITHUB_REPO: &str = "jbiskit/Axis";
 const PROGRESS_EVENT: &str = "axis-updater-progress";
 const HTTPS_PREFIX: &str = "https://";
 
