@@ -14,6 +14,7 @@ Notable user-facing changes to Axis are recorded here.
 ### Changed
 
 - GitHub packs that point at a repo root honor `axis-pack.json` and list each platform folder as its own category. Import stays Settings Catalog-only. Device compare can use catalog files or a baseline selection. Built-in ASD E8 still uses its explicit Blueprint path.
+- The GitHub repository is [jbiskit/Axis](https://github.com/jbiskit/Axis) (formerly `policy-axis`). In-app update checks use that name.
 
 ## [0.1.4] - 2026-08-30
 

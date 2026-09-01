@@ -76,7 +76,7 @@ To build Windows installers instead, set `"bundle": { "active": true, "targets":
 
 ## Updates
 
-Release `axis.exe` checks GitHub Releases for `jbiskit/policy-axis` on launch (`cargo tauri dev` does not). If a newer tag is published with an `axis.exe` asset, Axis prompts to download, then to quit and relaunch into that file. Sign-in stays in Windows Credential Manager.
+Release `axis.exe` checks GitHub Releases for `jbiskit/Axis` on launch (`cargo tauri dev` does not). If a newer tag is published with an `axis.exe` asset, Axis prompts to download, then to quit and relaunch into that file. Sign-in stays in Windows Credential Manager.
 
 Publish a release whose tag is newer than `version` in `src-tauri/tauri.conf.json` (that value is the Windows file version and what the updater compares). Attach the portable `axis.exe` from `target/release/axis.exe`. Optional: `sha256:` digest on the GitHub asset is verified when present.
 

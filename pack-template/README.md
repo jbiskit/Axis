@@ -86,5 +86,5 @@ Axis uses the GitHub Contents API. It does not clone the repo. Pack listings use
 
 ## Mirroring to this GitHub template
 
-[jbiskit/axis-pack-template](https://github.com/jbiskit/axis-pack-template) copies this folder from `jbiskit/policy-axis` on a daily schedule (and on a manual workflow run). It uses the default `GITHUB_TOKEN` only. Forks of the template skip that job so cron cannot overwrite a fork.
+[jbiskit/axis-pack-template](https://github.com/jbiskit/axis-pack-template) copies this folder from `jbiskit/Axis` on a daily schedule (and on a manual workflow run). It uses the default `GITHUB_TOKEN` only. Forks of the template skip that job so cron cannot overwrite a fork.
 
