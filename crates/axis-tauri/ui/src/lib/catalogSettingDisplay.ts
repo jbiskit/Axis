@@ -187,7 +187,7 @@ export function humanizeSettingToken(value: string, definitionId?: string): stri
     .split(/[_~/]+/)
     .filter(Boolean)
     .filter((part) => !isLocKeyPart(part) && !ADMX_NOISE.has(part.toLowerCase()));
-  const last = parts.at(-1) || "";
+  const last = parts[parts.length - 1] || "";
   if (!last) return "(empty)";
   const lower = last.toLowerCase();
   const literals: Record<string, string> = {
