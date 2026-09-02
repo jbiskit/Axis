@@ -747,6 +747,7 @@ fn script_meta(
         "description": script.description,
         "fileName": file_name,
         "runAsAccount": detail.object.get("runAsAccount").and_then(Value::as_str).or(script.run_as_account.as_deref()),
+        "publisher": detail.object.get("publisher").and_then(Value::as_str).or(script.publisher.as_deref()),
         "runAs32Bit": detail.object.get("runAs32Bit").cloned(),
         "enforceSignatureCheck": detail.object.get("enforceSignatureCheck").cloned(),
     })

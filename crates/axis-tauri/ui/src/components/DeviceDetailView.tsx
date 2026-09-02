@@ -57,7 +57,7 @@ function SearchableTableShell({
   empty: boolean;
 }) {
   return (
-    <section className="stack">
+    <section className="stack searchable-table">
       <div className="device-toolbar">
         <p className="muted" style={{ margin: 0, alignSelf: "center" }}>
           {subtitle}
@@ -72,7 +72,7 @@ function SearchableTableShell({
           />
         </label>
       </div>
-      <div className="axis-panel" style={{ overflow: "hidden" }}>
+      <div className="axis-panel">
         <div className="muted" style={{ padding: "0.45rem 0.65rem", borderBottom: "1px solid var(--axis-border)", fontSize: "0.6875rem" }}>
           {countLabel}
         </div>
@@ -401,6 +401,7 @@ export function DeviceDetailView({
 
   return (
     <div className="stack device-inspector">
+      <div className="inspector-chrome">
       <div className="device-inspector-head">
         <div style={{ minWidth: 0 }}>
           <h1>{device.deviceName}</h1>
@@ -497,7 +498,9 @@ export function DeviceDetailView({
           </button>
         ))}
       </div>
+      </div>
 
+      <div className="inspector-scroll">
       {activeTab === "details" ? <DeviceHardwareDetailsPanel device={device} /> : null}
       {activeTab === "recovery" ? (
         <DeviceRecoveryPanel
@@ -840,6 +843,7 @@ export function DeviceDetailView({
           )}
         </section>
       ) : null}
+      </div>
     </div>
   );
 }

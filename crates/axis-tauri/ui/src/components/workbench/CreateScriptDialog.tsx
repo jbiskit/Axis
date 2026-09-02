@@ -3,6 +3,7 @@ import { createTenantScript } from "../../lib/tauri";
 import { scriptLanguageForKind } from "../../lib/scriptKinds";
 import type { TenantScriptSummary } from "../../types/inventory";
 import { ScriptCodeEditor } from "../ui/ScriptCodeEditor";
+import { ScriptRunSettingsFields } from "./ScriptRunSettingsFields";
 
 export type ScriptFamily = "platform" | "remediation" | "compliance";
 export type CreateScriptKind = "platform-powershell" | "platform-shell" | "remediation" | "compliance";
@@ -71,8 +72,10 @@ export function CreateScriptDialog({
   const [kind, setKind] = useState<CreateScriptKind>(() => defaultKind(family));
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [runAs, setRunAs] = useState<"system" | "user">("system");
-  const [runAs32Bit, setRunAs32Bit] = useState(false);
+  const [publisher, setPublisher] = useState("");
+  const [runAsUser, setRunAsUser] = useState(false);
+  const [enforceSignatureCheck, setEnforceSignatureCheck] = useState(false);
+  const [runAs64Bit, setRunAs64Bit] = useState(true);
   const [scriptText, setScriptText] = useState(DEFAULT_POWERSHELL);
   const [detectionText, setDetectionText] = useState(DEFAULT_DETECTION);
   const [remediationText, setRemediationText] = useState(DEFAULT_REMEDIATION);
@@ -85,8 +88,10 @@ export function CreateScriptDialog({
     setKind(nextKind);
     setName("");
     setDescription("");
-    setRunAs("system");
-    setRunAs32Bit(false);
+    setPublisher("");
+    setRunAsUser(false);
+    setEnforceSignatureCheck(false);
+    setRunAs64Bit(true);
     setScriptText(nextKind === "platform-shell" ? DEFAULT_SHELL : DEFAULT_POWERSHELL);
     setDetectionText(DEFAULT_DETECTION);
     setRemediationText(DEFAULT_REMEDIATION);
@@ -132,8 +137,10 @@ export function CreateScriptDialog({
         kind,
         displayName: name.trim(),
         description: description.trim() || undefined,
-        runAsAccount: runAs,
-        runAs32Bit: kind === "platform-shell" ? undefined : runAs32Bit,
+        publisher: publisher.trim() || undefined,
+        runAsAccount: runAsUser ? "user" : "system",
+        runAs32Bit: kind === "platform-shell" ? undefined : !runAs64Bit,
+        enforceSignatureCheck: kind === "platform-shell" ? undefined : enforceSignatureCheck,
         scriptText: needsDetection ? undefined : scriptText,
         detectionScriptText: needsDetection ? detectionText : undefined,
         remediationScriptText: kind === "remediation" ? remediationText : undefined,
@@ -193,7 +200,7 @@ export function CreateScriptDialog({
             </label>
           ) : null}
           <label className="device-field">
-            Display name
+            Name
             <input
               className="axis-input"
               value={name}
@@ -204,7 +211,7 @@ export function CreateScriptDialog({
             />
           </label>
           <label className="device-field">
-            Description (optional)
+            Description
             <input
               className="axis-input"
               value={description}
@@ -212,30 +219,28 @@ export function CreateScriptDialog({
               disabled={busy}
             />
           </label>
-          <div className="create-script-options">
-            <label className="device-field">
-              Run as
-              <select
-                className="axis-input"
-                value={runAs}
-                disabled={busy}
-                onChange={(event) => setRunAs(event.target.value as "system" | "user")}
-              >
-                <option value="system">System</option>
-                <option value="user">User</option>
-              </select>
-            </label>
-            {kind !== "platform-shell" ? (
-              <label className="app-update-auto" style={{ alignSelf: "end", marginBottom: "0.15rem" }}>
-                <input
-                  type="checkbox"
-                  checked={runAs32Bit}
-                  disabled={busy}
-                  onChange={(event) => setRunAs32Bit(event.target.checked)}
-                />
-                Run as 32-bit
-              </label>
-            ) : null}
+          <label className="device-field">
+            Publisher
+            <input
+              className="axis-input"
+              value={publisher}
+              placeholder="No Publisher"
+              onChange={(event) => setPublisher(event.target.value)}
+              disabled={busy}
+            />
+          </label>
+          <div className="inspector-form-grid">
+            <ScriptRunSettingsFields
+              runAsUser={runAsUser}
+              onRunAsUserChange={setRunAsUser}
+              enforceSignatureCheck={enforceSignatureCheck}
+              onEnforceSignatureCheckChange={setEnforceSignatureCheck}
+              runAs64Bit={runAs64Bit}
+              onRunAs64BitChange={setRunAs64Bit}
+              showSignature={kind !== "platform-shell"}
+              show64Bit={kind !== "platform-shell"}
+              disabled={busy}
+            />
           </div>
 
           {needsDetection ? (

@@ -26,6 +26,7 @@ import type {
   CreateTenantScriptResponse,
   DuplicateGraphObjectResponse,
   UpdateObjectMetadataResponse,
+  UpdateScriptContentInput,
   GraphObjectDetailResponse,
   E8BaselineReferencesResponse,
   BaselineExportResponse,
@@ -362,14 +363,8 @@ export async function fetchGraphObjectDetail(
   return invoke("fetch_graph_object_detail_cmd", { kind, id });
 }
 
-export async function updateScriptContent(input: {
-  kind: string;
-  id: string;
-  scriptText?: string | null;
-  detectionScriptText?: string | null;
-  remediationScriptText?: string | null;
-}): Promise<ActionResponse> {
-  return invoke("update_script_content_cmd", input);
+export async function updateScriptContent(input: UpdateScriptContentInput): Promise<ActionResponse> {
+  return invoke("update_script_content_cmd", { input });
 }
 
 export async function createCompliancePolicy(
@@ -483,6 +478,13 @@ export async function addSettingsToPolicy(
   settings: Record<string, unknown>[],
 ): Promise<CreateCatalogPolicyResponse> {
   return invoke("add_settings_to_policy_cmd", { policyId, settings });
+}
+
+export async function removeSettingsFromPolicy(
+  policyId: string,
+  definitionIds: string[],
+): Promise<CreateCatalogPolicyResponse> {
+  return invoke("remove_settings_from_policy_cmd", { policyId, definitionIds });
 }
 
 export async function signOut(): Promise<void> {

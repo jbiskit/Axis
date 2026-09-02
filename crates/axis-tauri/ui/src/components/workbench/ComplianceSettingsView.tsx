@@ -14,6 +14,7 @@ import {
   type ComplianceSettingRow,
 } from "../../lib/complianceSettings";
 import { fetchCompliancePropertyDocs, updateCompliancePolicy } from "../../lib/tauri";
+import { useInspectorSaveAction } from "./inspectorSave";
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -234,6 +235,12 @@ export function ComplianceSettingsView({
     }
   }
 
+  useInspectorSaveAction({
+    onSave: () => void save(),
+    disabled: busy || !dirty,
+    busy,
+  });
+
   return (
     <div className="stack compliance-settings-view">
       <section className="axis-panel" style={{ padding: "0.85rem" }}>
@@ -274,14 +281,6 @@ export function ComplianceSettingsView({
                 : "Required settings are sent to Graph. Not configured is left unset."}
             </p>
           </div>
-          <button
-            type="button"
-            className="axis-btn axis-btn-primary"
-            disabled={busy || !dirty}
-            onClick={() => void save()}
-          >
-            {busy ? "Saving…" : "Save to Graph"}
-          </button>
         </div>
         {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
         {message ? <div className="axis-alert axis-alert-info">{message}</div> : null}

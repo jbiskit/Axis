@@ -471,32 +471,64 @@ fn script_kind_spec(kind: &str) -> Result<ScriptKindSpec, GraphError> {
 /// PATCH decoded script bodies back to Graph (Base64 UTF-8), matching the Next.js workbenches.
 pub async fn update_script_content(
     access_token: &str,
-    kind: &str,
-    id: &str,
-    script_text: Option<&str>,
-    detection_script_text: Option<&str>,
-    remediation_script_text: Option<&str>,
+    input: &UpdateScriptContentInput,
 ) -> Result<(), GraphError> {
-    let spec = script_kind_spec(kind)?;
-    let path = format!("{}/{enc}", spec.collection, enc = encode_id(id));
+    let spec = script_kind_spec(&input.kind)?;
+    let path = format!("{}/{enc}", spec.collection, enc = encode_id(&input.id));
     let mut body = json!({ "@odata.type": spec.odata_type });
     let object = body.as_object_mut().expect("json object");
+    if let Some(name) = input.display_name.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+        object.insert("displayName".into(), json!(name));
+    }
+    if let Some(description) = &input.description {
+        object.insert("description".into(), json!(description.trim()));
+    }
+    if let Some(publisher) = &input.publisher {
+        object.insert("publisher".into(), json!(publisher.trim()));
+    }
+    if let Some(run_as) = input
+        .run_as_account
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if !matches!(run_as, "system" | "user") {
+            return Err(GraphError::Request {
+                status: 400,
+                code: None,
+                message: "Run as must be system or user.".into(),
+                permission_related: false,
+            });
+        }
+        object.insert("runAsAccount".into(), json!(run_as));
+    }
+    if spec.supports_signature {
+        if let Some(value) = input.enforce_signature_check {
+            object.insert("enforceSignatureCheck".into(), json!(value));
+        }
+    }
+    if spec.supports_32bit {
+        if let Some(value) = input.run_as_32_bit {
+            object.insert("runAs32Bit".into(), json!(value));
+        }
+    }
     match spec.content {
         ScriptContentKind::Remediation => {
-            if let Some(text) = detection_script_text {
+            if let Some(text) = &input.detection_script_text {
                 object.insert("detectionScriptContent".into(), json!(encode_b64(text)));
             }
-            if let Some(text) = remediation_script_text {
+            if let Some(text) = &input.remediation_script_text {
                 object.insert("remediationScriptContent".into(), json!(encode_b64(text)));
             }
         }
         ScriptContentKind::Compliance => {
-            if let Some(text) = detection_script_text.or(script_text) {
+            if let Some(text) = input.detection_script_text.as_deref().or(input.script_text.as_deref())
+            {
                 object.insert("detectionScriptContent".into(), json!(encode_b64(text)));
             }
         }
         ScriptContentKind::Platform => {
-            if let Some(text) = script_text {
+            if let Some(text) = &input.script_text {
                 object.insert("scriptContent".into(), json!(encode_b64(text)));
             }
         }
@@ -508,11 +540,38 @@ pub async fn update_script_content(
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct UpdateScriptContentInput {
+    pub kind: String,
+    pub id: String,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub publisher: Option<String>,
+    #[serde(default)]
+    pub run_as_account: Option<String>,
+    #[serde(default)]
+    pub run_as_32_bit: Option<bool>,
+    #[serde(default)]
+    pub enforce_signature_check: Option<bool>,
+    #[serde(default)]
+    pub script_text: Option<String>,
+    #[serde(default)]
+    pub detection_script_text: Option<String>,
+    #[serde(default)]
+    pub remediation_script_text: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateTenantScriptInput {
     pub kind: String,
     pub display_name: String,
     #[serde(default)]
     pub description: Option<String>,
+    #[serde(default)]
+    pub publisher: Option<String>,
     #[serde(default)]
     pub run_as_account: Option<String>,
     #[serde(default)]
@@ -525,6 +584,8 @@ pub struct CreateTenantScriptInput {
     pub remediation_script_text: Option<String>,
     #[serde(default)]
     pub run_as_32_bit: Option<bool>,
+    #[serde(default)]
+    pub enforce_signature_check: Option<bool>,
 }
 
 fn default_script_file_name(display_name: &str, ext: &str) -> String {
@@ -597,10 +658,21 @@ fn script_create_body(
         object.insert("fileName".into(), json!(file_name));
     }
     if spec.supports_signature {
-        object.insert("enforceSignatureCheck".into(), json!(false));
+        object.insert(
+            "enforceSignatureCheck".into(),
+            json!(input.enforce_signature_check.unwrap_or(false)),
+        );
     }
     if let Some(description) = description {
         object.insert("description".into(), json!(description));
+    }
+    if let Some(publisher) = input
+        .publisher
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        object.insert("publisher".into(), json!(publisher));
     }
     if spec.supports_32bit {
         object.insert(
@@ -733,12 +805,14 @@ mod tests {
             kind: kind.into(),
             display_name: name.into(),
             description: Some("  from Axis  ".into()),
+            publisher: None,
             run_as_account: None,
             file_name: None,
             script_text: Some("Write-Output 'hi'".into()),
             detection_script_text: Some("exit 0".into()),
             remediation_script_text: Some("# fix".into()),
             run_as_32_bit: Some(true),
+            enforce_signature_check: None,
         }
     }
 
@@ -754,6 +828,7 @@ mod tests {
         assert_eq!(body["fileName"], "Hello-world.ps1");
         assert_eq!(body["runAsAccount"], "system");
         assert_eq!(body["runAs32Bit"], true);
+        assert_eq!(body["enforceSignatureCheck"], false);
         assert_eq!(body["scriptContent"], encode_b64("Write-Output 'hi'"));
         assert_eq!(body["description"], "from Axis");
         assert!(body.get("detectionScriptContent").is_none());

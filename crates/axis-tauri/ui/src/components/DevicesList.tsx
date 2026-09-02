@@ -314,9 +314,10 @@ export function DevicesList({
         </div>
       ) : null}
 
+      <div className="searchable-table">
       {filters}
 
-      <section className="axis-panel" style={{ overflow: "hidden" }}>
+      <section className="axis-panel">
         {loading && devices.length === 0 ? (
           <p className="muted" style={{ margin: 0, padding: "1.25rem" }}>
             Loading managed devices…
@@ -392,6 +393,7 @@ export function DevicesList({
           </div>
         )}
       </section>
+      </div>
     </div>
   );
 }

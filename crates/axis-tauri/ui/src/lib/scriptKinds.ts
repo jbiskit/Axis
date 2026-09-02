@@ -72,6 +72,8 @@ export function parseScriptInspectorKind(kind: string) {
     isRemediation: scriptKind === "remediation",
     isCompliance: scriptKind === "compliance",
     language: scriptLanguageForKind(scriptKind),
+    supportsSignature: scriptKind !== "platform-shell",
+    supports32Bit: scriptKind !== "platform-shell",
   };
 }
 

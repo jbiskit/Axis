@@ -22,14 +22,16 @@ import { OpenInIntune } from "../intune/OpenInIntune";
 import { ContextMenu, type ContextMenuState } from "../ui/ContextMenu";
 import { ObjectDeleteButton } from "./ObjectListMenu";
 import { ScriptCodeEditor } from "../ui/ScriptCodeEditor";
+import { ScriptRunSettingsFields } from "./ScriptRunSettingsFields";
 import { PageHeader } from "../ui/PageChrome";
 import { CatalogSettingInstances } from "./CatalogSettingInstances";
 import { CompliancePolicyStatus } from "./CompliancePolicyStatus";
 import { ComplianceSettingsView } from "./ComplianceSettingsView";
+import { InspectorSaveButton, InspectorSaveProvider } from "./inspectorSave";
 import { PolicySettingsEditor } from "./PolicySettingsEditor";
 import { AssignmentsDialog } from "./PolicyBulkAssign";
 import { ScriptRunStatus } from "./RemediationDeviceStatus";
-import { formatRelative, IncompleteBanner } from "./shared";
+import { formatRelative, IncompleteBanner, InspectorErrorBoundary } from "./shared";
 
 type InspectorTab = "overview" | "status" | "assignments" | "payload";
 
@@ -193,6 +195,7 @@ function overviewRows(detail: GraphObjectDetail): Array<{ label: string; value: 
   const keys = [
     ["Description", "description"],
     ["Publisher", "publisher"],
+    ["Version", "version"],
     ["Version", "displayVersion"],
     ["File", "fileName"],
     ["Package id", "packageIdentifier"],
@@ -200,7 +203,6 @@ function overviewRows(detail: GraphObjectDetail): Array<{ label: string; value: 
     ["Platforms", "platforms"],
     ["Technologies", "technologies"],
     ["Settings", "settingCount"],
-    ["Run as", "runAsAccount"],
     ["Join type", "deviceJoinType"],
     ["Name template", "deviceNameTemplate"],
     ["Serial", "serialNumber"],
@@ -235,6 +237,32 @@ function overviewRows(detail: GraphObjectDetail): Array<{ label: string; value: 
             ? "Yes"
             : "No",
     });
+  }
+  if (detail.kind.startsWith("script:")) {
+    if (detail.kind === "script:remediation") {
+      rows.push({
+        label: "Detection script",
+        value: detail.detectionScriptText?.trim() ? "Yes" : "No",
+      });
+      rows.push({
+        label: "Remediation script",
+        value: detail.remediationScriptText?.trim() ? "Yes" : "No",
+      });
+    }
+    rows.push({
+      label: "Run this script using the logged-on credentials",
+      value: object.runAsAccount === "user" ? "Yes" : "No",
+    });
+    if (detail.kind !== "script:platform-shell") {
+      rows.push({
+        label: "Enforce script signature check",
+        value: object.enforceSignatureCheck === true ? "Yes" : "No",
+      });
+      rows.push({
+        label: "Run script in 64-bit PowerShell",
+        value: object.runAs32Bit === true ? "No" : "Yes",
+      });
+    }
   }
   for (const [label, key] of keys) {
     const raw = object[key];
@@ -273,10 +301,35 @@ function applyDetailToEditor(
   setScriptText: (value: string) => void,
   setDetectionText: (value: string) => void,
   setRemediationText: (value: string) => void,
+  setScriptMeta: (value: ScriptMetaState) => void,
 ) {
   setScriptText(detail?.scriptText ?? "");
   setDetectionText(detail?.detectionScriptText ?? "");
   setRemediationText(detail?.remediationScriptText ?? "");
+  setScriptMeta(scriptMetaFromDetail(detail));
+}
+
+type ScriptMetaState = {
+  name: string;
+  description: string;
+  publisher: string;
+  version: string;
+  runAsUser: boolean;
+  enforceSignatureCheck: boolean;
+  runAs64Bit: boolean;
+};
+
+function scriptMetaFromDetail(detail: GraphObjectDetail | null): ScriptMetaState {
+  const object = asRecord(detail?.object) ?? {};
+  return {
+    name: detail?.title ?? "",
+    description: typeof object.description === "string" ? object.description : "",
+    publisher: typeof object.publisher === "string" ? object.publisher : "",
+    version: object.version == null || object.version === "" ? "" : String(object.version),
+    runAsUser: object.runAsAccount === "user",
+    enforceSignatureCheck: object.enforceSignatureCheck === true,
+    runAs64Bit: object.runAs32Bit !== true,
+  };
 }
 
 export function GraphObjectInspector({
@@ -299,12 +352,12 @@ export function GraphObjectInspector({
   const [loading, setLoading] = useState(!cached);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<InspectorTab>(() => defaultInspectorTab(kind));
-  const [editingPolicy, setEditingPolicy] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [scriptText, setScriptText] = useState(cached?.scriptText ?? "");
   const [detectionText, setDetectionText] = useState(cached?.detectionScriptText ?? "");
   const [remediationText, setRemediationText] = useState(cached?.remediationScriptText ?? "");
+  const [scriptMeta, setScriptMeta] = useState(() => scriptMetaFromDetail(cached));
   const [saveBusy, setSaveBusy] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -318,7 +371,6 @@ export function GraphObjectInspector({
     let cancelled = false;
     const hit = readCachedObjectDetail(kind, id);
     setError(null);
-    setEditingPolicy(false);
     setAssignOpen(false);
     setExportOpen(false);
     setSaveMessage(null);
@@ -326,14 +378,14 @@ export function GraphObjectInspector({
     setTab(defaultInspectorTab(kind));
     if (hit) {
       setDetail(hit);
-      applyDetailToEditor(hit, setScriptText, setDetectionText, setRemediationText);
+      applyDetailToEditor(hit, setScriptText, setDetectionText, setRemediationText, setScriptMeta);
       setLoading(false);
       const cachedDrafts = readCachedAssignmentDrafts(kind, id);
       if (cachedDrafts) setAssignmentDrafts(cachedDrafts);
     } else {
       setDetail(null);
       setAssignmentDrafts([]);
-      applyDetailToEditor(null, setScriptText, setDetectionText, setRemediationText);
+      applyDetailToEditor(null, setScriptText, setDetectionText, setRemediationText, setScriptMeta);
       setLoading(true);
     }
     void fetchGraphObjectDetail(kind, id)
@@ -342,7 +394,7 @@ export function GraphObjectInspector({
         if (response.detail) {
           writeCachedObjectDetail(response.detail);
           setDetail(response.detail);
-          applyDetailToEditor(response.detail, setScriptText, setDetectionText, setRemediationText);
+          applyDetailToEditor(response.detail, setScriptText, setDetectionText, setRemediationText, setScriptMeta);
           setError(response.error);
         } else if (!hit) {
           setDetail(null);
@@ -412,7 +464,7 @@ export function GraphObjectInspector({
       if (response.detail) {
         writeCachedObjectDetail(response.detail);
         setDetail(response.detail);
-        applyDetailToEditor(response.detail, setScriptText, setDetectionText, setRemediationText);
+        applyDetailToEditor(response.detail, setScriptText, setDetectionText, setRemediationText, setScriptMeta);
       } else {
         setDetail(null);
       }
@@ -452,16 +504,22 @@ export function GraphObjectInspector({
   ];
   const supportsRemediationSchedule = kind === "script:remediation";
   const canEditScripts = Boolean(scriptInfo);
-  const canEditPolicy = kind === "configurationPolicy";
   const canAssign = kind !== "autopilotDevice";
   const exportJson = detail ? pretty(exportPayload(detail)) : "";
+  const savedMeta = scriptMetaFromDetail(detail);
   const dirty =
     canEditScripts &&
     (scriptText !== (detail?.scriptText ?? "") ||
       detectionText !== (detail?.detectionScriptText ?? "") ||
-      remediationText !== (detail?.remediationScriptText ?? ""));
+      remediationText !== (detail?.remediationScriptText ?? "") ||
+      scriptMeta.name !== savedMeta.name ||
+      scriptMeta.description !== savedMeta.description ||
+      scriptMeta.publisher !== savedMeta.publisher ||
+      scriptMeta.runAsUser !== savedMeta.runAsUser ||
+      scriptMeta.enforceSignatureCheck !== savedMeta.enforceSignatureCheck ||
+      scriptMeta.runAs64Bit !== savedMeta.runAs64Bit);
 
-  async function saveScripts() {
+  const saveScripts = useCallback(async () => {
     if (!detail) return;
     setSaveBusy(true);
     setSaveError(null);
@@ -470,6 +528,12 @@ export function GraphObjectInspector({
       const response = await updateScriptContent({
         kind: detail.kind,
         id: detail.id,
+        displayName: scriptMeta.name.trim() || detail.title,
+        description: scriptMeta.description,
+        publisher: scriptMeta.publisher,
+        runAsAccount: scriptMeta.runAsUser ? "user" : "system",
+        runAs32Bit: scriptInfo?.supports32Bit ? !scriptMeta.runAs64Bit : null,
+        enforceSignatureCheck: scriptInfo?.supportsSignature ? scriptMeta.enforceSignatureCheck : null,
         scriptText: scriptInfo?.isPlatform ? scriptText : null,
         detectionScriptText:
           scriptInfo?.isRemediation || scriptInfo?.isCompliance ? detectionText : null,
@@ -481,6 +545,18 @@ export function GraphObjectInspector({
       }
       const next = {
         ...detail,
+        title: scriptMeta.name.trim() || detail.title,
+        object: {
+          ...detail.object,
+          displayName: scriptMeta.name.trim() || detail.title,
+          description: scriptMeta.description,
+          publisher: scriptMeta.publisher,
+          runAsAccount: scriptMeta.runAsUser ? "user" : "system",
+          ...(scriptInfo?.supports32Bit ? { runAs32Bit: !scriptMeta.runAs64Bit } : {}),
+          ...(scriptInfo?.supportsSignature
+            ? { enforceSignatureCheck: scriptMeta.enforceSignatureCheck }
+            : {}),
+        },
         scriptText: detail.scriptText != null || scriptText ? scriptText : detail.scriptText,
         detectionScriptText:
           detail.detectionScriptText != null || detectionText
@@ -493,13 +569,34 @@ export function GraphObjectInspector({
       };
       writeCachedObjectDetail(next);
       setDetail(next);
+      requestObjectRefresh(detail.id);
       setSaveMessage("Saved to Graph.");
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : "Save failed");
     } finally {
       setSaveBusy(false);
     }
-  }
+  }, [
+    detectionText,
+    detail,
+    remediationText,
+    scriptInfo?.isCompliance,
+    scriptInfo?.isPlatform,
+    scriptInfo?.isRemediation,
+    scriptInfo?.supports32Bit,
+    scriptInfo?.supportsSignature,
+    scriptMeta,
+    scriptText,
+  ]);
+
+  const scriptSaveAction = useMemo(() => {
+    if (!canEditScripts || !detail) return null;
+    return {
+      onSave: () => void saveScripts(),
+      disabled: saveBusy || !dirty,
+      busy: saveBusy,
+    };
+  }, [canEditScripts, detail, dirty, saveBusy, saveScripts]);
 
   function handleClose() {
     if (popout) {
@@ -510,9 +607,11 @@ export function GraphObjectInspector({
   }
 
   return (
-    <div className="stack">
+    <InspectorSaveProvider action={scriptSaveAction}>
+    <div className="stack inspector-body">
+      <div className="inspector-chrome">
       <PageHeader
-        eyebrow={popout ? "Popout" : editingPolicy ? "Edit policy" : "Inspector"}
+        eyebrow={popout ? "Popout" : "Inspector"}
         title={detail?.title ?? fallbackTitle ?? "Object"}
         onContextMenu={(event) => {
           event.preventDefault();
@@ -531,17 +630,8 @@ export function GraphObjectInspector({
         }}
         actions={
           <div className="device-actions">
-            {canEditPolicy && detail && !editingPolicy ? (
-              <button
-                type="button"
-                className="axis-btn axis-btn-primary"
-                title="Edit settings on this policy"
-                onClick={() => setEditingPolicy(true)}
-              >
-                Edit
-              </button>
-            ) : null}
-            {canAssign && detail && !editingPolicy ? (
+            <InspectorSaveButton />
+            {canAssign && detail ? (
               <button
                 type="button"
                 className="axis-btn"
@@ -549,11 +639,6 @@ export function GraphObjectInspector({
                 onClick={() => setAssignOpen(true)}
               >
                 Update assignments
-              </button>
-            ) : null}
-            {canEditPolicy && editingPolicy ? (
-              <button type="button" className="axis-btn" onClick={() => setEditingPolicy(false)}>
-                Done
               </button>
             ) : null}
             {detail ? (
@@ -595,7 +680,7 @@ export function GraphObjectInspector({
         }
       />
       <ContextMenu state={headerMenu} onClose={() => setHeaderMenu(null)} />
-      {incomplete && !editingPolicy ? <IncompleteBanner>{incomplete}</IncompleteBanner> : null}
+      {incomplete ? <IncompleteBanner>{incomplete}</IncompleteBanner> : null}
       {loading && !detail ? <p className="muted">Loading Graph object…</p> : null}
       {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
       {saveError ? <div className="axis-alert axis-alert-danger">{saveError}</div> : null}
@@ -603,29 +688,24 @@ export function GraphObjectInspector({
       {detail?.warnings?.length ? (
         <div className="axis-alert axis-alert-warning">{detail.warnings.join(" · ")}</div>
       ) : null}
-      {detail && editingPolicy ? (
-        <section className="axis-panel" style={{ padding: "0.85rem" }}>
-          <PolicySettingsEditor
-            policyId={detail.id}
-            object={detail.object}
-            settings={settings}
-            onSaved={() => void reloadDetail()}
-          />
-        </section>
-      ) : detail ? (
+      {detail ? (
+        <div className="tab-row">
+          {inspectorTabs.map(([tabId, label]) => (
+            <button
+              key={tabId}
+              type="button"
+              className={`tab-btn${tab === tabId ? " active" : ""}`}
+              onClick={() => setTab(tabId)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      </div>
+      <div className="inspector-scroll">
+      {detail ? (
         <>
-          <div className="tab-row">
-            {inspectorTabs.map(([tabId, label]) => (
-              <button
-                key={tabId}
-                type="button"
-                className={`tab-btn${tab === tabId ? " active" : ""}`}
-                onClick={() => setTab(tabId)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
           {tab === "overview" ? (
             <section className="axis-panel" style={{ padding: "0.85rem" }}>
               <dl className="meta-grid">
@@ -684,27 +764,93 @@ export function GraphObjectInspector({
           {tab === "payload" ? (
             <div className="stack">
               {canEditScripts ? (
-                <div className="device-toolbar">
-                  <p className="muted" style={{ margin: 0 }}>
-                    {dirty
-                      ? "Unsaved edits in the buffer. Red markers are parse errors; yellow are Intune conventions. This does not run the script."
-                      : scriptInfo?.isPlatform
-                        ? "Platform script body from Graph. Syntax is checked locally; Intune runtime is not simulated."
-                        : scriptInfo?.isRemediation
-                          ? "Detection and remediation scripts from Graph. Syntax is checked locally; Intune runtime is not simulated."
-                          : scriptInfo?.isCompliance
-                            ? "Compliance discovery script from Graph. Syntax is checked locally; Intune runtime is not simulated."
-                            : "PowerShell/shell bodies from Graph."}
-                  </p>
-                  <button
-                    type="button"
-                    className="axis-btn axis-btn-primary"
-                    disabled={saveBusy || !dirty}
-                    onClick={() => void saveScripts()}
-                  >
-                    {saveBusy ? "Saving…" : "Save to Graph"}
-                  </button>
-                </div>
+                <section className="axis-panel" style={{ padding: "1rem 1.1rem" }}>
+                  <div className="inspector-form">
+                    <div className="inspector-form-section">
+                      <h2>Basics</h2>
+                      <div className="inspector-form-grid">
+                        <label className="inspector-form-row">
+                          <span>Name</span>
+                          <input
+                            className="axis-input"
+                            value={scriptMeta.name}
+                            disabled={saveBusy}
+                            onChange={(event) =>
+                              setScriptMeta((current) => ({ ...current, name: event.target.value }))
+                            }
+                          />
+                        </label>
+                        <label className="inspector-form-row">
+                          <span>Description</span>
+                          <input
+                            className="axis-input"
+                            value={scriptMeta.description}
+                            disabled={saveBusy}
+                            onChange={(event) =>
+                              setScriptMeta((current) => ({
+                                ...current,
+                                description: event.target.value,
+                              }))
+                            }
+                          />
+                        </label>
+                        <label className="inspector-form-row">
+                          <span>Publisher</span>
+                          <input
+                            className="axis-input"
+                            value={scriptMeta.publisher}
+                            placeholder="No Publisher"
+                            disabled={saveBusy}
+                            onChange={(event) =>
+                              setScriptMeta((current) => ({
+                                ...current,
+                                publisher: event.target.value,
+                              }))
+                            }
+                          />
+                        </label>
+                        <div className="inspector-form-row">
+                          <span className="inspector-form-label">Version</span>
+                          <span className="inspector-form-static">{scriptMeta.version || "—"}</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="inspector-form-section">
+                      <h2>Settings</h2>
+                      <div className="inspector-form-grid">
+                        {scriptInfo?.isRemediation ? (
+                          <>
+                            <span className="inspector-form-label">Detection script</span>
+                            <span className="inspector-form-static">
+                              {detectionText.trim() ? "Yes" : "No"}
+                            </span>
+                            <span className="inspector-form-label">Remediation script</span>
+                            <span className="inspector-form-static">
+                              {remediationText.trim() ? "Yes" : "No"}
+                            </span>
+                          </>
+                        ) : null}
+                        <ScriptRunSettingsFields
+                          runAsUser={scriptMeta.runAsUser}
+                          onRunAsUserChange={(runAsUser) =>
+                            setScriptMeta((current) => ({ ...current, runAsUser }))
+                          }
+                          enforceSignatureCheck={scriptMeta.enforceSignatureCheck}
+                          onEnforceSignatureCheckChange={(enforceSignatureCheck) =>
+                            setScriptMeta((current) => ({ ...current, enforceSignatureCheck }))
+                          }
+                          runAs64Bit={scriptMeta.runAs64Bit}
+                          onRunAs64BitChange={(runAs64Bit) =>
+                            setScriptMeta((current) => ({ ...current, runAs64Bit }))
+                          }
+                          showSignature={Boolean(scriptInfo?.supportsSignature)}
+                          show64Bit={Boolean(scriptInfo?.supports32Bit)}
+                          disabled={saveBusy}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </section>
               ) : null}
               {scriptInfo?.isPlatform ? (
                 <section className="axis-panel" style={{ padding: "0.85rem" }}>
@@ -744,24 +890,14 @@ export function GraphObjectInspector({
               ) : null}
               {kind === "configurationPolicy" ? (
                 <section className="axis-panel" style={{ padding: "0.85rem" }}>
-                  <div className="device-toolbar">
-                    <h2 style={{ margin: 0, fontSize: "0.85rem" }}>
-                      Setting instances ({settings.length})
-                    </h2>
-                    <button
-                      type="button"
-                      className="axis-btn axis-btn-primary"
-                      title="Open the policy editor"
-                      onClick={() => setEditingPolicy(true)}
-                    >
-                      Edit
-                    </button>
-                  </div>
-                  {settings.length > 0 ? (
-                    <CatalogSettingInstances settings={settings} />
-                  ) : (
-                    <p className="muted">No setting instances on this policy.</p>
-                  )}
+                  <InspectorErrorBoundary>
+                    <PolicySettingsEditor
+                      policyId={detail.id}
+                      object={detail.object}
+                      settings={settings}
+                      onSaved={() => void reloadDetail()}
+                    />
+                  </InspectorErrorBoundary>
                 </section>
               ) : settings.length > 0 ? (
                 <section className="axis-panel" style={{ padding: "0.85rem" }}>
@@ -797,6 +933,7 @@ export function GraphObjectInspector({
           ) : null}
         </>
       ) : null}
+      </div>
       {canAssign ? (
         <AssignmentsDialog
           open={assignOpen && Boolean(detail)}
@@ -826,5 +963,6 @@ export function GraphObjectInspector({
         onClose={() => setExportOpen(false)}
       />
     </div>
+    </InspectorSaveProvider>
   );
 }

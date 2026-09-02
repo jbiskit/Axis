@@ -21,6 +21,7 @@ const PINNED_ROOT_CATEGORY_IDS: &[&str] = &[
 ];
 
 const CATALOG_PAGE_MAX: usize = 20_000;
+const CATALOG_SEARCH_MAX: usize = 40;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -818,10 +819,13 @@ pub async fn search_catalog_settings(
 
     for (candidate_mode, filter) in candidates {
         let path = format!(
-            "/deviceManagement/configurationSettings?{select}&$filter={}",
+            "/deviceManagement/configurationSettings?{select}&$top={CATALOG_SEARCH_MAX}&$filter={}",
             urlencoding::encode(&filter)
         );
-        match list_values(&client, access_token, &path).await {
+        match client
+            .fetch_all_pages::<Value>(access_token, &path, "beta", CATALOG_SEARCH_MAX)
+            .await
+        {
             Ok(raw) => {
                 let mut hits = 0usize;
                 for row in raw {
@@ -1165,7 +1169,99 @@ pub async fn add_settings_to_policy(
         .into_iter()
         .filter_map(|id| by_definition.remove(&id))
         .collect();
-    if merged.is_empty() {
+    replace_configuration_policy_settings(&client, access_token, policy_id, &policy, merged).await
+}
+
+pub async fn remove_settings_from_policy(
+    access_token: &str,
+    policy_id: &str,
+    definition_ids: &[String],
+) -> Result<(), GraphError> {
+    let remove: HashSet<String> = definition_ids
+        .iter()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .collect();
+    if remove.is_empty() {
+        return Err(GraphError::Request {
+            status: 400,
+            code: None,
+            message: "Select at least one setting to remove.".into(),
+            permission_related: false,
+        });
+    }
+    let client = GraphClient::new();
+    let policy: Value = client
+        .fetch_plain(
+            access_token,
+            &format!(
+                "/deviceManagement/configurationPolicies/{policy_id}?$select=id,name,description,platforms,technologies,roleScopeTagIds,templateReference"
+            ),
+            "beta",
+        )
+        .await?;
+
+    let template_id = policy
+        .get("templateReference")
+        .and_then(as_object)
+        .and_then(|reference| string_field(reference, "templateId"));
+    if template_id.is_some() {
+        return Err(GraphError::Request {
+            status: 400,
+            code: None,
+            message: "Cannot remove settings from a template-backed policy. Duplicate it as a freeform Settings Catalog policy first.".into(),
+            permission_related: false,
+        });
+    }
+
+    let existing = list_values(
+        &client,
+        access_token,
+        &format!("/deviceManagement/configurationPolicies/{policy_id}/settings"),
+    )
+    .await?;
+    let (kept, removed) = instances_without_definitions(&existing, &remove);
+    if removed == 0 {
+        return Err(GraphError::Request {
+            status: 404,
+            code: None,
+            message: "That setting is not on this policy.".into(),
+            permission_related: false,
+        });
+    }
+    replace_configuration_policy_settings(&client, access_token, policy_id, &policy, kept).await
+}
+
+fn instances_without_definitions(
+    existing: &[Value],
+    remove: &HashSet<String>,
+) -> (Vec<Value>, usize) {
+    let mut kept = Vec::new();
+    let mut removed = 0;
+    for row in existing {
+        let Some(instance) = row.get("settingInstance") else {
+            continue;
+        };
+        let Some(id) = setting_definition_id(instance) else {
+            continue;
+        };
+        if remove.contains(&id) {
+            removed += 1;
+            continue;
+        }
+        kept.push(instance.clone());
+    }
+    (kept, removed)
+}
+
+async fn replace_configuration_policy_settings(
+    client: &GraphClient,
+    access_token: &str,
+    policy_id: &str,
+    policy: &Value,
+    instances: Vec<Value>,
+) -> Result<(), GraphError> {
+    if instances.is_empty() {
         return Err(GraphError::Request {
             status: 400,
             code: None,
@@ -1180,7 +1276,7 @@ pub async fn add_settings_to_policy(
         "platforms": policy.get("platforms").cloned().unwrap_or(json!("windows10")),
         "technologies": policy.get("technologies").cloned().unwrap_or(json!("mdm")),
         "roleScopeTagIds": policy.get("roleScopeTagIds").cloned().unwrap_or(json!(["0"])),
-        "settings": merged.iter().map(setting_envelope).collect::<Vec<_>>(),
+        "settings": instances.iter().map(setting_envelope).collect::<Vec<_>>(),
     });
 
     client
@@ -1196,6 +1292,20 @@ pub async fn add_settings_to_policy(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drops_removed_setting_instances() {
+        let existing = vec![
+            json!({ "settingInstance": { "settingDefinitionId": "keep" } }),
+            json!({ "settingInstance": { "settingDefinitionId": "drop" } }),
+            json!({ "id": "orphan" }),
+        ];
+        let remove = HashSet::from(["drop".into()]);
+        let (kept, removed) = instances_without_definitions(&existing, &remove);
+        assert_eq!(removed, 1);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0]["settingDefinitionId"], "keep");
+    }
 
     fn windows_root(id: &str, name: &str, children: Vec<&str>) -> CatalogCategory {
         CatalogCategory {

@@ -7,6 +7,7 @@ import type {
   SettingsCatalogPlatform,
 } from "../types/inventory";
 import { matchesIntunePlatform } from "./platforms";
+import { catalogUiLabel, isAdmxPlaceholderName } from "./catalogSettingDisplay";
 
 export const NIL_CATEGORY_PARENT_ID = "00000000-0000-0000-0000-000000000000";
 export const ADMINISTRATIVE_TEMPLATES_CATEGORY_ID = "48be5f9d-4941-4189-8015-dd78f87aacd5";
@@ -110,14 +111,18 @@ export function childCatalogCategories(
 }
 
 export function ancestorCategoryIds(categories: CatalogCategory[], categoryId: string): string[] {
-  const byId = new Map(categories.map((category) => [category.id, category]));
+  const list = Array.isArray(categories) ? categories : [];
+  const byId = new Map(list.map((category) => [category.id, category]));
   const ancestors: string[] = [];
+  const seen = new Set<string>([categoryId]);
   let current = byId.get(categoryId);
   while (
     current?.parentCategoryId &&
     current.parentCategoryId !== NIL_CATEGORY_PARENT_ID &&
-    current.parentCategoryId !== current.id
+    current.parentCategoryId !== current.id &&
+    !seen.has(current.parentCategoryId)
   ) {
+    seen.add(current.parentCategoryId);
     ancestors.unshift(current.parentCategoryId);
     current = byId.get(current.parentCategoryId);
   }
@@ -129,7 +134,8 @@ export function categoryBreadcrumb(
   categoryId: string | null | undefined,
 ): string {
   if (!categoryId) return "";
-  const byId = new Map(categories.map((category) => [category.id, category]));
+  const list = Array.isArray(categories) ? categories : [];
+  const byId = new Map(list.map((category) => [category.id, category]));
   const category = byId.get(categoryId);
   if (!category) return "";
   const path = (category.description ?? "").trim();
@@ -166,30 +172,37 @@ function isSimpleSetting(detail: CatalogSettingDetail): boolean {
 }
 
 function dependentsForOption(detail: CatalogSettingDetail, optionItemId: string) {
-  return detail.options.find((option) => option.itemId === optionItemId)?.dependedOnBy ?? [];
+  return (detail.options ?? []).find((option) => option.itemId === optionItemId)?.dependedOnBy ?? [];
 }
 
 export function defaultDraftForSetting(
   detail: CatalogSettingDetail,
   dependents: Record<string, CatalogSettingDetail> = {},
+  visiting: Set<string> = new Set(),
 ): SettingValueDraft {
+  if (visiting.has(detail.id)) {
+    return { kind: "unsupported", reason: `“${detail.displayName}” has a circular catalog dependency.` };
+  }
+  const nextVisit = new Set(visiting);
+  nextVisit.add(detail.id);
   if (isGroupCollection(detail)) {
     return {
       kind: "unsupported",
       reason: `“${detail.displayName}” is a ${detail.kind || "group collection"} setting — the row is listed like the portal, but this editor is not ported yet.`,
     };
   }
-  if (detail.options.length > 0) {
+  const options = detail.options ?? [];
+  if (options.length > 0) {
     const preferred =
       (detail.defaultOptionId &&
-        detail.options.find((option) => option.itemId === detail.defaultOptionId)?.itemId) ||
-      detail.options.find((option) => /enabled|allow|yes/i.test(`${option.displayName} ${option.itemId}`))
+        options.find((option) => option.itemId === detail.defaultOptionId)?.itemId) ||
+      options.find((option) => /enabled|allow|yes/i.test(`${option.displayName} ${option.itemId}`))
         ?.itemId ||
-      detail.options[0]!.itemId;
+      options[0]!.itemId;
     const children: Record<string, SettingValueDraft> = {};
     for (const dep of dependentsForOption(detail, preferred)) {
       const child = dependents[dep.settingDefinitionId];
-      if (child) children[dep.settingDefinitionId] = defaultDraftForSetting(child, dependents);
+      if (child) children[dep.settingDefinitionId] = defaultDraftForSetting(child, dependents, nextVisit);
     }
     return { kind: "choice", optionItemId: preferred, children };
   }
@@ -465,9 +478,78 @@ export function draftValueSummary(
     const values = draft.values.map((value) => value.trim()).filter(Boolean);
     return values.length ? `${values.length} value(s)` : "No values added";
   }
-  const option =
-    detail.options.find((candidate) => candidate.itemId === draft.optionItemId)?.displayName ?? draft.optionItemId;
-  return option;
+  const match = detail.options.find((candidate) => candidate.itemId === draft.optionItemId);
+  return catalogUiLabel(
+    [match?.displayName],
+    match?.itemId ?? draft.optionItemId,
+    detail.id,
+  );
+}
+
+export type SettingDraftDiffLine = {
+  label: string;
+  before: string;
+  after: string;
+};
+
+function flattenDraftLeaves(
+  detail: CatalogSettingDetail,
+  draft: SettingValueDraft,
+  dependents: Record<string, CatalogSettingDetail>,
+  parentPath?: string,
+): Array<{ path: string; value: string; unnamed: boolean }> {
+  const unnamed = Boolean(parentPath) && isAdmxPlaceholderName(detail.displayName);
+  const title = unnamed ? detail.id : catalogUiLabel([detail.displayName], detail.id);
+  const path = parentPath ? `${parentPath} › ${title}` : catalogUiLabel([detail.displayName], detail.id);
+  if (draft.kind === "choice") {
+    const rows = [{ path, value: draftValueSummary(detail, draft, dependents), unnamed }];
+    for (const [id, childDraft] of Object.entries(draft.children)) {
+      const child = dependents[id];
+      if (!child) continue;
+      rows.push(...flattenDraftLeaves(child, childDraft, dependents, path));
+    }
+    return rows;
+  }
+  return [{ path, value: draftValueSummary(detail, draft, dependents), unnamed }];
+}
+
+function relativeDraftLabel(path: string, rootName: string): string {
+  if (path === rootName) return "Value";
+  const prefix = `${rootName} › `;
+  return path.startsWith(prefix) ? path.slice(prefix.length) : path;
+}
+
+export function diffSettingDrafts(
+  detail: CatalogSettingDetail,
+  original: SettingValueDraft,
+  draft: SettingValueDraft,
+  dependents: Record<string, CatalogSettingDetail>,
+  options?: { added?: boolean },
+): SettingDraftDiffLine[] {
+  const afterLeaves = flattenDraftLeaves(detail, draft, dependents);
+  const rootName = catalogUiLabel([detail.displayName], detail.id);
+  const unnamedByPath = new Map(afterLeaves.map((leaf) => [leaf.path, leaf.unnamed]));
+  if (options?.added) {
+    return afterLeaves.map((leaf, index) => ({
+      label: leaf.unnamed ? "Value" : relativeDraftLabel(leaf.path, rootName),
+      before: index === 0 ? "Not on this policy" : "—",
+      after: leaf.value,
+    }));
+  }
+  const beforeLeaves = flattenDraftLeaves(detail, original, dependents);
+  for (const leaf of beforeLeaves) {
+    if (leaf.unnamed) unnamedByPath.set(leaf.path, true);
+  }
+  const beforeMap = new Map(beforeLeaves.map((leaf) => [leaf.path, leaf.value]));
+  const afterMap = new Map(afterLeaves.map((leaf) => [leaf.path, leaf.value]));
+  const paths = [...new Set([...beforeMap.keys(), ...afterMap.keys()])];
+  const lines = paths.map((path) => ({
+    label: unnamedByPath.get(path) ? "Value" : relativeDraftLabel(path, rootName),
+    before: beforeMap.get(path) ?? "—",
+    after: afterMap.get(path) ?? "—",
+  }));
+  const changed = lines.filter((line) => line.before !== line.after);
+  return changed.length > 0 ? changed : lines;
 }
 
 function usableCatalogText(value?: string | null): string | null {
@@ -697,7 +779,7 @@ export function draftFromSettingInstance(
   }
 
   if (isSimpleCollection(detail)) return { kind: "simpleCollection", values: [] };
-  if (isSimpleSetting(detail) || detail.options.length > 0) {
+  if (isSimpleSetting(detail) || (detail.options ?? []).length > 0) {
     return defaultDraftForSetting(detail, dependents);
   }
   return {

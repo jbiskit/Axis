@@ -13,6 +13,8 @@ export type ScriptImportRow = {
   kind: ScriptImportKind;
   runAsAccount: "system" | "user";
   runAs32Bit: boolean;
+  enforceSignatureCheck: boolean;
+  publisher: string;
   scriptText: string;
   detectionScriptText: string;
   remediationScriptText: string;
@@ -28,6 +30,8 @@ type ParsedPiece = {
   description: string;
   runAsAccount: "system" | "user";
   runAs32Bit: boolean;
+  enforceSignatureCheck: boolean;
+  publisher: string;
   scriptText: string;
   detectionScriptText: string;
   remediationScriptText: string;
@@ -145,8 +149,10 @@ function parseJsonScript(raw: unknown, fileName: string): Omit<ParsedPiece, "pat
   const kind = kindFromToken(kindToken, stringField(row, "fileName") || fileName);
   const name = stringField(row, "displayName", "name") || scriptFileStem(fileName);
   const description = stringField(row, "description");
+  const publisher = stringField(row, "publisher");
   const runAsAccount = runAsFrom(stringField(row, "runAsAccount"));
   const runAs32Bit = boolField(row, "runAs32Bit");
+  const enforceSignatureCheck = boolField(row, "enforceSignatureCheck");
   const scriptText =
     stringField(row, "scriptText") ||
     (typeof row.scriptContent === "string" ? maybeDecodeBase64(row.scriptContent) : "");
@@ -173,8 +179,10 @@ function parseJsonScript(raw: unknown, fileName: string): Omit<ParsedPiece, "pat
     role,
     name,
     description,
+    publisher,
     runAsAccount,
     runAs32Bit,
+    enforceSignatureCheck,
     scriptText,
     detectionScriptText: detectionScriptText || (resolvedKind !== "platform-powershell" && resolvedKind !== "platform-shell" ? scriptText : ""),
     remediationScriptText,
@@ -188,8 +196,10 @@ function emptyPiece(error: string): Omit<ParsedPiece, "path" | "fileName" | "pai
     role: "body",
     name: "",
     description: "",
+    publisher: "",
     runAsAccount: "system",
     runAs32Bit: false,
+    enforceSignatureCheck: false,
     scriptText: "",
     detectionScriptText: "",
     remediationScriptText: "",
@@ -208,8 +218,10 @@ function parseFile(file: PickedTextFile): ParsedPiece {
       role: "body",
       name,
       description: "",
+      publisher: "",
       runAsAccount: "system",
       runAs32Bit: false,
+      enforceSignatureCheck: false,
       scriptText: "",
       detectionScriptText: "",
       remediationScriptText: "",
@@ -230,8 +242,10 @@ function parseFile(file: PickedTextFile): ParsedPiece {
         role: "body",
         name,
         description: "",
+        publisher: "",
         runAsAccount: "system",
         runAs32Bit: false,
+        enforceSignatureCheck: false,
         scriptText: "",
         detectionScriptText: "",
         remediationScriptText: "",
@@ -256,8 +270,10 @@ function parseFile(file: PickedTextFile): ParsedPiece {
     role: resolvedKind === "remediation" && role === "body" ? "detect" : role,
     name: stringField(meta, "displayName", "name") || name,
     description: stringField(meta, "description"),
+    publisher: stringField(meta, "publisher"),
     runAsAccount: runAsFrom(stringField(meta, "runAsAccount")),
     runAs32Bit: boolField(meta, "runAs32Bit"),
+    enforceSignatureCheck: boolField(meta, "enforceSignatureCheck"),
     scriptText: resolvedKind === "platform-powershell" || resolvedKind === "platform-shell" ? body : "",
     detectionScriptText: resolvedKind !== "platform-powershell" && resolvedKind !== "platform-shell" && role !== "remediate" ? body : "",
     remediationScriptText: role === "remediate" ? body : "",
@@ -286,9 +302,11 @@ function rowFromPiece(piece: ParsedPiece, family: ScriptImportFamily, extraFileN
     include: !error,
     name: piece.name,
     description: piece.description,
+    publisher: piece.publisher,
     kind,
     runAsAccount: piece.runAsAccount,
     runAs32Bit: piece.runAs32Bit,
+    enforceSignatureCheck: piece.enforceSignatureCheck,
     scriptText: piece.scriptText,
     detectionScriptText: detection,
     remediationScriptText: piece.remediationScriptText,

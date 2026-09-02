@@ -12,16 +12,33 @@ export function defaultRemediationSchedule(): RemediationScheduleDraft {
   };
 }
 
+export function scheduleIntervalMax(kind: RemediationScheduleKind): number {
+  return kind === "runOnce" ? 1 : 23;
+}
+
+export function clampScheduleInterval(kind: RemediationScheduleKind, interval: number): number {
+  const max = scheduleIntervalMax(kind);
+  if (!Number.isFinite(interval)) return 1;
+  return Math.max(1, Math.min(max, Math.trunc(interval)));
+}
+
+export function scheduleIntervalFieldLabel(kind: RemediationScheduleKind): string {
+  switch (kind) {
+    case "hourly":
+      return "Hours";
+    case "daily":
+      return "Days";
+    default:
+      return "Interval";
+  }
+}
+
 export function remediationScheduleKindLabel(kind: RemediationScheduleKind): string {
   switch (kind) {
     case "hourly":
       return "Hourly";
     case "daily":
       return "Daily";
-    case "weekly":
-      return "Weekly";
-    case "monthly":
-      return "Monthly";
     case "runOnce":
       return "Once";
     default:
@@ -33,16 +50,12 @@ export function remediationScheduleIntervalLabel(
   kind: RemediationScheduleKind,
   interval: number,
 ): string {
-  const value = Math.max(1, Math.min(23, interval));
+  const value = clampScheduleInterval(kind, interval);
   switch (kind) {
     case "hourly":
       return value === 1 ? "Every hour" : `Every ${value} hours`;
     case "daily":
       return value === 1 ? "Every day" : `Every ${value} days`;
-    case "weekly":
-      return value === 1 ? "Every week" : `Every ${value} weeks`;
-    case "monthly":
-      return value === 1 ? "Every month" : `Every ${value} months`;
     case "runOnce":
       return "Once";
     default:
@@ -90,8 +103,6 @@ export function scheduleFromGraphAssignment(row: Record<string, unknown>): {
   let kind: RemediationScheduleKind | null = null;
   if (odata.includes("HourlySchedule")) kind = "hourly";
   else if (odata.includes("DailySchedule")) kind = "daily";
-  else if (odata.includes("WeeklySchedule")) kind = "weekly";
-  else if (odata.includes("MonthlySchedule")) kind = "monthly";
   else if (odata.includes("RunOnceSchedule")) kind = "runOnce";
   if (!kind) return { runRemediationScript };
 

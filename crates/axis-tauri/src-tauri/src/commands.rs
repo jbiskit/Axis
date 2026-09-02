@@ -1,6 +1,6 @@
 use crate::AppState;
 use axis_sdk::{
-    add_settings_to_policy, apply_filter_names, apply_group_metadata, assign_object_assignments,
+    add_settings_to_policy, remove_settings_from_policy, apply_filter_names, apply_group_metadata, assign_object_assignments,
     assignment_capabilities, collect_managed_device_diagnostics, create_directory_group,
     create_compliance_policy, create_policy_with_settings, create_tenant_script, delete_graph_object, delete_managed_device, fetch_compliance_policy_status_with_options, fetch_compliance_property_docs, update_compliance_policy,
     duplicate_graph_object,
@@ -28,7 +28,7 @@ use axis_sdk::{
     DirectoryGroup, DuplicatedObject,
     E8BaselineReference, E8BaselineSource, GraphObjectDetail, InventoryList, LapsCredentialInfo,
     MobileAppSummary, PolicySettingIssue, RemediationDeviceStatusReport, SettingConflictDetail,
-    SettingsCatalogPlatform, TenantScriptSummary, UpdateObjectMetadataInput, UpdatedObjectMetadata,
+    SettingsCatalogPlatform, TenantScriptSummary, UpdateObjectMetadataInput, UpdateScriptContentInput, UpdatedObjectMetadata,
     WindowsUpdatePolicy,
 };
 use serde::Serialize;
@@ -863,7 +863,8 @@ pub async fn search_catalog_settings_cmd(
         });
     };
     match search_catalog_settings(&token, &query, catalog_platform).await {
-        Ok(result) => {
+        Ok(mut result) => {
+            result.settings.truncate(25);
             if !result.settings.is_empty() {
                 state
                     .catalog_index
@@ -969,6 +970,36 @@ pub async fn add_settings_to_policy_cmd(
         });
     };
     match add_settings_to_policy(&token, &policy_id, &settings).await {
+        Ok(()) => Ok(CreateCatalogPolicyResponse {
+            policy: Some(CreatedCatalogPolicy {
+                id: policy_id,
+                name: String::new(),
+            }),
+            error: None,
+            mode: "live",
+        }),
+        Err(error) => Ok(CreateCatalogPolicyResponse {
+            policy: None,
+            error: Some(error.to_string()),
+            mode: "live",
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn remove_settings_from_policy_cmd(
+    state: State<'_, AppState>,
+    policy_id: String,
+    definition_ids: Vec<String>,
+) -> Result<CreateCatalogPolicyResponse, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Ok(CreateCatalogPolicyResponse {
+            policy: None,
+            error: Some("Not signed in.".into()),
+            mode: "live",
+        });
+    };
+    match remove_settings_from_policy(&token, &policy_id, &definition_ids).await {
         Ok(()) => Ok(CreateCatalogPolicyResponse {
             policy: Some(CreatedCatalogPolicy {
                 id: policy_id,
@@ -1430,11 +1461,7 @@ fn popout_label(kind: &str, id: &str) -> String {
 #[tauri::command]
 pub async fn update_script_content_cmd(
     state: State<'_, AppState>,
-    kind: String,
-    id: String,
-    script_text: Option<String>,
-    detection_script_text: Option<String>,
-    remediation_script_text: Option<String>,
+    input: UpdateScriptContentInput,
 ) -> Result<ActionResponse, String> {
     let Some(token) = session_token(&state).await? else {
         return Ok(ActionResponse {
@@ -1442,16 +1469,7 @@ pub async fn update_script_content_cmd(
             error: Some("Not signed in.".into()),
         });
     };
-    match update_script_content(
-        &token,
-        &kind,
-        &id,
-        script_text.as_deref(),
-        detection_script_text.as_deref(),
-        remediation_script_text.as_deref(),
-    )
-    .await
-    {
+    match update_script_content(&token, &input).await {
         Ok(()) => Ok(ActionResponse {
             ok: true,
             error: None,
