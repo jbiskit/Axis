@@ -4,6 +4,10 @@ Notable user-facing changes to Axis are recorded here.
 
 ## [Unreleased]
 
+Add release notes here before preparing the next version.
+
+## [0.1.5] - 2026-09-02
+
 ### Added
 
 - Custom packs from a local folder or GitHub repo. Layout is platform-first (`windows/` in the public template for now) with policies, scripts, compliance, Endpoint Security, Windows Update, and Autopilot under each OS.
@@ -34,7 +38,6 @@ Notable user-facing changes to Axis are recorded here.
 - Policy inspector Add setting search imports its result row component, so finishing a query no longer shows “SettingSearchHit is not defined”.
 - Settings Catalog import no longer loops while loading assignment filters, so group search works and Import does not crash the window.
 - After import, Axis no longer opens the new policy and refreshes the list at the same time, which could leave Refresh stuck and crash the window.
-
 ## [0.1.4] - 2026-08-30
 
 ### Added
