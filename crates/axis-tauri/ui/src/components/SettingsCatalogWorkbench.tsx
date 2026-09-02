@@ -21,7 +21,7 @@ import {
   SelectCheckbox,
   useCheckedIds,
 } from "./workbench/PolicyBulkAssign";
-import { IncompleteBanner, InspectorEmpty, SearchableTable, CompactObjectList, SortableTh, formatRelative, useColumnSort, useListSearchState, WorkspaceSplit } from "./workbench/shared";
+import { IncompleteBanner, InspectorEmpty, InspectorErrorBoundary, SearchableTable, CompactObjectList, SortableTh, formatRelative, useColumnSort, useListSearchState, WorkspaceSplit } from "./workbench/shared";
 
 export function SettingsCatalogWorkbench({
   tab,
@@ -359,13 +359,15 @@ export function SettingsCatalogWorkbench({
         >
           {({ closeActive }) =>
             selected ? (
-              <GraphObjectInspector
-                key={selected.id}
-                kind="configurationPolicy"
-                id={selected.id}
-                fallbackTitle={selected.name}
-                onClose={closeActive}
-              />
+              <InspectorErrorBoundary>
+                <GraphObjectInspector
+                  key={selected.id}
+                  kind="configurationPolicy"
+                  id={selected.id}
+                  fallbackTitle={selected.name}
+                  onClose={closeActive}
+                />
+              </InspectorErrorBoundary>
             ) : null
           }
         </InspectorWithDocumentTabs>

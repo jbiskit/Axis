@@ -359,6 +359,8 @@ async fn duplicate_script(
             detection_script_text: detail.detection_script_text.clone(),
             remediation_script_text: detail.remediation_script_text.clone(),
             run_as_32_bit: object.get("runAs32Bit").and_then(Value::as_bool),
+            enforce_signature_check: object.get("enforceSignatureCheck").and_then(Value::as_bool),
+            publisher: string_field(object, "publisher"),
         },
     )
     .await?;

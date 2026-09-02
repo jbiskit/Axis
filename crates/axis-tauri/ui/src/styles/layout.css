@@ -308,9 +308,12 @@
 }
 
 .workspace-master {
+  display: flex;
   min-width: 0;
   flex: 1 1 0;
-  overflow: auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
   padding: 1.1rem 1.25rem 1.5rem;
 }
 
@@ -320,7 +323,8 @@
   max-width: 42rem;
   flex: 0 1 40%;
   flex-direction: column;
-  overflow: auto;
+  min-height: 0;
+  overflow: hidden;
   border-left: 1px solid var(--axis-border);
   background: var(--axis-mantle);
   padding: 1.1rem 1rem 1.5rem;
@@ -348,10 +352,71 @@
   padding: 1.1rem 1.25rem 1.5rem;
 }
 
-.workspace-inspector > .stack {
+.workspace-master > .stack,
+.workspace-master > .device-list-compact,
+.workspace-master > .object-list-menu-host {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.workspace-master > .object-list-menu-host {
+  display: flex;
+  flex-direction: column;
+}
+
+.workspace-master > .object-list-menu-host > .stack,
+.workspace-master > .object-list-menu-host > .device-list-compact {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.workspace-master > .stack > :not(.searchable-table):not(.device-list-compact):not(.overview-grid-2),
+.object-list-menu-host > .stack > :not(.searchable-table):not(.device-list-compact):not(.overview-grid-2) {
+  flex-shrink: 0;
+}
+
+.workspace-master > .stack > .searchable-table,
+.workspace-master > .stack > .device-list-compact,
+.workspace-master > .stack > .overview-grid-2,
+.object-list-menu-host > .stack > .searchable-table,
+.object-list-menu-host > .stack > .device-list-compact,
+.object-list-menu-host > .stack > .overview-grid-2 {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.device-list-compact > .device-inspector-head,
+.device-list-compact > .device-toolbar,
+.searchable-table > .device-toolbar {
+  flex-shrink: 0;
+}
+
+.workspace-master > .stack > .overview-grid-2,
+.object-list-menu-host > .stack > .overview-grid-2 {
+  overflow: auto;
+}
+
+.searchable-table {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.searchable-table > .axis-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.workspace-inspector > .stack,
+.workspace-inspector > .inspector-with-tabs {
   min-height: 0;
   flex: 1;
-  overflow: auto;
+  overflow: hidden;
 }
 
 .workspace-inspector .inspector-with-tabs {
@@ -362,6 +427,26 @@
 .workspace-inspector .inspector-with-tabs > .stack {
   min-height: 0;
   flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.inspector-body,
+.workspace-inspector .device-inspector {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.inspector-chrome {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.inspector-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
 }
 
@@ -415,6 +500,23 @@
   margin: 0;
   font-size: 0.8125rem;
   font-weight: 600;
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.setting-unsaved-pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0 0.3rem;
+  background: color-mix(in srgb, var(--axis-warning) 22%, transparent);
+  color: var(--axis-warning);
+  font-size: 0.5625rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .compliance-setting-info {
@@ -507,7 +609,21 @@
 
 .setting-instance-value {
   margin: 0;
+  min-width: 0;
   font-size: 0.8125rem;
+}
+
+.setting-instance-value .axis-input {
+  width: 100%;
+  max-width: 16rem;
+}
+
+.setting-instance-inline-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8125rem;
+  cursor: pointer;
 }
 
 .setting-instance-note {
@@ -542,14 +658,176 @@
   display: flex;
   justify-content: flex-end;
   align-items: start;
+  gap: 0.35rem;
+}
+
+.setting-instance-row.is-activatable {
+  cursor: pointer;
+  border-radius: var(--axis-radius);
+}
+
+.setting-instance-row.is-activatable:hover {
+  background: color-mix(in srgb, var(--axis-accent) 8%, transparent);
+}
+
+.setting-instance-row.is-dirty,
+.policy-setting-editor.is-dirty {
+  background: color-mix(in srgb, var(--axis-warning) 8%, transparent);
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--axis-warning) 55%, var(--axis-danger));
+}
+
+.setting-instance-row.is-dirty.is-activatable:hover {
+  background: color-mix(in srgb, var(--axis-warning) 14%, transparent);
+}
+
+.setting-instance-row.is-dirty .setting-instance-value {
+  color: inherit;
 }
 
 .setting-instance-row.is-editing {
   background: var(--axis-accent-soft);
-  margin: 0 -0.5rem;
-  padding-left: 0.5rem;
-  padding-right: 0.5rem;
-  border-radius: 8px;
+}
+
+.setting-instance-row.is-editing.is-dirty {
+  background: color-mix(in srgb, var(--axis-warning) 8%, var(--axis-accent-soft));
+}
+
+.setting-instance-row.is-removed {
+  background: color-mix(in srgb, var(--axis-danger) 12%, transparent);
+  box-shadow: inset 2px 0 0 var(--axis-danger);
+}
+
+.setting-instance-row.is-removed.is-activatable {
+  cursor: default;
+}
+
+.setting-instance-row.is-removed.is-activatable:hover {
+  background: color-mix(in srgb, var(--axis-danger) 16%, transparent);
+}
+
+.setting-instance-row.is-added,
+.policy-setting-editor.is-added {
+  background: color-mix(in srgb, var(--axis-success) 12%, transparent);
+  box-shadow: inset 2px 0 0 var(--axis-success);
+}
+
+.setting-instance-row.is-added.is-activatable:hover,
+.policy-setting-editor.is-added.is-dirty {
+  background: color-mix(in srgb, var(--axis-success) 16%, transparent);
+}
+
+.setting-unsaved-pill.is-removed {
+  background: var(--axis-danger-soft);
+  color: var(--axis-danger);
+}
+
+.setting-unsaved-pill.is-added {
+  background: var(--axis-success-soft);
+  color: var(--axis-success);
+}
+
+.setting-value-diff {
+  margin: 0.15rem 0 0;
+  font-size: 0.75rem;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.setting-instance-value > .setting-value-diff {
+  margin-top: 0.25rem;
+}
+
+.setting-value-diff-sep {
+  color: color-mix(in srgb, #fab387 40%, var(--axis-warning));
+}
+
+.setting-value-diff-label {
+  color: color-mix(in srgb, #fab387 35%, var(--axis-warning));
+}
+
+.setting-value-diff-before {
+  color: color-mix(in srgb, #fab387 55%, var(--axis-muted));
+}
+
+.setting-value-diff-arrow {
+  color: color-mix(in srgb, #fab387 50%, var(--axis-warning));
+}
+
+.setting-value-diff-after {
+  color: color-mix(in srgb, #fab387 40%, var(--axis-warning));
+  font-weight: 600;
+}
+
+.setting-value-diff.is-removed .setting-value-diff-before {
+  color: color-mix(in srgb, var(--axis-danger) 45%, var(--axis-muted));
+}
+
+.setting-value-diff.is-removed .setting-value-diff-arrow,
+.setting-value-diff.is-removed .setting-value-diff-sep {
+  color: color-mix(in srgb, var(--axis-danger) 55%, var(--axis-muted));
+}
+
+.setting-value-diff.is-removed .setting-value-diff-after {
+  color: var(--axis-danger);
+}
+
+.setting-value-diff.is-added .setting-value-diff-before {
+  color: color-mix(in srgb, var(--axis-success) 40%, var(--axis-muted));
+}
+
+.setting-value-diff.is-added .setting-value-diff-arrow,
+.setting-value-diff.is-added .setting-value-diff-sep {
+  color: color-mix(in srgb, var(--axis-success) 50%, var(--axis-muted));
+}
+
+.setting-value-diff.is-added .setting-value-diff-after {
+  color: var(--axis-success);
+}
+
+.setting-save-summary {
+  list-style: none;
+  margin: 0.65rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  max-height: min(50vh, 28rem);
+  overflow: auto;
+}
+
+.setting-save-summary-item {
+  padding: 0.25rem 0;
+  border-bottom: 1px solid var(--axis-border);
+}
+
+.setting-save-summary-item.is-removed {
+  background: color-mix(in srgb, var(--axis-danger) 10%, transparent);
+}
+
+.setting-save-summary-item.is-added {
+  background: color-mix(in srgb, var(--axis-success) 10%, transparent);
+}
+
+.setting-save-summary-item:last-child {
+  border-bottom: 0;
+}
+
+.setting-save-summary-item .setting-value-diff {
+  margin-top: 0.1rem;
+}
+
+.policy-setting-editor-desc {
+  margin: 0.35rem 0 0.75rem;
+}
+
+.policy-setting-inline-editor {
+  margin-top: 0.65rem;
+  padding-top: 0.65rem;
+  border-top: 1px solid var(--axis-border);
+}
+
+.policy-setting-inline-editor .policy-setting-editor-desc {
+  margin-top: 0;
 }
 
 .policy-setting-editor {
@@ -1795,6 +2073,67 @@ button.axis-pill {
   min-width: 0;
 }
 
+.inspector-form {
+  width: min(40rem, 100%);
+  margin-inline: auto;
+}
+
+.inspector-form-section + .inspector-form-section {
+  margin-top: 1.15rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--axis-border);
+}
+
+.inspector-form-section h2 {
+  margin: 0 0 0.75rem;
+  font-size: 0.7rem;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--axis-muted);
+}
+
+.inspector-form-grid {
+  display: grid;
+  grid-template-columns: minmax(10.5rem, 15.5rem) minmax(0, 1fr);
+  column-gap: 1.15rem;
+  row-gap: 0.7rem;
+  align-items: center;
+}
+
+.inspector-form-row {
+  display: contents;
+  cursor: pointer;
+}
+
+.inspector-form-row span,
+.inspector-form-label {
+  font-size: var(--axis-text-sm);
+  line-height: 1.35;
+  color: var(--axis-text);
+}
+
+.inspector-form-row input[type="checkbox"] {
+  width: 0.95rem;
+  height: 0.95rem;
+  justify-self: start;
+  accent-color: var(--axis-accent);
+  cursor: pointer;
+}
+
+.inspector-form-row:has(input:disabled) {
+  cursor: default;
+}
+
+.inspector-form-static {
+  font-size: var(--axis-text-sm);
+  color: var(--axis-muted-strong);
+}
+
+.create-script-form .inspector-form-grid {
+  width: 100%;
+}
+
 .create-compliance-settings {
   margin: 0;
   padding: 0.65rem 0.75rem 0.75rem;
@@ -2181,10 +2520,19 @@ details.axis-panel > summary {
 }
 
 .popout-main {
+  display: flex;
   min-height: 0;
   flex: 1;
-  overflow: auto;
+  flex-direction: column;
+  overflow: hidden;
   padding: 1.1rem 1.25rem 1.5rem;
+}
+
+.popout-main > .inspector-body,
+.popout-main > .device-inspector {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
 }
 
 .assignment-editor {

@@ -4,9 +4,12 @@ import {
   summarizeAssignmentDraft,
 } from "../../lib/assignmentSummary";
 import {
+  clampScheduleInterval,
   defaultRemediationSchedule,
   remediationScheduleIntervalLabel,
   remediationScheduleKindLabel,
+  scheduleIntervalFieldLabel,
+  scheduleIntervalMax,
   summarizeRemediationSchedule,
 } from "../../lib/remediationSchedule";
 import type {
@@ -33,17 +36,21 @@ function withRemediationScheduleDefaults(
   draft: AssignmentDraft,
   supportsSchedule: boolean,
 ): AssignmentDraft {
-  if (
-    !supportsSchedule ||
-    draft.targetKind === "exclusionGroup" ||
-    draft.runSchedule
-  ) {
+  if (!supportsSchedule || draft.targetKind === "exclusionGroup") {
+    return draft;
+  }
+  const kind = draft.runSchedule?.kind;
+  const validKind =
+    kind === "hourly" || kind === "daily" || kind === "runOnce" ? kind : "daily";
+  if (draft.runSchedule && kind === validKind) {
     return draft;
   }
   return {
     ...draft,
     runRemediationScript: draft.runRemediationScript ?? true,
-    runSchedule: defaultRemediationSchedule(),
+    runSchedule: draft.runSchedule
+      ? { ...draft.runSchedule, kind: validKind }
+      : defaultRemediationSchedule(),
   };
 }
 
@@ -411,7 +418,7 @@ export function AssignmentsEditor({
           runSchedule: {
             ...currentSchedule,
             kind,
-            interval: kind === "runOnce" ? 1 : currentSchedule.interval,
+            interval: 1,
             date: kind === "runOnce" ? currentSchedule.date ?? "" : undefined,
           },
         };
@@ -428,7 +435,7 @@ export function AssignmentsEditor({
           ...row,
           runSchedule: {
             ...currentSchedule,
-            interval: Math.max(1, Math.min(23, interval)),
+            interval: clampScheduleInterval(currentSchedule.kind, interval),
           },
         };
       }),
@@ -793,23 +800,21 @@ export function AssignmentsEditor({
                           <option value="hourly">Hourly</option>
                           <option value="daily">Daily</option>
                           <option value="runOnce">Once</option>
-                          <option value="weekly">Weekly</option>
-                          <option value="monthly">Monthly</option>
                         </select>
                       </label>
                       {row.runSchedule?.kind !== "runOnce" ? (
                         <label className="assignment-filter">
-                          <span>Interval</span>
+                          <span>{scheduleIntervalFieldLabel(row.runSchedule?.kind ?? "daily")}</span>
                           <input
                             className="axis-input"
                             type="number"
                             min={1}
-                            max={23}
+                            max={scheduleIntervalMax(row.runSchedule?.kind ?? "daily")}
                             value={row.runSchedule?.interval ?? 1}
                             onChange={(event) =>
                               setRowScheduleInterval(row.key, Number(event.target.value))
                             }
-                            aria-label={`Schedule interval for ${assignmentTargetLabel(row)}`}
+                            aria-label={`${scheduleIntervalFieldLabel(row.runSchedule?.kind ?? "daily")} for ${assignmentTargetLabel(row)}`}
                           />
                         </label>
                       ) : null}

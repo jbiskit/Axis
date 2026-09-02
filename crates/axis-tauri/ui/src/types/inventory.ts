@@ -339,12 +339,7 @@ export type AssignmentFilter = {
   rule?: string | null;
 };
 
-export type RemediationScheduleKind =
-  | "hourly"
-  | "daily"
-  | "weekly"
-  | "monthly"
-  | "runOnce";
+export type RemediationScheduleKind = "hourly" | "daily" | "runOnce";
 
 export type RemediationScheduleDraft = {
   kind: RemediationScheduleKind;
@@ -819,12 +814,28 @@ export type CreateTenantScriptInput = {
   kind: string;
   displayName: string;
   description?: string | null;
+  publisher?: string | null;
   runAsAccount?: string | null;
   fileName?: string | null;
   scriptText?: string | null;
   detectionScriptText?: string | null;
   remediationScriptText?: string | null;
   runAs32Bit?: boolean | null;
+  enforceSignatureCheck?: boolean | null;
+};
+
+export type UpdateScriptContentInput = {
+  kind: string;
+  id: string;
+  displayName?: string | null;
+  description?: string | null;
+  publisher?: string | null;
+  runAsAccount?: string | null;
+  runAs32Bit?: boolean | null;
+  enforceSignatureCheck?: boolean | null;
+  scriptText?: string | null;
+  detectionScriptText?: string | null;
+  remediationScriptText?: string | null;
 };
 
 export type ScriptDiagnostic = {

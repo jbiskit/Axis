@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use axis_sdk::{
     crawl_catalog_index, filter_indexed_settings, index_cache_path, merge_indexed_settings, now_ms,
@@ -53,35 +53,40 @@ impl CatalogIndexRuntime {
         self.paused.store(false, Ordering::SeqCst);
     }
 
-    pub fn status(&self, platform: SettingsCatalogPlatform) -> CatalogIndexState {
-        let mut guard = self.inner.lock().expect("catalog index mutex");
-        self.hydrate_locked(&mut guard, platform)
-            .to_state(Some(self.cache_path(platform)))
+    fn lock_inner(&self) -> MutexGuard<'_, HashMap<String, CatalogIndexSnapshot>> {
+        self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    fn hydrate_locked(
+    fn ensure_hydrated(
         &self,
         guard: &mut HashMap<String, CatalogIndexSnapshot>,
         platform: SettingsCatalogPlatform,
-    ) -> CatalogIndexSnapshot {
-        let key = Self::key(platform).to_string();
-        if let Some(existing) = guard.get(&key) {
+    ) {
+        let key = Self::key(platform);
+        if let Some(existing) = guard.get(key) {
             if existing.complete
                 || existing.status == CatalogIndexStatus::Loading
                 || !existing.settings.is_empty()
             {
-                return existing.clone();
+                return;
             }
         }
         if let Some(cached) = read_index_cache(&self.cache_dir, platform) {
-            let snapshot = snapshot_from_cache(platform, cached);
-            guard.insert(key, snapshot.clone());
-            return snapshot;
+            guard.insert(key.to_string(), snapshot_from_cache(platform, cached));
+            return;
         }
         guard
-            .entry(key)
-            .or_insert_with(|| CatalogIndexSnapshot::empty(platform))
-            .clone()
+            .entry(key.to_string())
+            .or_insert_with(|| CatalogIndexSnapshot::empty(platform));
+    }
+
+    pub fn status(&self, platform: SettingsCatalogPlatform) -> CatalogIndexState {
+        let mut guard = self.lock_inner();
+        self.ensure_hydrated(&mut guard, platform);
+        guard
+            .get(Self::key(platform))
+            .map(|snapshot| snapshot.to_state(Some(self.cache_path(platform))))
+            .unwrap_or_else(|| CatalogIndexState::idle(platform))
     }
 
     pub fn ensure(
@@ -92,35 +97,38 @@ impl CatalogIndexRuntime {
     ) {
         self.resume();
         {
-            let mut guard = self.inner.lock().expect("catalog index mutex");
-            let snapshot = self.hydrate_locked(&mut guard, platform);
-            if !force
-                && snapshot.complete
-                && snapshot.settings.len() >= CATALOG_INDEX_SUSPICIOUSLY_SMALL
-                && snapshot.status == CatalogIndexStatus::Ready
-            {
-                return;
+            let mut guard = self.lock_inner();
+            self.ensure_hydrated(&mut guard, platform);
+            if let Some(snapshot) = guard.get(Self::key(platform)) {
+                if !force
+                    && snapshot.complete
+                    && snapshot.settings.len() >= CATALOG_INDEX_SUSPICIOUSLY_SMALL
+                    && snapshot.status == CatalogIndexStatus::Ready
+                {
+                    return;
+                }
             }
         }
         {
-            let crawling = self.crawling.lock().expect("catalog crawl mutex");
+            let crawling = self.crawling.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             if !force && *crawling == Some(platform) {
                 return;
             }
         }
 
         {
-            let mut guard = self.inner.lock().expect("catalog index mutex");
-            let mut next = self.hydrate_locked(&mut guard, platform);
-            next.status = CatalogIndexStatus::Loading;
-            next.complete = false;
-            next.started_at = Some(next.started_at.unwrap_or_else(now_ms));
-            next.finished_at = None;
-            next.error = None;
-            guard.insert(Self::key(platform).to_string(), next);
+            let mut guard = self.lock_inner();
+            self.ensure_hydrated(&mut guard, platform);
+            if let Some(next) = guard.get_mut(Self::key(platform)) {
+                next.status = CatalogIndexStatus::Loading;
+                next.complete = false;
+                next.started_at = Some(next.started_at.unwrap_or_else(now_ms));
+                next.finished_at = None;
+                next.error = None;
+            }
         }
 
-        *self.crawling.lock().expect("catalog crawl mutex") = Some(platform);
+        *self.crawling.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(platform);
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let runtime = Arc::clone(self);
         tauri::async_runtime::spawn(async move {
@@ -139,7 +147,7 @@ impl CatalogIndexRuntime {
         if persist {
             let _ = write_index_cache(&self.cache_dir, platform, &settings, scanned, pages, false);
         }
-        let mut guard = self.inner.lock().expect("catalog index mutex");
+        let mut guard = self.lock_inner();
         if let Some(snapshot) = guard.get_mut(Self::key(platform)) {
             snapshot.settings = settings;
             snapshot.scanned = scanned;
@@ -158,12 +166,19 @@ impl CatalogIndexRuntime {
         generation: u64,
     ) {
         let seed = {
-            let mut guard = self.inner.lock().expect("catalog index mutex");
-            self.hydrate_locked(&mut guard, platform)
-                .settings
-                .into_iter()
-                .map(|setting| (setting.id.clone(), setting))
-                .collect()
+            let mut guard = self.lock_inner();
+            self.ensure_hydrated(&mut guard, platform);
+            guard
+                .get(Self::key(platform))
+                .map(|snapshot| {
+                    snapshot
+                        .settings
+                        .iter()
+                        .cloned()
+                        .map(|setting| (setting.id.clone(), setting))
+                        .collect()
+                })
+                .unwrap_or_default()
         };
 
         let result = crawl_catalog_index(
@@ -185,7 +200,7 @@ impl CatalogIndexRuntime {
         .await;
 
         {
-            let mut crawling = self.crawling.lock().expect("catalog crawl mutex");
+            let mut crawling = self.crawling.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             if *crawling == Some(platform) {
                 *crawling = None;
             }
@@ -195,7 +210,7 @@ impl CatalogIndexRuntime {
             return;
         }
 
-        let mut guard = self.inner.lock().expect("catalog index mutex");
+        let mut guard = self.lock_inner();
         match result {
             Ok(outcome) => {
                 if outcome.aborted {
@@ -274,8 +289,20 @@ impl CatalogIndexRuntime {
         query: &str,
         max_results: usize,
     ) -> (CatalogSearchResult, CatalogIndexState) {
-        let mut guard = self.inner.lock().expect("catalog index mutex");
-        let snapshot = self.hydrate_locked(&mut guard, platform);
+        let mut guard = self.lock_inner();
+        self.ensure_hydrated(&mut guard, platform);
+        let snapshot = match guard.get(Self::key(platform)) {
+            Some(snapshot) => snapshot,
+            None => {
+                return (
+                    CatalogSearchResult {
+                        settings: vec![],
+                        mode: "indexing".into(),
+                    },
+                    CatalogIndexState::idle(platform),
+                );
+            }
+        };
         let settings = filter_indexed_settings(&snapshot.settings, query, None, Some(max_results));
         let mode = if snapshot.complete {
             "index"
@@ -298,13 +325,17 @@ impl CatalogIndexRuntime {
         platform: SettingsCatalogPlatform,
         incoming: impl IntoIterator<Item = CatalogSettingSummary>,
     ) {
-        let mut guard = self.inner.lock().expect("catalog index mutex");
-        let mut snapshot = self.hydrate_locked(&mut guard, platform);
-        snapshot.settings = merge_indexed_settings(&snapshot.settings, incoming, platform);
-        if snapshot.status == CatalogIndexStatus::Error && !snapshot.settings.is_empty() {
-            snapshot.error = None;
+        let mut guard = self.lock_inner();
+        self.ensure_hydrated(&mut guard, platform);
+        let merged = guard
+            .get(Self::key(platform))
+            .map(|snapshot| merge_indexed_settings(&snapshot.settings, incoming, platform));
+        if let (Some(snapshot), Some(settings)) = (guard.get_mut(Self::key(platform)), merged) {
+            snapshot.settings = settings;
+            if snapshot.status == CatalogIndexStatus::Error && !snapshot.settings.is_empty() {
+                snapshot.error = None;
+            }
         }
-        guard.insert(Self::key(platform).to_string(), snapshot);
     }
 
     pub fn cached_categories(

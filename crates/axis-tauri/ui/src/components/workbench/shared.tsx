@@ -243,7 +243,7 @@ export function SearchableTable({
   children: ReactNode;
 }) {
   return (
-    <div className="stack">
+    <div className="stack searchable-table">
       <ListSearchToolbar
         query={query}
         onQueryChange={onQueryChange}
@@ -257,7 +257,7 @@ export function SearchableTable({
         showPlatformFilter={showPlatformFilter}
         secondaryFilter={secondaryFilter}
       />
-      <section className="axis-panel" style={{ overflow: "hidden" }}>
+      <section className="axis-panel">
         {children}
       </section>
     </div>

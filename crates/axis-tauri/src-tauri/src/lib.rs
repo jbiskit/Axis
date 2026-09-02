@@ -272,6 +272,7 @@ pub fn run() {
             commands::pause_catalog_index_cmd,
             commands::create_settings_catalog_policy_cmd,
             commands::add_settings_to_policy_cmd,
+            commands::remove_settings_from_policy_cmd,
             commands::fetch_policy_setting_issues_cmd,
             commands::fetch_setting_conflict_details_cmd,
             commands::fetch_remediation_scripts_cmd,

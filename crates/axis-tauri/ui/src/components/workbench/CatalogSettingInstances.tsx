@@ -1,4 +1,3 @@
-import { useState } from "react";
 import {
   formatAdmxDefinitionValues,
   formatCatalogSettingRows,
@@ -8,6 +7,7 @@ import {
   type FormattedSettingChild,
   type FormattedSettingRow,
 } from "../../lib/catalogSettingDisplay";
+import { SettingDescription } from "./SettingDescription";
 
 function ChildTree({ children }: { children: FormattedSettingChild[] }) {
   if (children.length === 0) return null;
@@ -24,35 +24,32 @@ function ChildTree({ children }: { children: FormattedSettingChild[] }) {
   );
 }
 
-function SettingDescription({ text }: { text: string }) {
-  const [expanded, setExpanded] = useState(false);
-  return (
-    <button
-      type="button"
-      className={`setting-instance-desc ${expanded ? "is-expanded" : "is-collapsed"}`}
-      aria-expanded={expanded}
-      title={expanded ? "Hide description" : "Show description"}
-      onClick={() => setExpanded((open) => !open)}
-    >
-      <span className="setting-instance-desc-chevron" aria-hidden>
-        <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75">
-          <path d="M6 3.5 10.5 8 6 12.5" />
-        </svg>
-      </span>
-      <span className="setting-instance-desc-text">{text}</span>
-    </button>
-  );
+function fromControl(target: EventTarget | null): boolean {
+  return target instanceof Element && Boolean(target.closest("button, a, input, textarea, select, label"));
 }
 
 function SettingInstanceRow({
   row,
   unsupportedEditor = false,
+  onActivate,
 }: {
   row: FormattedSettingRow | FormattedAdmxRow;
   unsupportedEditor?: boolean;
+  onActivate?: () => void;
 }) {
+  const activatable = Boolean(onActivate) && !unsupportedEditor;
   return (
-    <li className="setting-instance-row">
+    <li
+      className={`setting-instance-row${activatable ? " is-activatable" : ""}`}
+      title={activatable ? "Double-click to edit" : undefined}
+      onMouseDown={(event) => {
+        if (activatable && event.detail > 1) event.preventDefault();
+      }}
+      onDoubleClick={(event) => {
+        if (!activatable || fromControl(event.target)) return;
+        onActivate?.();
+      }}
+    >
       <div className="setting-instance-head">
         <div className="setting-instance-title-block">
           <p className="setting-instance-name">{row.displayName}</p>
@@ -70,7 +67,13 @@ function SettingInstanceRow({
   );
 }
 
-export function CatalogSettingInstances({ settings }: { settings: Record<string, unknown>[] }) {
+export function CatalogSettingInstances({
+  settings,
+  onActivateSetting,
+}: {
+  settings: Record<string, unknown>[];
+  onActivateSetting?: (definitionId: string) => void;
+}) {
   if (looksLikeSettingsCatalogRows(settings)) {
     const rows = formatCatalogSettingRows(settings);
     if (rows.length === 0) {
@@ -79,7 +82,16 @@ export function CatalogSettingInstances({ settings }: { settings: Record<string,
     return (
       <ul className="setting-instance-list">
         {rows.map((row) => (
-          <SettingInstanceRow key={row.key} row={row} unsupportedEditor={row.unsupportedEditor} />
+          <SettingInstanceRow
+            key={row.key}
+            row={row}
+            unsupportedEditor={row.unsupportedEditor}
+            onActivate={
+              onActivateSetting && !row.unsupportedEditor
+                ? () => onActivateSetting(row.definitionId)
+                : undefined
+            }
+          />
         ))}
       </ul>
     );

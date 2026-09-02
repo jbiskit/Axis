@@ -50,15 +50,24 @@ function collectionEntries(value: unknown): unknown[] {
   return [];
 }
 
-function isLocalizationKey(value?: string | null): boolean {
+export function isLocalizationKey(value?: string | null): boolean {
   if (!value?.trim()) return true;
   const trimmed = value.trim();
   return /^l[_/]/i.test(trimmed) || /^l[A-Z]/.test(trimmed);
 }
 
-function preferredLabel(...candidates: Array<string | null | undefined>): string | null {
+export function isAdmxPlaceholderName(value?: string | null): boolean {
+  const trimmed = value?.trim() ?? "";
+  if (!trimmed) return true;
+  if (/^l_empty\d*$/i.test(trimmed) || /^empty\d*$/i.test(trimmed)) return true;
+  return /\bl\s+empty\d*\b/i.test(trimmed);
+}
+
+export function preferredLabel(...candidates: Array<string | null | undefined>): string | null {
   for (const candidate of candidates) {
-    if (candidate?.trim() && !isLocalizationKey(candidate)) return candidate.trim();
+    if (candidate?.trim() && !isLocalizationKey(candidate) && !isAdmxPlaceholderName(candidate)) {
+      return candidate.trim();
+    }
   }
   return null;
 }
@@ -77,6 +86,7 @@ function titleCaseWords(input: string): string {
         os: "OS",
         wifi: "Wi-Fi",
         vpn: "VPN",
+        vba: "VBA",
         bitlocker: "BitLocker",
         defender: "Defender",
       };
@@ -87,6 +97,83 @@ function titleCaseWords(input: string): string {
     .join(" ");
 }
 
+const ADMX_NOISE = new Set([
+  "device",
+  "user",
+  "machine",
+  "vendor",
+  "msft",
+  "microsoft",
+  "config",
+  "admx",
+  "grouppolicy",
+  "policy",
+  "office16",
+  "office16v16",
+]);
+
+const GLUED_ADMX_WORDS = [
+  "notifications",
+  "notification",
+  "warnings",
+  "warning",
+  "settings",
+  "setting",
+  "macros",
+  "macro",
+  "center",
+  "security",
+  "office",
+  "trust",
+  "disable",
+  "enable",
+  "password",
+  "windows",
+  "update",
+  "defender",
+  "bitlocker",
+  "policy",
+  "vba",
+].sort((left, right) => right.length - left.length);
+
+function isLocKeyPart(part: string): boolean {
+  const lower = part.toLowerCase();
+  if (/^l_/.test(lower) || /^l$/.test(lower)) return true;
+  if (/^l[a-z]/.test(part) && part[1] === part[1]?.toUpperCase()) return true;
+  return /^empty\d*$/i.test(part);
+}
+
+function splitGluedAdmxToken(token: string): string {
+  if (/[a-z][A-Z]/.test(token)) {
+    return titleCaseWords(token.replace(/([a-z])([A-Z])/g, "$1 $2"));
+  }
+  let rest = token.toLowerCase();
+  const pieces: string[] = [];
+  let steps = 0;
+  while (rest && steps < 64) {
+    steps += 1;
+    const hit = GLUED_ADMX_WORDS.find((word) => word.length > 0 && rest.startsWith(word));
+    if (hit) {
+      pieces.push(hit);
+      rest = rest.slice(hit.length);
+      continue;
+    }
+    let nextAt = -1;
+    for (const word of GLUED_ADMX_WORDS) {
+      const index = rest.indexOf(word);
+      if (index > 0 && (nextAt < 0 || index < nextAt)) nextAt = index;
+    }
+    if (nextAt > 0) {
+      pieces.push(rest.slice(0, nextAt));
+      rest = rest.slice(nextAt);
+      continue;
+    }
+    pieces.push(rest);
+    break;
+  }
+  return titleCaseWords(pieces.join(" "));
+}
+
 export function humanizeSettingToken(value: string, definitionId?: string): string {
   let token = value.trim();
   if (!token) return "(empty)";
@@ -94,11 +181,15 @@ export function humanizeSettingToken(value: string, definitionId?: string): stri
     if (token.startsWith(`${definitionId}_`)) token = token.slice(definitionId.length + 1);
     else if (token.startsWith(definitionId)) token = token.slice(definitionId.length).replace(/^_+/, "");
   }
-  if (token.includes("device_vendor_")) {
-    const match = token.match(/_([a-z0-9]+)$/i);
-    if (match) token = match[1];
-  }
-  const lower = token.toLowerCase();
+  token = token.replace(/[_~/]+l_[a-z0-9]+/gi, "");
+  token = token.replace(/^l_[a-z0-9]+[_~/]*/gi, "");
+  const parts = token
+    .split(/[_~/]+/)
+    .filter(Boolean)
+    .filter((part) => !isLocKeyPart(part) && !ADMX_NOISE.has(part.toLowerCase()));
+  const last = parts.at(-1) || "";
+  if (!last) return "(empty)";
+  const lower = last.toLowerCase();
   const literals: Record<string, string> = {
     true: "Enabled",
     false: "Disabled",
@@ -106,15 +197,23 @@ export function humanizeSettingToken(value: string, definitionId?: string): stri
     disabled: "Disabled",
     allow: "Allow",
     block: "Block",
+    empty: "(empty)",
+    none: "None",
     notconfigured: "Not configured",
     not_configured: "Not configured",
     userdefined: "User defined",
     devicedefault: "Device default",
   };
   if (literals[lower]) return literals[lower];
-  const parts = token.split("_").filter(Boolean);
-  const tail = parts.length > 4 ? parts.slice(-3).join(" ") : parts.join(" ") || token;
-  return titleCaseWords(tail.replace(/([a-z])([A-Z])/g, "$1 $2"));
+  return splitGluedAdmxToken(last);
+}
+
+export function catalogUiLabel(
+  candidates: Array<string | null | undefined>,
+  fallbackToken: string,
+  definitionId?: string,
+): string {
+  return preferredLabel(...candidates) || humanizeSettingToken(fallbackToken, definitionId);
 }
 
 function shortInstanceKind(odataType: unknown): string {
@@ -174,9 +273,7 @@ function optionLabel(
     definition?.options.find((option) => option.itemId === optionId) ||
     definition?.options.find((option) => option.itemId.toLowerCase() === optionId.toLowerCase()) ||
     definition?.options.find((option) => option.name === optionId);
-  return (
-    preferredLabel(match?.displayName, match?.name) || humanizeSettingToken(optionId, definitionId)
-  );
+  return catalogUiLabel([match?.displayName, match?.name], optionId, definitionId);
 }
 
 function formatPrimitive(value: unknown): string {

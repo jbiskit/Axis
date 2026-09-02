@@ -40,7 +40,7 @@ export function SettingSearchHit({
   const path = categoryBreadcrumb(categories, setting.categoryId);
   const blurb = catalogSettingBlurb(setting);
   const context = [source, path].filter(Boolean).join(" · ") || "Category unknown";
-  const tipId = `setting-tip-${setting.id.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+  const tipId = `setting-tip-${String(setting.id ?? "unknown").replace(/[^a-zA-Z0-9_-]/g, "_")}`;
   const detailsId = `${tipId}-details`;
   const hasDetails = Boolean(blurb.summary || blurb.detail || path || source);
 

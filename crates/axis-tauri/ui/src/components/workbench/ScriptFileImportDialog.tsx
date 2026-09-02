@@ -4,6 +4,7 @@ import { inspectorKindForTenantScript } from "../../lib/scriptKinds";
 import { assignObjectAssignments, createTenantScript, pickScriptFiles } from "../../lib/tauri";
 import type { AssignmentDraft, PickedTextFile, TenantScriptSummary } from "../../types/inventory";
 import { AssignmentsEditor } from "./AssignmentsEditor";
+import { ScriptRunSettingsFields } from "./ScriptRunSettingsFields";
 
 const EMPTY_GRAPH_ASSIGNMENTS: Record<string, unknown>[] = [];
 const IMPORT_ASSIGNMENT_TARGETS = [{ id: "script-import-draft", title: "Imported scripts" }];
@@ -91,8 +92,10 @@ export function ScriptFileImportDialog({
           kind: row.kind,
           displayName: row.name.trim(),
           description: row.description.trim() || undefined,
+          publisher: row.publisher.trim() || undefined,
           runAsAccount: row.runAsAccount,
           runAs32Bit: row.kind === "platform-shell" ? undefined : row.runAs32Bit,
+          enforceSignatureCheck: row.kind === "platform-shell" ? undefined : row.enforceSignatureCheck,
           scriptText: needsDetection ? undefined : row.scriptText,
           detectionScriptText: needsDetection ? row.detectionScriptText : undefined,
           remediationScriptText: row.kind === "remediation" ? row.remediationScriptText : undefined,
@@ -166,7 +169,6 @@ export function ScriptFileImportDialog({
                 <th>Import</th>
                 <th>Name</th>
                 {family === "platform" ? <th>Kind</th> : null}
-                <th>Run as</th>
                 <th>Size</th>
               </tr>
             </thead>
@@ -193,6 +195,25 @@ export function ScriptFileImportDialog({
                       {row.fileName}
                       {row.error ? ` — ${row.error}` : null}
                     </p>
+                    <div className="inspector-form-grid" style={{ marginTop: "0.65rem" }}>
+                      <ScriptRunSettingsFields
+                        runAsUser={row.runAsAccount === "user"}
+                        onRunAsUserChange={(runAsUser) =>
+                          patchRow(row.key, { runAsAccount: runAsUser ? "user" : "system" })
+                        }
+                        enforceSignatureCheck={row.enforceSignatureCheck}
+                        onEnforceSignatureCheckChange={(enforceSignatureCheck) =>
+                          patchRow(row.key, { enforceSignatureCheck })
+                        }
+                        runAs64Bit={!row.runAs32Bit}
+                        onRunAs64BitChange={(runAs64Bit) =>
+                          patchRow(row.key, { runAs32Bit: !runAs64Bit })
+                        }
+                        showSignature={row.kind !== "platform-shell"}
+                        show64Bit={row.kind !== "platform-shell"}
+                        disabled={saving || Boolean(row.error)}
+                      />
+                    </div>
                   </td>
                   {family === "platform" ? (
                     <td>
@@ -209,19 +230,6 @@ export function ScriptFileImportDialog({
                       </select>
                     </td>
                   ) : null}
-                  <td>
-                    <select
-                      className="axis-input"
-                      value={row.runAsAccount}
-                      disabled={saving || Boolean(row.error)}
-                      onChange={(event) =>
-                        patchRow(row.key, { runAsAccount: event.target.value as "system" | "user" })
-                      }
-                    >
-                      <option value="system">System</option>
-                      <option value="user">User</option>
-                    </select>
-                  </td>
                   <td className="muted">
                     {row.error
                       ? "—"

@@ -555,6 +555,51 @@ pub fn merge_indexed_settings(
     sorted_settings(by_id.into_values())
 }
 
+const SEARCH_BLURB_MAX: usize = 400;
+
+fn compact_search_hit(mut setting: CatalogSettingSummary) -> CatalogSettingSummary {
+    if let Some(text) = setting.description.as_mut() {
+        if text.len() > SEARCH_BLURB_MAX {
+            text.truncate(SEARCH_BLURB_MAX);
+        }
+    }
+    if let Some(text) = setting.help_text.as_mut() {
+        if text.len() > SEARCH_BLURB_MAX {
+            text.truncate(SEARCH_BLURB_MAX);
+        }
+    }
+    if setting.keywords.len() > 8 {
+        setting.keywords.truncate(8);
+    }
+    setting
+}
+
+fn indexed_setting_matches(
+    setting: &CatalogSettingSummary,
+    query: &str,
+    tokens: &[&str],
+    category_id: Option<&str>,
+) -> bool {
+    if let Some(category_id) = category_id {
+        if setting.category_id.as_deref() != Some(category_id) {
+            return false;
+        }
+    }
+    if query.is_empty() {
+        return true;
+    }
+    let haystack = format!(
+        "{} {} {} {} {}",
+        setting.display_name,
+        setting.description.as_deref().unwrap_or(""),
+        setting.id,
+        setting.keywords.join(" "),
+        setting_area_label(&setting_area_key(&setting.id)),
+    )
+    .to_lowercase();
+    haystack.contains(query) || (!tokens.is_empty() && tokens.iter().all(|token| haystack.contains(token)))
+}
+
 pub fn filter_indexed_settings(
     settings: &[CatalogSettingSummary],
     query: &str,
@@ -572,55 +617,34 @@ pub fn filter_indexed_settings(
             .collect()
     };
 
-    let mut matched: Vec<CatalogSettingSummary> = settings
+    let rank = |name: &str| -> u8 {
+        let name = name.to_lowercase();
+        if name == query {
+            0
+        } else if name.starts_with(&query) {
+            1
+        } else if name.contains(&query) {
+            2
+        } else {
+            3
+        }
+    };
+
+    let mut matched: Vec<(u8, usize)> = settings
         .iter()
-        .filter(|setting| {
-            if let Some(category_id) = category_id {
-                if setting.category_id.as_deref() != Some(category_id) {
-                    return false;
-                }
-            }
-            if query.is_empty() {
-                return true;
-            }
-            let keywords = setting.keywords.join(" ");
-            let area = setting_area_label(&setting_area_key(&setting.id));
-            let haystack = format!(
-                "{} {} {} {} {}",
-                setting.display_name,
-                setting.description.as_deref().unwrap_or(""),
-                setting.id,
-                keywords,
-                area
-            )
-            .to_lowercase();
-            haystack.contains(&query)
-                || (!tokens.is_empty() && tokens.iter().all(|token| haystack.contains(token)))
-        })
-        .cloned()
+        .enumerate()
+        .filter(|(_, setting)| indexed_setting_matches(setting, &query, &tokens, category_id))
+        .map(|(index, setting)| (rank(&setting.display_name), index))
         .collect();
 
     if !query.is_empty() {
-        matched.sort_by(|a, b| {
-            let rank = |name: &str| {
-                let name = name.to_lowercase();
-                if name == query {
-                    0
-                } else if name.starts_with(&query) {
-                    1
-                } else if name.contains(&query) {
-                    2
-                } else {
-                    3
-                }
-            };
-            rank(&a.display_name)
-                .cmp(&rank(&b.display_name))
-                .then_with(|| {
-                    a.display_name
-                        .to_lowercase()
-                        .cmp(&b.display_name.to_lowercase())
-                })
+        matched.sort_by(|(left_rank, left_index), (right_rank, right_index)| {
+            left_rank.cmp(right_rank).then_with(|| {
+                settings[*left_index]
+                    .display_name
+                    .to_lowercase()
+                    .cmp(&settings[*right_index].display_name.to_lowercase())
+            })
         });
     }
 
@@ -628,6 +652,9 @@ pub fn filter_indexed_settings(
         matched.truncate(max_results);
     }
     matched
+        .into_iter()
+        .map(|(_, index)| compact_search_hit(settings[index].clone()))
+        .collect()
 }
 
 fn build_settings_path(filter: Option<&str>, skip: usize, top: Option<usize>) -> String {
@@ -929,6 +956,22 @@ mod tests {
         ];
         let hits = filter_indexed_settings(&settings, "require device", None, Some(10));
         assert_eq!(hits[0].display_name, "Require Device Encryption");
+    }
+
+    #[test]
+    fn search_caps_cloned_hits() {
+        let settings: Vec<_> = (0..80)
+            .map(|index| {
+                summary(
+                    &format!("device_vendor_msft_bitlocker_setting{index}"),
+                    &format!("BitLocker setting {index}"),
+                    true,
+                    None,
+                )
+            })
+            .collect();
+        let hits = filter_indexed_settings(&settings, "bitlocker", None, Some(5));
+        assert_eq!(hits.len(), 5);
     }
 
     #[test]

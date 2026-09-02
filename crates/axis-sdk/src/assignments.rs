@@ -91,9 +91,8 @@ pub struct AssignmentFilter {
 #[serde(rename_all = "camelCase")]
 pub enum RemediationScheduleKind {
     Hourly,
+    #[serde(alias = "weekly", alias = "monthly")]
     Daily,
-    Weekly,
-    Monthly,
     RunOnce,
 }
 
@@ -158,10 +157,6 @@ fn schedule_kind_from_odata(odata: &str) -> Option<RemediationScheduleKind> {
         Some(RemediationScheduleKind::Hourly)
     } else if odata.contains("DailySchedule") {
         Some(RemediationScheduleKind::Daily)
-    } else if odata.contains("WeeklySchedule") {
-        Some(RemediationScheduleKind::Weekly)
-    } else if odata.contains("MonthlySchedule") {
-        Some(RemediationScheduleKind::Monthly)
     } else if odata.contains("RunOnceSchedule") {
         Some(RemediationScheduleKind::RunOnce)
     } else {
@@ -173,8 +168,6 @@ fn schedule_odata_type(kind: RemediationScheduleKind) -> &'static str {
     match kind {
         RemediationScheduleKind::Hourly => "#microsoft.graph.deviceHealthScriptHourlySchedule",
         RemediationScheduleKind::Daily => "#microsoft.graph.deviceHealthScriptDailySchedule",
-        RemediationScheduleKind::Weekly => "#microsoft.graph.deviceHealthScriptWeeklySchedule",
-        RemediationScheduleKind::Monthly => "#microsoft.graph.deviceHealthScriptMonthlySchedule",
         RemediationScheduleKind::RunOnce => "#microsoft.graph.deviceHealthScriptRunOnceSchedule",
     }
 }
@@ -225,8 +218,18 @@ fn schedule_from_graph(value: &Value) -> Option<RemediationScheduleDraft> {
     })
 }
 
+fn schedule_interval_max(kind: RemediationScheduleKind) -> i32 {
+    if kind == RemediationScheduleKind::RunOnce {
+        1
+    } else {
+        23
+    }
+}
+
 fn schedule_to_graph(schedule: &RemediationScheduleDraft) -> Value {
-    let interval = schedule.interval.clamp(1, 23);
+    let interval = schedule
+        .interval
+        .clamp(1, schedule_interval_max(schedule.kind));
     let mut body = json!({
         "@odata.type": schedule_odata_type(schedule.kind),
         "interval": interval,
