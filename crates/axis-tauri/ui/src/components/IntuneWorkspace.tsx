@@ -85,6 +85,8 @@ import { DeviceDetailView, type DeviceDetailCacheEntry } from "./DeviceDetailVie
 import { SettingsSearchView } from "./SettingsSearchView";
 import { SettingsCatalogWorkbench } from "./SettingsCatalogWorkbench";
 import { TenantOverview } from "./TenantOverview";
+import { WriteActivityView } from "./WriteActivityView";
+import { EnvironmentReportView } from "./EnvironmentReportView";
 import { GraphObjectInspector } from "./workbench/GraphObjectInspector";
 import { PageHeader, SignalCard } from "./ui/PageChrome";
 import { CreateCompliancePolicyDialog } from "./workbench/CreateCompliancePolicyDialog";
@@ -248,12 +250,16 @@ export function IntuneWorkspace({
     );
   }
 
-  if (pathname === "/intune/activity" || pathname === "/intune/reports") {
+  if (pathname === "/intune/activity") {
+    return <WriteActivityView pathname={pathname} search={search} />;
+  }
+
+  if (pathname === "/intune/reports") {
     return (
-      <CapabilityStub
-        title={pathname.endsWith("reports") ? "Environment report" : "Write activity"}
-        description="Available in the web console; not rebuilt for this desktop pass."
-        reason="These surfaces generate markdown/CSV reports and write-audit timelines from Next.js API routes. They are deferred until those jobs run in Rust."
+      <EnvironmentReportView
+        signedIn={signedIn}
+        defaultPreparedFor={glance?.organizationName ?? null}
+        defaultPreparedBy={accountName}
       />
     );
   }

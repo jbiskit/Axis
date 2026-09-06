@@ -146,6 +146,16 @@ pub struct DirectoryAuditActor {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AuditPropertyChange {
+    pub display_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub old_value: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_value: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DirectoryAuditEvent {
     pub id: String,
     pub activity_date_time: String,
@@ -158,6 +168,8 @@ pub struct DirectoryAuditEvent {
     pub operation_type: Option<String>,
     pub actor: DirectoryAuditActor,
     pub target_resources: Vec<String>,
+    #[serde(default)]
+    pub changes: Vec<AuditPropertyChange>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
