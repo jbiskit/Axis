@@ -125,8 +125,8 @@ const WINDOWS_UPDATE_BLADES: NavItem[] = [
 
 export const INTUNE_NAV: NavItem[] = [
   { href: "/intune", label: "Overview", icon: "overview", section: "Workspace" },
-  { href: "/intune/activity", label: "Write activity", icon: "overview", section: "Workspace", status: "planned" },
-  { href: "/intune/reports", label: "Environment report", icon: "reports", section: "Workspace", status: "planned" },
+  { href: "/intune/activity", label: "Write activity", icon: "overview", section: "Workspace" },
+  { href: "/intune/reports", label: "Environment report", icon: "reports", section: "Workspace" },
   {
     href: "/intune/devices",
     label: "Devices",

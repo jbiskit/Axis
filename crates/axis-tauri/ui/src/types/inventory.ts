@@ -540,6 +540,15 @@ export type PackExportProgress = {
   message: string;
 };
 
+export type EnvironmentReport = {
+  html: string;
+  organizationName?: string | null;
+  suggestedName: string;
+  objectCount: number;
+  generatedAt: string;
+  warnings: string[];
+};
+
 export type PackExportResult = {
   root: string;
   filesWritten: number;

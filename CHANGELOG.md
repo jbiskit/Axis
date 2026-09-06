@@ -4,7 +4,14 @@ Notable user-facing changes to Axis are recorded here.
 
 ## [Unreleased]
 
-Add release notes here before preparing the next version.
+### Added
+
+- Workspace **Write activity**: Intune audit timeline with search, property diffs, and JSON export.
+- **Environment report**: platform-first HTML as-built — Summary with per-platform counts, Cross-platform consolidation, then Windows / macOS / iOS / Android chapters each with Policies, Updates, Apps, Enrollment, and Scripts. Enrollment now includes Autopilot profiles/devices, enrollment restrictions/ESP, Apple APNs + ADE/ABM tokens and profiles, Android Enterprise / Managed Google Play, Company Portal branding, terms and conditions, and device categories. Editable Prepared for / Prepared by on generate.
+
+### Changed
+
+- Overview **Recent activity** uses the Intune audit log (policy/script/app changes) instead of Entra directory audits.
 
 ## [0.1.5] - 2026-09-02
 

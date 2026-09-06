@@ -2,6 +2,7 @@ use chrono::{DateTime, Duration, Utc};
 use std::collections::HashMap;
 
 use crate::graph::{format_graph_error, GraphClient, GraphCollection, GraphError};
+use crate::policy_health::fetch_configuration_policy_health;
 use crate::types::*;
 
 #[derive(Debug, serde::Deserialize)]
@@ -43,45 +44,58 @@ struct ConflictSummary {
 }
 
 #[derive(Debug, serde::Deserialize)]
-struct AuditInitiatedBy {
-    #[serde(default)]
-    user: Option<AuditUser>,
-    #[serde(default)]
-    app: Option<AuditApp>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct AuditUser {
-    #[serde(default)]
-    display_name: Option<String>,
+#[serde(rename_all = "camelCase")]
+struct IntuneAuditActor {
     #[serde(default)]
     user_principal_name: Option<String>,
+    #[serde(default)]
+    application_display_name: Option<String>,
+    #[serde(default)]
+    service_principal_name: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
-struct AuditApp {
+#[serde(rename_all = "camelCase")]
+struct IntuneAuditProperty {
     #[serde(default)]
     display_name: Option<String>,
+    #[serde(default)]
+    old_value: Option<String>,
+    #[serde(default)]
+    new_value: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
-struct AuditTargetResource {
+#[serde(rename_all = "camelCase")]
+struct IntuneAuditResource {
     #[serde(default)]
     display_name: Option<String>,
+    #[serde(default)]
+    modified_properties: Vec<IntuneAuditProperty>,
 }
 
 #[derive(Debug, serde::Deserialize)]
-struct DirectoryAuditRow {
+#[serde(rename_all = "camelCase")]
+struct IntuneAuditRow {
     id: Option<String>,
+    #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    activity: Option<String>,
+    #[serde(default)]
     activity_date_time: Option<String>,
-    activity_display_name: Option<String>,
+    #[serde(default)]
+    activity_type: Option<String>,
+    #[serde(default)]
+    activity_operation_type: Option<String>,
+    #[serde(default)]
+    activity_result: Option<String>,
+    #[serde(default)]
     category: Option<String>,
-    result: Option<String>,
-    operation_type: Option<String>,
     #[serde(default)]
-    initiated_by: Option<AuditInitiatedBy>,
+    actor: Option<IntuneAuditActor>,
     #[serde(default)]
-    target_resources: Vec<AuditTargetResource>,
+    resources: Vec<IntuneAuditResource>,
 }
 
 struct QueryWarning {
@@ -117,7 +131,7 @@ pub async fn fetch_tenant_glance(
     let inventory = fetch_inventory(&client, access_token).await;
     let conflict_result = fetch_conflicts(&client, access_token).await;
     let app_failure_result = fetch_app_failures(&client, access_token).await;
-    let activity_result = fetch_recent_audits(&client, access_token).await;
+    let activity_result = fetch_recent_audits(access_token).await;
 
     let device_list = devices_result.devices;
     let by_os = tally(
@@ -184,8 +198,8 @@ pub async fn fetch_tenant_glance(
                 } else {
                     names.into_iter().take(2).collect::<Vec<_>>().join(" ↔ ")
                 },
-                setting_count: item.contributing_settings.len() as u32,
-                policy_count: item.conflicting_device_configurations.len() as u32,
+                setting_count: item.device_checkins_impacted.unwrap_or(0),
+                policy_count: item.conflicting_device_configurations.len().max(1) as u32,
                 device_checkins_impacted: item.device_checkins_impacted,
             }
         })
@@ -396,23 +410,48 @@ async fn fetch_inventory(client: &GraphClient, access_token: &str) -> Vec<Invent
 }
 
 async fn fetch_conflicts(client: &GraphClient, access_token: &str) -> ConflictResult {
-    match client
-        .fetch::<GraphCollection<ConflictSummary>>(
-            access_token,
-            "/deviceManagement/deviceConfigurationConflictSummary?$top=20",
-            "beta",
-        )
-        .await
-    {
-        Ok(response) => ConflictResult {
-            summaries: response.value,
-            warning: None,
-        },
-        Err(error) => {
-            let (message, _) = format_graph_error("Conflicts", &error);
+    match fetch_configuration_policy_health(access_token).await {
+        Ok(rows) => {
+            let summaries = rows
+                .into_iter()
+                .filter(|row| row.has_conflict())
+                .map(|row| ConflictSummary {
+                    id: Some(row.policy_id),
+                    contributing_settings: vec![],
+                    conflicting_device_configurations: vec![ConflictingPolicy {
+                        id: None,
+                        display_name: Some(row.policy_name),
+                    }],
+                    device_checkins_impacted: Some(row.conflict),
+                })
+                .collect();
             ConflictResult {
-                summaries: vec![],
-                warning: Some(message),
+                summaries,
+                warning: None,
+            }
+        }
+        Err(error) => {
+            match client
+                .fetch::<GraphCollection<ConflictSummary>>(
+                    access_token,
+                    "/deviceManagement/deviceConfigurationConflictSummary?$top=20",
+                    "beta",
+                )
+                .await
+            {
+                Ok(response) => ConflictResult {
+                    summaries: response.value,
+                    warning: Some(format!(
+                        "Settings Catalog conflict report unavailable ({error}); fell back to classic conflict summary."
+                    )),
+                },
+                Err(fallback) => {
+                    let (message, _) = format_graph_error("Conflicts", &fallback);
+                    ConflictResult {
+                        summaries: vec![],
+                        warning: Some(format!("{error} · {message}")),
+                    }
+                }
             }
         }
     }
@@ -454,61 +493,188 @@ async fn fetch_app_failures(client: &GraphClient, access_token: &str) -> AppFail
     }
 }
 
-async fn fetch_recent_audits(client: &GraphClient, access_token: &str) -> ActivityResult {
-    let path = "/auditLogs/directoryAudits?$top=20&$orderby=activityDateTime desc";
-    match client
-        .fetch::<GraphCollection<DirectoryAuditRow>>(access_token, path, "beta")
-        .await
-    {
-        Ok(response) => ActivityResult {
-            events: response
-                .value
-                .into_iter()
-                .enumerate()
-                .map(|(index, row)| DirectoryAuditEvent {
-                    id: row.id.unwrap_or_else(|| format!("audit-{index}")),
-                    activity_date_time: row.activity_date_time.unwrap_or_default(),
-                    activity_display_name: row
-                        .activity_display_name
-                        .unwrap_or_else(|| "Directory audit".into()),
-                    category: row.category,
-                    result: row.result,
-                    operation_type: row.operation_type,
-                    actor: DirectoryAuditActor {
-                        display_name: row
-                            .initiated_by
-                            .as_ref()
-                            .and_then(|value| value.user.as_ref())
-                            .and_then(|user| user.display_name.clone()),
-                        user_principal_name: row
-                            .initiated_by
-                            .as_ref()
-                            .and_then(|value| value.user.as_ref())
-                            .and_then(|user| user.user_principal_name.clone()),
-                        app_display_name: row
-                            .initiated_by
-                            .as_ref()
-                            .and_then(|value| value.app.as_ref())
-                            .and_then(|app| app.display_name.clone()),
-                    },
-                    target_resources: row
-                        .target_resources
-                        .into_iter()
-                        .filter_map(|resource| resource.display_name)
-                        .collect(),
-                })
-                .collect(),
+async fn fetch_recent_audits(access_token: &str) -> ActivityResult {
+    match list_intune_audit_events(access_token, 20).await {
+        Ok(events) => ActivityResult {
+            events,
             warning: None,
             permission_related: false,
         },
         Err(error) => {
-            let (message, permission_related) = format_graph_error("Directory audits", &error);
+            let (message, permission_related) = format_graph_error("Intune audit", &error);
             ActivityResult {
                 events: vec![],
                 warning: Some(message),
                 permission_related,
             }
         }
+    }
+}
+
+pub async fn list_intune_audit_events(
+    access_token: &str,
+    max_items: usize,
+) -> Result<Vec<DirectoryAuditEvent>, GraphError> {
+    let client = GraphClient::new();
+    let max_items = max_items.clamp(1, 500);
+    let since = (Utc::now() - Duration::days(30)).format("%Y-%m-%dT00:00:00Z");
+    let filter_raw = format!("activityDateTime ge {since}");
+    let filter = urlencoding::encode(&filter_raw);
+    let candidates = [
+        format!(
+            "/deviceManagement/auditEvents?$orderby=activityDateTime desc&$filter={filter}&$top=50"
+        ),
+        "/deviceManagement/auditEvents?$orderby=activityDateTime desc&$top=50".into(),
+        "/deviceManagement/auditEvents?$top=50".into(),
+    ];
+    let mut last_error = None;
+    for path in candidates {
+        match client
+            .fetch_all_pages::<IntuneAuditRow>(access_token, &path, "beta", max_items)
+            .await
+        {
+            Ok(rows) => {
+                let mut events: Vec<DirectoryAuditEvent> = rows
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, row)| map_intune_audit_event(index, row))
+                    .collect();
+                events.sort_by(|left, right| right.activity_date_time.cmp(&left.activity_date_time));
+                events.truncate(max_items);
+                return Ok(events);
+            }
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error.expect("audit query attempted"))
+}
+
+fn map_intune_audit_event(index: usize, row: IntuneAuditRow) -> DirectoryAuditEvent {
+    let actor = row.actor.unwrap_or(IntuneAuditActor {
+        user_principal_name: None,
+        application_display_name: None,
+        service_principal_name: None,
+    });
+    DirectoryAuditEvent {
+        id: row.id.unwrap_or_else(|| format!("audit-{index}")),
+        activity_date_time: row.activity_date_time.unwrap_or_default(),
+        activity_display_name: audit_activity_label(
+            row.activity.as_deref(),
+            row.display_name.as_deref(),
+            row.activity_type.as_deref(),
+            row.activity_operation_type.as_deref(),
+        ),
+        category: nonempty(row.category),
+        result: nonempty(row.activity_result).map(title_case_result),
+        operation_type: nonempty(row.activity_operation_type),
+        actor: DirectoryAuditActor {
+            display_name: None,
+            user_principal_name: nonempty(actor.user_principal_name),
+            app_display_name: nonempty(actor.application_display_name)
+                .or_else(|| nonempty(actor.service_principal_name)),
+        },
+        target_resources: row
+            .resources
+            .iter()
+            .filter_map(|resource| usable_audit_name(resource.display_name.as_deref()))
+            .collect(),
+        changes: row
+            .resources
+            .into_iter()
+            .flat_map(|resource| resource.modified_properties)
+            .filter_map(map_audit_change)
+            .take(40)
+            .collect(),
+    }
+}
+
+fn map_audit_change(property: IntuneAuditProperty) -> Option<AuditPropertyChange> {
+    let display_name = usable_audit_name(property.display_name.as_deref())?;
+    let old_value = clip_audit_value(property.old_value);
+    let new_value = clip_audit_value(property.new_value);
+    if old_value.is_none() && new_value.is_none() {
+        return None;
+    }
+    if old_value == new_value {
+        return None;
+    }
+    Some(AuditPropertyChange {
+        display_name,
+        old_value,
+        new_value,
+    })
+}
+
+fn clip_audit_value(value: Option<String>) -> Option<String> {
+    let trimmed = nonempty(value)?;
+    if trimmed.eq_ignore_ascii_case("null") || trimmed == "[]" || trimmed == "{}" {
+        return None;
+    }
+    if trimmed.len() > 400 {
+        let mut clipped = trimmed.chars().take(400).collect::<String>();
+        clipped.push('…');
+        return Some(clipped);
+    }
+    Some(trimmed)
+}
+
+fn nonempty(value: Option<String>) -> Option<String> {
+    value.and_then(|text| {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+fn usable_audit_name(value: Option<&str>) -> Option<String> {
+    let trimmed = value?.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if lower == "unknown" || lower == "none" || lower == "null" {
+        return None;
+    }
+    if looks_like_guid(trimmed) {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+fn looks_like_guid(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 36
+        && bytes[8] == b'-'
+        && bytes[13] == b'-'
+        && bytes[18] == b'-'
+        && bytes[23] == b'-'
+        && bytes.iter().all(|byte| byte.is_ascii_hexdigit() || *byte == b'-')
+}
+
+fn audit_activity_label(
+    activity: Option<&str>,
+    display_name: Option<&str>,
+    activity_type: Option<&str>,
+    operation: Option<&str>,
+) -> String {
+    for candidate in [activity, display_name, activity_type] {
+        if let Some(label) = usable_audit_name(candidate) {
+            return label;
+        }
+    }
+    usable_audit_name(operation).unwrap_or_else(|| "Intune change".into())
+}
+
+fn title_case_result(value: String) -> String {
+    match value.to_ascii_lowercase().as_str() {
+        "success" => "Success".into(),
+        "failure" | "fail" | "failed" => "Failed".into(),
+        "timeout" => "Timed out".into(),
+        other if other.starts_with("unknown") => "Unknown".into(),
+        _ => value,
     }
 }
 
@@ -614,4 +780,39 @@ fn format_inventory_warning(item: &InventoryCount) -> String {
             .map(|error| format!(" — {error}"))
             .unwrap_or_default()
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn drops_guid_audit_targets() {
+        assert_eq!(
+            usable_audit_name(Some("BitLocker")),
+            Some("BitLocker".into())
+        );
+        assert_eq!(
+            usable_audit_name(Some("59653ce8-3ce8-5965-e83c-6559e83c6559")),
+            None
+        );
+        assert_eq!(usable_audit_name(Some("unknown")), None);
+    }
+
+    #[test]
+    fn prefers_friendly_activity_label() {
+        assert_eq!(
+            audit_activity_label(
+                Some("Create policy"),
+                Some("deviceManagementConfigurationPolicy"),
+                Some("Create"),
+                Some("POST"),
+            ),
+            "Create policy"
+        );
+        assert_eq!(
+            audit_activity_label(None, None, None, Some("Patch")),
+            "Patch"
+        );
+    }
 }

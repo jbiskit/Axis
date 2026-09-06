@@ -288,7 +288,8 @@
 }
 
 .shell-main:has(> .workspace-split),
-.shell-main:has(> .catalog-workbench) {
+.shell-main:has(> .catalog-workbench),
+.shell-main:has(> .environment-report) {
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -302,7 +303,8 @@
 }
 
 .shell-main:has(> .workspace-split) > .workspace-split,
-.shell-main:has(> .catalog-workbench) > .catalog-workbench {
+.shell-main:has(> .catalog-workbench) > .catalog-workbench,
+.shell-main:has(> .environment-report) > .environment-report {
   min-height: 0;
   flex: 1;
 }
@@ -1253,6 +1255,42 @@
   display: flex;
   flex-direction: column;
   gap: 0.9rem;
+}
+
+.environment-report {
+  min-height: 0;
+  flex: 1;
+  padding: 1.1rem 1.25rem 1.5rem;
+  overflow: hidden;
+}
+
+.environment-report-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 0.85rem 1rem;
+}
+
+.environment-report-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.environment-report-field > span {
+  font-size: var(--axis-text-2xs);
+  color: var(--axis-muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.environment-report-preview {
+  flex: 1;
+  min-height: 28rem;
+  width: 100%;
+  border: 1px solid var(--axis-border);
+  border-radius: 0.75rem;
+  background: var(--axis-crust);
 }
 
 .muted {

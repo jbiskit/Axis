@@ -11,6 +11,7 @@ mod device_policies;
 mod device_recovery;
 mod devices;
 mod e8_baselines;
+mod environment_report;
 mod glance;
 mod graph;
 mod inventory;
@@ -18,6 +19,7 @@ mod object_detail;
 mod object_metadata;
 mod object_duplicate;
 mod pack_export;
+mod policy_health;
 mod script_status;
 mod session_store;
 mod settings_catalog;
@@ -76,7 +78,10 @@ pub use device_recovery::{
 };
 pub use devices::fetch_managed_device_list;
 pub use e8_baselines::*;
-pub use glance::fetch_tenant_glance;
+pub use environment_report::{
+    generate_environment_report, EnvironmentReport, EnvironmentReportProgress,
+};
+pub use glance::{fetch_tenant_glance, list_intune_audit_events};
 pub use graph::GraphError;
 pub use inventory::*;
 pub use object_detail::{
@@ -94,6 +99,10 @@ pub use pack_export::{
     dest_dir_from_save_as, export_selected_graph_objects, export_tenant_pack, pretty_json,
     PackExportError, PackExportObject, PackExportOptions, PackExportProgress, PackExportResult,
     SelectedExportResult,
+};
+pub use policy_health::{
+    fetch_app_install_health, fetch_configuration_policy_health, index_app_install,
+    index_policy_health, lookup_app_install, lookup_policy_health, AppInstallHealth, PolicyHealth,
 };
 pub use script_status::{
     fetch_remediation_device_status, fetch_script_run_status, RemediationDeviceRunState,

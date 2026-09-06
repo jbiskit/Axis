@@ -1,5 +1,6 @@
 import type { TenantGlance } from "../types/glance";
 import { STALE_DEVICE_DAYS } from "../types/glance";
+import { navigate } from "../lib/route";
 import {
   DistributionBar,
   PageHeader,
@@ -15,6 +16,20 @@ function actorLabel(event: TenantGlance["recentActivity"][number]): string {
     event.actor.appDisplayName ||
     "Unknown actor"
   );
+}
+
+function activityWhen(value: string): string {
+  const parsed = Date.parse(value);
+  if (!value || Number.isNaN(parsed)) return "Unknown time";
+  const delta = Date.now() - parsed;
+  const minutes = Math.floor(delta / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 14) return `${days}d ago`;
+  return new Date(parsed).toLocaleString();
 }
 
 export function TenantOverview({
@@ -215,11 +230,9 @@ export function TenantOverview({
                 <li key={item.id}>
                   <p>{item.label}</p>
                   <p className="muted" style={{ margin: "0.15rem 0 0", fontSize: "var(--axis-text-2xs)" }}>
-                    {item.policyCount} policies
-                    {item.settingCount > 0 ? ` · ${item.settingCount} settings` : ""}
                     {item.deviceCheckinsImpacted != null
-                      ? ` · ${item.deviceCheckinsImpacted} check-ins`
-                      : ""}
+                      ? `${item.deviceCheckinsImpacted} device${item.deviceCheckinsImpacted === 1 ? "" : "s"} in conflict`
+                      : `${item.policyCount} policies${item.settingCount > 0 ? ` · ${item.settingCount} settings` : ""}`}
                   </p>
                 </li>
               ))}
@@ -260,48 +273,44 @@ export function TenantOverview({
       <Panel padded>
         <PanelHead
           title="Recent activity"
-          hint={`Entra directory audits (latest ${glance.recentActivity.length || 20})`}
+          hint={
+            glance.recentActivity.length > 0
+              ? `Intune audit log · ${glance.recentActivity.length} latest`
+              : "Intune audit log"
+          }
         />
         {glance.recentActivity.length === 0 ? (
           <p className="muted" style={{ margin: 0, fontSize: "var(--axis-text-xs)" }}>
-            {glance.recentActivityWarning || "No recent directory audit events."}
+            {glance.recentActivityWarning || "No Intune audit events in this tenant yet."}
           </p>
         ) : (
-          <div className="axis-table-wrap">
-            <table className="axis-table">
-              <thead>
-                <tr>
-                  <th>When</th>
-                  <th>Activity</th>
-                  <th>Actor</th>
-                  <th>Result</th>
-                </tr>
-              </thead>
-              <tbody>
-                {glance.recentActivity.map((event) => (
-                  <tr key={event.id}>
-                    <td className="muted" style={{ whiteSpace: "nowrap" }}>
-                      {new Date(event.activityDateTime).toLocaleString()}
-                    </td>
-                    <td>
-                      {event.activityDisplayName}
-                      {event.targetResources[0] ? (
-                        <span
-                          className="muted"
-                          style={{ display: "block", fontSize: "0.6875rem" }}
-                        >
-                          {event.targetResources.join(", ")}
-                        </span>
-                      ) : null}
-                    </td>
-                    <td className="muted">{actorLabel(event)}</td>
-                    <td className="muted">{event.result || "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <ul className="overview-list">
+            {glance.recentActivity.map((event) => {
+              const target = event.targetResources.filter(Boolean)[0];
+              const result = event.result && event.result !== "Success" ? event.result : null;
+              return (
+                <li key={event.id}>
+                  <p>{event.activityDisplayName}</p>
+                  <p className="muted" style={{ margin: "0.15rem 0 0", fontSize: "var(--axis-text-2xs)" }}>
+                    {activityWhen(event.activityDateTime)}
+                    {target ? ` · ${target}` : ""}
+                    {` · ${actorLabel(event)}`}
+                    {event.category ? ` · ${event.category}` : ""}
+                    {result ? ` · ${result}` : ""}
+                  </p>
+                </li>
+              );
+            })}
+          </ul>
         )}
+        <button
+          type="button"
+          className="axis-btn"
+          style={{ marginTop: "0.75rem" }}
+          onClick={() => navigate("/intune/activity")}
+        >
+          Open write activity
+        </button>
       </Panel>
 
       {glance.drift ? (

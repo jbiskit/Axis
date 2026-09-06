@@ -64,6 +64,11 @@ export type TenantGlance = {
       appDisplayName?: string | null;
     };
     targetResources: string[];
+    changes?: Array<{
+      displayName: string;
+      oldValue?: string | null;
+      newValue?: string | null;
+    }>;
   }>;
   recentActivityWarning?: string;
   recentActivityPermissionRelated?: boolean;
@@ -119,6 +124,14 @@ export type GlanceResponse = {
   glance: TenantGlance;
   error: string | null;
   mode: "live";
+};
+
+export type IntuneAuditEvent = TenantGlance["recentActivity"][number];
+
+export type IntuneAuditLogResponse = {
+  events: IntuneAuditEvent[];
+  error: string | null;
+  truncated: boolean;
 };
 
 export type ManagedDeviceSummary = {

@@ -3,6 +3,7 @@ import type {
   DeviceCodePrompt,
   DevicesResponse,
   GlanceResponse,
+  IntuneAuditLogResponse,
   PollResult,
   SessionStatus,
 } from "../types/glance";
@@ -32,6 +33,7 @@ import type {
   BaselineExportResponse,
   BaselineReferenceSourceInput,
   BaselineReferenceSourcesResponse,
+  EnvironmentReport,
   PackExportResult,
   SelectedExportResult,
   PickedJsonFile,
@@ -78,6 +80,10 @@ export async function deviceSessionStatus(): Promise<SessionStatus> {
 
 export async function fetchGlance(): Promise<GlanceResponse> {
   return invoke<GlanceResponse>("fetch_glance");
+}
+
+export async function listIntuneAuditEvents(): Promise<IntuneAuditLogResponse> {
+  return invoke<IntuneAuditLogResponse>("list_intune_audit_events_cmd");
 }
 
 export async function refreshGlance(): Promise<GlanceResponse> {
@@ -280,6 +286,16 @@ export async function saveTextFile(input: {
     contents: input.contents,
     suggestedName: input.suggestedName ?? null,
     title: input.title ?? null,
+  });
+}
+
+export async function generateEnvironmentReport(input?: {
+  preparedFor?: string | null;
+  preparedBy?: string | null;
+}): Promise<EnvironmentReport> {
+  return invoke<EnvironmentReport>("generate_environment_report_cmd", {
+    preparedFor: input?.preparedFor?.trim() || null,
+    preparedBy: input?.preparedBy?.trim() || null,
   });
 }
 

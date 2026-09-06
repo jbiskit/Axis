@@ -14,8 +14,10 @@ use axis_sdk::{
     fetch_tenant_scripts, fetch_win32_apps, fetch_windows_update_policies,
     dest_dir_from_save_as, export_selected_graph_objects, export_tenant_pack, PackExportObject,
     PackExportOptions, PackExportProgress, PackExportResult, SelectedExportResult,
+    generate_environment_report, EnvironmentReport, EnvironmentReportProgress,
+    decode_access_token_claims,
     get_laps_credential_info, initiate_on_demand_remediation, list_assignment_filters,
-    list_bitlocker_recovery_keys, list_catalog_categories, load_category_settings,
+    list_bitlocker_recovery_keys, list_catalog_categories, list_intune_audit_events, load_category_settings,
     reboot_managed_device, remote_lock_managed_device, resolve_directory_groups,
     retire_managed_device, reveal_bitlocker_recovery_key, reveal_laps_credentials,
     rotate_managed_device_laps_password, search_catalog_settings, search_directory_groups,
@@ -25,7 +27,7 @@ use axis_sdk::{
     CatalogCategory, CatalogIndexState, CatalogPolicySummary, CatalogSearchResult,
     CompliancePolicyStatusReport,
     CategorySettingsLoad, CreateCompliancePolicyInput, CreateDirectoryGroupInput, CreateTenantScriptInput, CreatedCatalogPolicy, UpdateCompliancePolicyInput,
-    DirectoryGroup, DuplicatedObject,
+    DirectoryAuditEvent, DirectoryGroup, DuplicatedObject,
     E8BaselineReference, E8BaselineSource, GraphObjectDetail, InventoryList, LapsCredentialInfo,
     MobileAppSummary, PolicySettingIssue, RemediationDeviceStatusReport, SettingConflictDetail,
     SettingsCatalogPlatform, TenantScriptSummary, UpdateObjectMetadataInput, UpdateScriptContentInput, UpdatedObjectMetadata,
@@ -270,6 +272,7 @@ pub async fn pick_script_files_cmd(title: Option<String>) -> Result<Option<Vec<P
 }
 
 const PACK_EXPORT_PROGRESS_EVENT: &str = "axis-pack-export-progress";
+const ENVIRONMENT_REPORT_PROGRESS_EVENT: &str = "axis-environment-report-progress";
 
 fn dialog_title(title: Option<String>, fallback: &str) -> String {
     title
@@ -294,7 +297,11 @@ async fn save_as_path(
             .set_title(&title)
             .set_file_name(&suggested_name);
         if json_filter {
-            dialog = dialog.add_filter("JSON", &["json"]);
+            if suggested_name.rsplit('.').next().is_some_and(|ext| ext.eq_ignore_ascii_case("html")) {
+                dialog = dialog.add_filter("HTML", &["html"]);
+            } else {
+                dialog = dialog.add_filter("JSON", &["json"]);
+            }
         }
         dialog.save_file()
     })
@@ -327,6 +334,38 @@ pub async fn save_text_file_cmd(
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn generate_environment_report_cmd(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    prepared_for: Option<String>,
+    prepared_by: Option<String>,
+) -> Result<EnvironmentReport, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Err("Sign in to generate an as-built report.".into());
+    };
+    let claims = decode_access_token_claims(&token);
+    let token_scopes = claims
+        .scp
+        .unwrap_or_default()
+        .split_whitespace()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let version = app.package_info().version.to_string();
+    generate_environment_report(
+        &token,
+        &version,
+        prepared_for.as_deref(),
+        prepared_by.as_deref(),
+        &token_scopes,
+        |progress: EnvironmentReportProgress| {
+            let _ = app.emit(ENVIRONMENT_REPORT_PROGRESS_EVENT, &progress);
+        },
+    )
+    .await
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -489,6 +528,39 @@ async fn session_token(state: &State<'_, AppState>) -> Result<Option<String>, St
         .await
         .map_err(|error| error.to_string())?
         .map(|token| token.access_token))
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IntuneAuditLogResponse {
+    pub events: Vec<DirectoryAuditEvent>,
+    pub error: Option<String>,
+    pub truncated: bool,
+}
+
+#[tauri::command]
+pub async fn list_intune_audit_events_cmd(
+    state: State<'_, AppState>,
+) -> Result<IntuneAuditLogResponse, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Ok(IntuneAuditLogResponse {
+            events: vec![],
+            error: Some("Not signed in.".into()),
+            truncated: false,
+        });
+    };
+    match list_intune_audit_events(&token, 250).await {
+        Ok(events) => Ok(IntuneAuditLogResponse {
+            truncated: events.len() >= 250,
+            events,
+            error: None,
+        }),
+        Err(error) => Ok(IntuneAuditLogResponse {
+            events: vec![],
+            error: Some(error.to_string()),
+            truncated: false,
+        }),
+    }
 }
 
 #[tauri::command]
