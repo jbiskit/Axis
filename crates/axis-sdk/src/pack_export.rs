@@ -319,6 +319,7 @@ where
             is_assigned: None,
             template_family: None,
             template_id: None,
+            template_display_name: None,
             odata_type: profile.odata_type.clone(),
         };
         match export_named_graph(

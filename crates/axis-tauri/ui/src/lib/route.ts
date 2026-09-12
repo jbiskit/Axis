@@ -1,3 +1,5 @@
+import { requestLeave } from "./inspectorDrafts";
+
 export type AppRoute = {
   pathname: string;
   search: URLSearchParams;
@@ -28,7 +30,9 @@ export function navigate(href: string): void {
     window.dispatchEvent(new HashChangeEvent("hashchange"));
     return;
   }
-  window.location.hash = next;
+  requestLeave(() => {
+    window.location.hash = next;
+  });
 }
 
 export function hrefWithParam(pathname: string, search: URLSearchParams, key: string, value: string | null): string {

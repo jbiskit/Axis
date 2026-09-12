@@ -90,6 +90,8 @@ pub struct CatalogPolicySummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub template_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub template_display_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub odata_type: Option<String>,
 }
 
@@ -270,6 +272,8 @@ struct TemplateReference {
     template_family: Option<String>,
     #[serde(default)]
     template_id: Option<String>,
+    #[serde(default)]
+    template_display_name: Option<String>,
 }
 
 async fn list_beta<T: DeserializeOwned + Send + 'static>(
@@ -345,6 +349,10 @@ fn as_policy(row: GraphNamed) -> Option<CatalogPolicySummary> {
             .template_reference
             .as_ref()
             .and_then(|value| value.template_id.clone()),
+        template_display_name: row
+            .template_reference
+            .as_ref()
+            .and_then(|value| value.template_display_name.clone()),
         odata_type: row.odata_type,
         id,
     })

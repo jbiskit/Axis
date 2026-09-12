@@ -7,7 +7,11 @@ import type {
   SettingsCatalogPlatform,
 } from "../types/inventory";
 import { matchesIntunePlatform } from "./platforms";
-import { catalogUiLabel, isAdmxPlaceholderName } from "./catalogSettingDisplay";
+import { catalogUiLabel, isAdmxPlaceholderName, preferredLabel } from "./catalogSettingDisplay";
+import {
+  configuredValueMatchesGraphDefault,
+  graphDefaultOptionId,
+} from "./catalogDefaults";
 
 export const NIL_CATEGORY_PARENT_ID = "00000000-0000-0000-0000-000000000000";
 export const ADMINISTRATIVE_TEMPLATES_CATEGORY_ID = "48be5f9d-4941-4189-8015-dd78f87aacd5";
@@ -154,6 +158,154 @@ export type SettingValueDraft =
   | { kind: "simpleCollection"; values: string[] }
   | { kind: "unsupported"; reason: string };
 
+const BOOLEAN_TRUE_TOKENS = new Set(["true", "enabled", "enable", "allow", "allowed", "yes", "on"]);
+const BOOLEAN_FALSE_TOKENS = new Set(["false", "disabled", "disable", "block", "blocked", "no", "off"]);
+
+function classifyBooleanToken(raw: string): boolean | null {
+  const text = raw.trim().toLowerCase().replace(/['’]/g, "");
+  if (!text) return null;
+  if (BOOLEAN_TRUE_TOKENS.has(text)) return true;
+  if (BOOLEAN_FALSE_TOKENS.has(text)) return false;
+  const words = text.split(/[^a-z0-9]+/).filter(Boolean);
+  if (words.length !== 1) return null;
+  if (BOOLEAN_TRUE_TOKENS.has(words[0]!)) return true;
+  if (BOOLEAN_FALSE_TOKENS.has(words[0]!)) return false;
+  return null;
+}
+
+function optionBooleanPolarity(option: CatalogSettingOption): boolean | null {
+  const fromName = classifyBooleanToken(option.displayName);
+  if (fromName !== null) return fromName;
+  const segments = option.itemId.split(/[_/]/);
+  return classifyBooleanToken(segments[segments.length - 1] ?? option.itemId);
+}
+
+/** Two-option Graph choice that is a clear boolean pair — not every two-value enum. */
+export function booleanChoicePair(
+  detail: Pick<CatalogSettingDetail, "options">,
+): { trueItemId: string; falseItemId: string } | null {
+  const options = detail.options ?? [];
+  if (options.length !== 2) return null;
+  const sides = options.map((option) => ({ option, side: optionBooleanPolarity(option) }));
+  if (sides.some((entry) => entry.side === null)) return null;
+  const on = sides.find((entry) => entry.side === true);
+  const off = sides.find((entry) => entry.side === false);
+  if (!on || !off) return null;
+  return { trueItemId: on.option.itemId, falseItemId: off.option.itemId };
+}
+
+export function isSimpleBooleanDraft(
+  detail: Pick<CatalogSettingDetail, "valueType">,
+  draft: SettingValueDraft,
+): boolean {
+  if (draft.kind !== "simple") return false;
+  return typeof draft.value === "boolean" || /Boolean/i.test(detail.valueType ?? "");
+}
+
+export function simpleBooleanValue(draft: Extract<SettingValueDraft, { kind: "simple" }>): boolean {
+  if (typeof draft.value === "boolean") return draft.value;
+  return draft.value === "true" || draft.value === 1 || draft.value === "1";
+}
+
+const MULTILINE_STRING_FORMATS = new Set(["xml", "json", "binary", "base64"]);
+const SINGLE_LINE_STRING_FORMATS = new Set([
+  "email",
+  "guid",
+  "ip",
+  "url",
+  "version",
+  "date",
+  "time",
+  "datetime",
+]);
+/** Graph string fields at or above this length are treated as document-sized. */
+const LARGE_STRING_MAX_LENGTH = 2048;
+
+function normalizeGraphStringFormat(value?: string | null): string | null {
+  if (!value?.trim()) return null;
+  const token = value
+    .trim()
+    .replace(/^#?microsoft\.graph\.deviceManagementConfigurationStringFormat\.?/i, "")
+    .split(/[./]/)
+    .filter(Boolean)
+    .pop();
+  return token ? token.toLowerCase() : null;
+}
+
+export function catalogStringFormat(
+  detail: Pick<CatalogSettingDetail, "stringFormat" | "raw">,
+): string | null {
+  const mapped = normalizeGraphStringFormat(detail.stringFormat);
+  if (mapped) return mapped;
+  const raw = asRecord(detail.raw);
+  const valueDefinition = asRecord(raw?.valueDefinition);
+  return (
+    normalizeGraphStringFormat(textField(valueDefinition?.format)) ??
+    normalizeGraphStringFormat(textField(raw?.format))
+  );
+}
+
+function catalogTextHaystack(
+  detail: Pick<CatalogSettingDetail, "id" | "displayName" | "description" | "helpText">,
+): string {
+  return [detail.id, detail.displayName, detail.description, detail.helpText]
+    .filter((part): part is string => typeof part === "string" && part.trim().length > 0)
+    .join("\n")
+    .toLowerCase();
+}
+
+/** XML / Exploit Protection config, Graph `format` xml|json, or a large string payload. */
+export function usesMultilineTextEditor(
+  detail: Pick<
+    CatalogSettingDetail,
+    | "id"
+    | "displayName"
+    | "description"
+    | "helpText"
+    | "valueType"
+    | "stringFormat"
+    | "maximumLength"
+    | "raw"
+  >,
+): boolean {
+  if (/Boolean|Integer|Number/i.test(detail.valueType ?? "")) return false;
+  const format = catalogStringFormat(detail);
+  if (format && MULTILINE_STRING_FORMATS.has(format)) return true;
+  if (format && SINGLE_LINE_STRING_FORMATS.has(format)) return false;
+  const haystack = catalogTextHaystack(detail);
+  if (
+    /\bxml\b/.test(haystack) ||
+    /exploitguard|exploitprotection|exploit_protection|exploit-protection/.test(haystack)
+  ) {
+    return true;
+  }
+  return typeof detail.maximumLength === "number" && detail.maximumLength >= LARGE_STRING_MAX_LENGTH;
+}
+
+export function multilineXmlHint(
+  detail: Pick<
+    CatalogSettingDetail,
+    | "id"
+    | "displayName"
+    | "description"
+    | "helpText"
+    | "valueType"
+    | "stringFormat"
+    | "maximumLength"
+    | "raw"
+  >,
+  value: string,
+): string | null {
+  const format = catalogStringFormat(detail);
+  const haystack = catalogTextHaystack(detail);
+  const expectsXml =
+    format === "xml" || /\bxml\b/.test(haystack) || /exploitguard|exploitprotection/.test(haystack);
+  if (!expectsXml || !value.trim()) return null;
+  const trimmed = value.trim();
+  if (trimmed.startsWith("<") && trimmed.includes(">")) return null;
+  return "This setting is stored as a Graph string and typically expects an XML document.";
+}
+
 function isGroupCollection(detail: CatalogSettingDetail): boolean {
   return /settingGroup/i.test(detail.kind) || /SettingGroup/i.test(detail["@odata.type"] ?? "");
 }
@@ -171,8 +323,109 @@ function isSimpleSetting(detail: CatalogSettingDetail): boolean {
   );
 }
 
-function dependentsForOption(detail: CatalogSettingDetail, optionItemId: string) {
-  return (detail.options ?? []).find((option) => option.itemId === optionItemId)?.dependedOnBy ?? [];
+function settingLabel(detail: CatalogSettingDetail): string {
+  return catalogUiLabel([detail.displayName], detail.id);
+}
+
+/** Graph `required` on `dependedOnBy` / `dependentOn` — only `true` is mandatory. */
+function graphMarksRequired(value: unknown): boolean {
+  return value === true;
+}
+
+/** Graph rejects an empty `simpleSettingCollectionValue` but also 400s if a required dependent is omitted. */
+export function requiredCollectionMessage(detail: CatalogSettingDetail): string {
+  const name = settingLabel(detail);
+  const help = preferredLabel(detail.helpText, detail.description);
+  const mustAdd = `“${name}” requires at least one item. Add a value before saving.`;
+  return help ? `${mustAdd} ${help}` : mustAdd;
+}
+
+function collectionDraftFilledCount(draft: SettingValueDraft): number {
+  if (draft.kind !== "simpleCollection") return 0;
+  return draft.values.map((value) => value.trim()).filter(Boolean).length;
+}
+
+function isEmptyCollectionDraft(detail: CatalogSettingDetail, draft: SettingValueDraft): boolean {
+  return isSimpleCollection(detail) && draft.kind === "simpleCollection" && collectionDraftFilledCount(draft) === 0;
+}
+
+export function settingDraftSaveError(
+  detail: CatalogSettingDetail,
+  draft: SettingValueDraft,
+  dependents: Record<string, CatalogSettingDetail> = {},
+  required = false,
+): string | null {
+  if (draft.kind === "unsupported") return draft.reason;
+  if (draft.kind === "simpleCollection") {
+    if (!required) return null;
+    const min = detail.minimumCount && detail.minimumCount > 0 ? detail.minimumCount : 1;
+    if (collectionDraftFilledCount(draft) < min) {
+      return requiredCollectionMessage(detail);
+    }
+    return null;
+  }
+  if (draft.kind === "choice") {
+    for (const dep of dependentsForOption(detail, draft.optionItemId, dependents)) {
+      const childDetail = dependents[dep.settingDefinitionId];
+      const childDraft =
+        draft.children[dep.settingDefinitionId] ??
+        (childDetail ? defaultDraftForSetting(childDetail, dependents) : undefined);
+      if (!childDetail || !childDraft) {
+        if (dep.required) {
+          return `“${settingLabel(detail)}” requires a value for “${dep.settingDefinitionId}”.`;
+        }
+        continue;
+      }
+      const nested = settingDraftSaveError(childDetail, childDraft, dependents, dep.required);
+      if (nested) return nested;
+    }
+  }
+  return null;
+}
+
+export function dependentsForOption(
+  detail: CatalogSettingDetail,
+  optionItemId: string,
+  dependents: Record<string, CatalogSettingDetail> = {},
+): CatalogDependentRef[] {
+  const listed =
+    (detail.options ?? []).find((option) => option.itemId === optionItemId)?.dependedOnBy ?? [];
+  const byId = new Map(listed.map((dep) => [dep.settingDefinitionId, { ...dep }]));
+  for (const child of Object.values(dependents)) {
+    const requiredOnOption = childRequiredForOption(child, optionItemId);
+    if (requiredOnOption == null) continue;
+    const existing = byId.get(child.id);
+    byId.set(child.id, {
+      settingDefinitionId: child.id,
+      required: (existing?.required ?? false) || requiredOnOption,
+    });
+  }
+  return [...byId.values()];
+}
+
+/**
+ * Graph `dependentOn` on a child: whether it belongs to this option, and if it is required.
+ * Belonging alone is not required — ASR Only Per Rule Exclusions (`*_asronlyperruleexclusions`)
+ * attach to Block/Audit/Warn with `required: false` or no flag. `dependentOn` entries usually
+ * omit `required` (that flag lives on the parent option’s `dependedOnBy`).
+ */
+function childRequiredForOption(child: CatalogSettingDetail, optionItemId: string): boolean | null {
+  const entries = Array.isArray(child.raw?.dependentOn) ? child.raw.dependentOn : [];
+  let matched = false;
+  let required = false;
+  for (const entry of entries) {
+    if (typeof entry === "string") {
+      if (entry === optionItemId) matched = true;
+      continue;
+    }
+    const rec = asRecord(entry);
+    if (!rec) continue;
+    const onOption = textField(rec.dependentOn) ?? textField(rec.optionItemId);
+    if (onOption !== optionItemId) continue;
+    matched = true;
+    required = required || graphMarksRequired(rec.required);
+  }
+  return matched ? required : null;
 }
 
 export function defaultDraftForSetting(
@@ -194,13 +447,12 @@ export function defaultDraftForSetting(
   const options = detail.options ?? [];
   if (options.length > 0) {
     const preferred =
-      (detail.defaultOptionId &&
-        options.find((option) => option.itemId === detail.defaultOptionId)?.itemId) ||
+      graphDefaultOptionId(detail) ||
       options.find((option) => /enabled|allow|yes/i.test(`${option.displayName} ${option.itemId}`))
         ?.itemId ||
       options[0]!.itemId;
     const children: Record<string, SettingValueDraft> = {};
-    for (const dep of dependentsForOption(detail, preferred)) {
+    for (const dep of dependentsForOption(detail, preferred, dependents)) {
       const child = dependents[dep.settingDefinitionId];
       if (child) children[dep.settingDefinitionId] = defaultDraftForSetting(child, dependents, nextVisit);
     }
@@ -232,7 +484,7 @@ export function draftWithChoiceOption(
   previous?: SettingValueDraft,
 ): SettingValueDraft {
   const children: Record<string, SettingValueDraft> = {};
-  for (const dep of dependentsForOption(detail, optionItemId)) {
+  for (const dep of dependentsForOption(detail, optionItemId, dependents)) {
     const child = dependents[dep.settingDefinitionId];
     if (!child) continue;
     const prior = previous?.kind === "choice" ? previous.children[dep.settingDefinitionId] : undefined;
@@ -268,18 +520,25 @@ export function buildSettingInstance(
   if (draft.kind === "unsupported") throw new Error(draft.reason);
   if (draft.kind === "choice") {
     const children: Record<string, unknown>[] = [];
-    for (const dep of dependentsForOption(detail, draft.optionItemId)) {
+    for (const dep of dependentsForOption(detail, draft.optionItemId, dependents)) {
       const childDetail = dependents[dep.settingDefinitionId];
-      const childDraft = draft.children[dep.settingDefinitionId];
+      const childDraft =
+        draft.children[dep.settingDefinitionId] ??
+        (childDetail ? defaultDraftForSetting(childDetail, dependents) : undefined);
       if (!childDetail || !childDraft) {
         if (dep.required) {
           throw new Error(`“${detail.displayName}” requires a value for “${dep.settingDefinitionId}”.`);
         }
         continue;
       }
+      if (dep.required && isEmptyCollectionDraft(childDetail, childDraft)) {
+        throw new Error(requiredCollectionMessage(childDetail));
+      }
       const built = buildSettingInstance(childDetail, childDraft, dependents);
       // Optional simple-collection dependents (e.g. ASR per-rule exclusions)
       // must be omitted when empty — Graph rejects `simpleSettingCollectionValue: []`.
+      // Required collections must have at least one item: do not send `[]` and
+      // do not omit the setting (either 400s Device Installation deny lists).
       if (isEffectivelyEmptyInstance(built)) continue;
       children.push(built);
     }
@@ -484,8 +743,23 @@ export function instancesReadyForGraph(
   return order.map((id) => merged.get(id)!);
 }
 
-export function collectDependentIds(detail: CatalogSettingDetail): string[] {
-  return [...new Set(detail.options.flatMap((option) => option.dependedOnBy.map((dep) => dep.settingDefinitionId)))];
+export function collectDependentIds(
+  detail: CatalogSettingDetail,
+  byId: Record<string, CatalogSettingDetail> = {},
+): string[] {
+  const ids = new Set(
+    (detail.options ?? []).flatMap((option) => option.dependedOnBy.map((dep) => dep.settingDefinitionId)),
+  );
+  for (const child of Object.values(byId)) {
+    if (child.id === detail.id || ids.has(child.id)) continue;
+    for (const option of detail.options ?? []) {
+      if (childRequiredForOption(child, option.itemId) != null) {
+        ids.add(child.id);
+        break;
+      }
+    }
+  }
+  return [...ids];
 }
 
 export function bundleFromCategoryMap(
@@ -495,7 +769,7 @@ export function bundleFromCategoryMap(
   const detail = byId[settingId];
   if (!detail) return null;
   const dependents: Record<string, CatalogSettingDetail> = {};
-  const queue = [...collectDependentIds(detail)];
+  const queue = [...collectDependentIds(detail, byId)];
   const seen = new Set<string>();
   while (queue.length) {
     const id = queue.shift()!;
@@ -504,7 +778,7 @@ export function bundleFromCategoryMap(
     const child = byId[id];
     if (!child) continue;
     dependents[id] = child;
-    queue.push(...collectDependentIds(child));
+    queue.push(...collectDependentIds(child, byId));
   }
   return { detail, dependents };
 }
@@ -529,6 +803,15 @@ export function draftValueSummary(
     match?.itemId ?? draft.optionItemId,
     detail.id,
   );
+}
+
+/** Configured draft equals Graph `defaultOptionId` / `isDefault` / `defaultValue` — not inferred. */
+export function draftMatchesGraphDefault(
+  detail: CatalogSettingDetail,
+  draft: SettingValueDraft,
+): boolean {
+  if (draft.kind === "unsupported") return false;
+  return configuredValueMatchesGraphDefault(detail, draft);
 }
 
 export type SettingDraftDiffLine = {
@@ -677,7 +960,7 @@ export function catalogDetailFromGraphDefinition(raw: unknown): CatalogSettingDe
     const deps = Array.isArray(rec.dependedOnBy) ? rec.dependedOnBy : [];
     for (const dep of deps) {
       if (typeof dep === "string" && dep.trim()) {
-        dependedOnBy.push({ settingDefinitionId: dep.trim(), required: true });
+        dependedOnBy.push({ settingDefinitionId: dep.trim(), required: false });
         continue;
       }
       const depRec = asRecord(dep);
@@ -686,13 +969,14 @@ export function catalogDetailFromGraphDefinition(raw: unknown): CatalogSettingDe
       if (!settingDefinitionId) continue;
       dependedOnBy.push({
         settingDefinitionId,
-        required: depRec?.required !== false,
+        required: graphMarksRequired(depRec?.required),
       });
     }
     options.push({
       itemId,
       displayName: textField(rec.displayName) ?? textField(rec.name) ?? itemId,
       description: textField(rec.description),
+      isDefault: typeof rec.isDefault === "boolean" ? rec.isDefault : null,
       dependedOnBy,
     });
   }
@@ -722,6 +1006,8 @@ export function catalogDetailFromGraphDefinition(raw: unknown): CatalogSettingDe
     valueType: valueDefinition
       ? shortOdataType(textField(valueDefinition["@odata.type"]))
       : null,
+    stringFormat:
+      textField(valueDefinition?.format) ?? textField(map.format) ?? null,
     defaultString,
     minValue: typeof valueDefinition?.minimumValue === "number" ? valueDefinition.minimumValue : null,
     maxValue: typeof valueDefinition?.maximumValue === "number" ? valueDefinition.maximumValue : null,
@@ -833,7 +1119,7 @@ export function draftFromSettingInstance(
       }
       children[childId] = draftFromSettingInstance(childInstance, childDetail, dependents);
     }
-    for (const dep of dependentsForOption(detail, choice.value)) {
+    for (const dep of dependentsForOption(detail, choice.value, dependents)) {
       if (children[dep.settingDefinitionId]) continue;
       const childDetail = dependents[dep.settingDefinitionId];
       if (!childDetail) continue;

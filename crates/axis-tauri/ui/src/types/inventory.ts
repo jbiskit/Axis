@@ -27,6 +27,18 @@ export type MobileAppSummary = {
   appTypeLabel?: string | null;
 };
 
+export type ConfigurationPolicyTemplateSummary = {
+  id: string;
+  displayName: string;
+  description?: string | null;
+  platforms?: string | null;
+  technologies?: string | null;
+  templateFamily?: string | null;
+  lifecycleState?: string | null;
+  version?: number | null;
+  baseId?: string | null;
+};
+
 export type CatalogPolicySummary = {
   id: string;
   name: string;
@@ -39,6 +51,7 @@ export type CatalogPolicySummary = {
   isAssigned?: boolean | null;
   templateFamily?: string | null;
   templateId?: string | null;
+  templateDisplayName?: string | null;
   odataType?: string | null;
 };
 
@@ -639,6 +652,7 @@ export type CatalogSettingOption = {
   itemId: string;
   displayName: string;
   description?: string | null;
+  isDefault?: boolean | null;
   dependedOnBy: CatalogDependentRef[];
 };
 
@@ -661,6 +675,8 @@ export type CatalogSettingDetail = CatalogSettingSummary & {
   options: CatalogSettingOption[];
   defaultOptionId?: string | null;
   valueType?: string | null;
+  /** Graph `valueDefinition.format` (xml, json, url, …). */
+  stringFormat?: string | null;
   defaultString?: string | null;
   minValue?: number | null;
   maxValue?: number | null;

@@ -4,6 +4,7 @@ import type { TenantGlance } from "../types/glance";
 import type {
   BaselineReferenceSourceInput,
   CatalogPolicySummary,
+  ConfigurationPolicyTemplateSummary,
   E8BaselineReference,
   MobileAppSummary,
   PackExportProgress,
@@ -61,7 +62,9 @@ import {
   fetchTenantScripts,
   fetchMobileApps,
   fetchWindowsUpdatePolicies,
+  listConfigurationPolicyTemplates,
 } from "../lib/tauri";
+import { catalogPolicyProfileName } from "../lib/catalogPolicyProfile";
 import {
   applyGitHubRepoInput,
   DEFAULT_E8_SOURCE,
@@ -1339,8 +1342,6 @@ function EndpointSecurityBlade({
   onRefresh: () => void;
 }) {
   const [creating, setCreating] = useState(false);
-  // Resolve the blade's template from an existing policy of the same family.
-  const templateId = items.find((item) => item.templateId)?.templateId ?? null;
   return (
     <>
       <NamedPolicyList
@@ -1348,7 +1349,7 @@ function EndpointSecurityBlade({
         title={blade.replace(/-/g, " ")}
         description={
           family
-            ? "Template-backed policies. Edit configured values in the inspector, or open the policy in the Intune portal to change its template."
+            ? "Template-backed policies. Create chooses a Graph profile for this blade (for example Attack surface reduction rules, Device control, or Exploit protection), then edits settings from that template."
             : "Endpoint security policies"
         }
         items={items}
@@ -1359,12 +1360,12 @@ function EndpointSecurityBlade({
         onSelect={onSelect}
         onRefresh={onRefresh}
         objectKind="configurationPolicy"
-        onCreate={family && templateId ? () => setCreating(true) : undefined}
+        templateFamily={family}
+        onCreate={family ? () => setCreating(true) : undefined}
       />
-      {creating && family && templateId ? (
+      {creating && family ? (
         <CreateEndpointSecurityPolicyDialog
           family={family}
-          templateId={templateId}
           onClose={() => setCreating(false)}
           onCreated={(id) => {
             setCreating(false);
@@ -1391,6 +1392,7 @@ function NamedPolicyList({
   incomplete,
   objectKind,
   createFamily,
+  templateFamily,
   onCreate,
 }: {
   eyebrow: string;
@@ -1406,6 +1408,8 @@ function NamedPolicyList({
   incomplete?: string;
   objectKind: string;
   createFamily?: "windows" | "macos" | "ios" | "android";
+  /** Endpoint Security family: load Graph templates and show a Profile column. */
+  templateFamily?: string;
   /** When provided, show a primary "Create" action (template-backed lists). */
   onCreate?: () => void;
 }) {
@@ -1414,6 +1418,32 @@ function NamedPolicyList({
   const { sort, toggle: toggleSort } = useColumnSort<CatalogPolicySortKey>("name");
   const [overlay, setOverlay] = useState<CatalogPolicySummary | null>(null);
   const [creating, setCreating] = useState(false);
+  const [templates, setTemplates] = useState<ConfigurationPolicyTemplateSummary[] | null>(null);
+  const showProfile = Boolean(templateFamily);
+
+  useEffect(() => {
+    if (!templateFamily) {
+      setTemplates(null);
+      return;
+    }
+    let cancelled = false;
+    setTemplates(null);
+    void listConfigurationPolicyTemplates(templateFamily)
+      .then((response) => {
+        if (!cancelled) setTemplates(response.error ? [] : response.templates);
+      })
+      .catch(() => {
+        if (!cancelled) setTemplates([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [templateFamily]);
+
+  const profileName = useCallback(
+    (item: CatalogPolicySummary) => catalogPolicyProfileName(item, templates),
+    [templates],
+  );
   const canCreate = objectKind === "compliancePolicy";
   const createButton = canCreate ? (
     <button type="button" className="axis-btn axis-btn-primary" onClick={() => setCreating(true)}>
@@ -1432,10 +1462,16 @@ function NamedPolicyList({
   );
   const filtered = useMemo(() => {
     const rows = listed.filter((item) =>
-      matchesCatalogPolicyFilters(item, query, assignedFilter, platformFilter),
+      matchesCatalogPolicyFilters(
+        item,
+        query,
+        assignedFilter,
+        platformFilter,
+        showProfile ? profileName(item) : undefined,
+      ),
     );
-    return sortRows(rows, sort.dir, (a, b) => compareCatalogPolicy(a, b, sort.key));
-  }, [assignedFilter, listed, platformFilter, query, sort]);
+    return sortRows(rows, sort.dir, (a, b) => compareCatalogPolicy(a, b, sort.key, profileName));
+  }, [assignedFilter, listed, platformFilter, profileName, query, showProfile, sort]);
   const filteredIds = useMemo(() => filtered.map((item) => item.id), [filtered]);
   const selection = useCheckedIds(filteredIds);
   const checkedPolicies = filtered.filter((item) => selection.checkedIds.has(item.id));
@@ -1503,7 +1539,9 @@ function NamedPolicyList({
               items={filtered.map((item) => ({
                 id: item.id,
                 title: item.name,
-                meta: `${item.platforms ?? eyebrow} · ${formatRelative(item.lastModifiedDateTime)}`,
+                meta: showProfile
+                  ? `${profileName(item)} · ${item.platforms ?? eyebrow} · ${formatRelative(item.lastModifiedDateTime)}`
+                  : `${item.platforms ?? eyebrow} · ${formatRelative(item.lastModifiedDateTime)}`,
               }))}
               selectedId={selected.id}
               onSelect={onSelect}
@@ -1522,7 +1560,7 @@ function NamedPolicyList({
               platformOptions={platformOptions}
               showPlatformFilter
               countLabel={`${filtered.length} of ${items.length}`}
-              searchPlaceholder="Name, platform, assigned…"
+              searchPlaceholder={showProfile ? "Name, profile, platform, assigned…" : "Name, platform, assigned…"}
               allSelected={selection.allSelected}
               onToggleAll={selection.toggleAll}
               selectAllIndeterminate={checkedPolicies.length > 0 && !selection.allSelected}
@@ -1566,7 +1604,7 @@ function NamedPolicyList({
               platformOptions={platformOptions}
               showPlatformFilter
               countLabel={`${filtered.length} of ${items.length}`}
-              placeholder="Name, platform, assigned…"
+              placeholder={showProfile ? "Name, profile, platform, assigned…" : "Name, platform, assigned…"}
             >
               <table className="axis-table">
                 <thead>
@@ -1581,6 +1619,9 @@ function NamedPolicyList({
                       />
                     </th>
                     <SortableTh column="name" label="Name" sort={sort} onSort={toggleSort} />
+                    {showProfile ? (
+                      <SortableTh column="profile" label="Profile" sort={sort} onSort={toggleSort} />
+                    ) : null}
                     <SortableTh column="platform" label="Platform" sort={sort} onSort={toggleSort} />
                     <SortableTh column="settings" label="Settings" sort={sort} onSort={toggleSort} />
                     <SortableTh column="assigned" label="Assigned" sort={sort} onSort={toggleSort} />
@@ -1603,6 +1644,7 @@ function NamedPolicyList({
                         />
                       </td>
                       <td>{item.name}</td>
+                      {showProfile ? <td className="muted">{profileName(item)}</td> : null}
                       <td className="muted">{item.platforms ?? "—"}</td>
                       <td className="muted">{item.settingCount ?? "—"}</td>
                       <td className="muted">{item.isAssigned ? "Yes" : "No"}</td>

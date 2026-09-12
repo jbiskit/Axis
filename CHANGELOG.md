@@ -6,6 +6,9 @@ Notable user-facing changes to Axis are recorded here.
 
 ### Added
 
+- Endpoint Security policy lists show a **Profile** column from the Graph template `displayName` (for example Attack surface reduction rules, Device control, Exploit protection). The same Create-dialog template list is matched on `templateId` / `baseId` / versioned id; inventory `templateDisplayName` is the fallback.
+- Settings Catalog and Endpoint Security settings show a compact **Default** cue when a configured value matches Graph `defaultOptionId`, option `isDefault`, or `defaultValue`. Not configured stays distinct; settings without a Graph default stay unlabeled.
+- Endpoint Security **Create** lists Graph profiles for the blade family. Attack surface reduction can create Device control, Exploit protection, App and browser isolation, Web protection, and ASR rules — not only the first existing policy’s template. App Control for Business uses the same picker on its own blade. Labels and settings come from the template definitions.
 - Workspace **Write activity**: Intune audit timeline with search, property diffs, and JSON export.
 - **Environment report**: platform-first HTML as-built — Summary with per-platform counts, Cross-platform consolidation, then Windows / macOS / iOS / Android chapters each with Policies, Updates, Apps, Enrollment, and Scripts. Enrollment now includes Autopilot profiles/devices, enrollment restrictions/ESP, Apple APNs + ADE/ABM tokens and profiles, Android Enterprise / Managed Google Play, Company Portal branding, terms and conditions, and device categories. Editable Prepared for / Prepared by on generate. Content selector to include or skip chapters, content surfaces, and platforms before generate (deselected areas skip expensive Graph work when practical). Per-item pickers for Policies, Apps, Scripts, and Enrollment: **All** is the default; uncheck All to multi-select specific objects (search/filter supported). Generate once produces both HTML and Markdown; **Save HTML** and **Save as Markdown** export the same selection offline.
 - Templates / Baselines: multi-select Settings Catalog exports and **Import to Intune** in bulk (same normalize + create path as single import, with progress and per-item errors).
@@ -14,12 +17,18 @@ Notable user-facing changes to Axis are recorded here.
 
 ### Fixed
 
+- Endpoint Security **Create** lists each Graph profile once: the latest active template per `baseId` / versioned id and case-insensitive `displayName` + platform, so versioned Microsoft Defender Antivirus and Exclusions aliases no longer repeat. The selected row still uses that template’s Graph `displayName` and `templateId`.
+- Saving a choice setting that requires dependents (for example Device Installation **Prevent installation of matching device instance IDs**) now sends every Graph-required child for the selected option. A collection is required only when Graph marks `required: true` on that option’s `dependedOnBy` or the child’s `dependentOn`. Those lists must contain at least one item — Axis blocks save/create instead of sending `simpleSettingCollectionValue: []` (Graph 400) or omitting the list (also 400). Optional collection dependents such as **ASR Only Per Rule Exclusions** do not block save; empty lists are omitted from the payload.
+- Double-click a setting value to edit it again on template-backed Endpoint Security policies (tenant inspector and Create), matching Settings Catalog.
 - Templates and Baselines inspectors share one export inspect path for catalog / Endpoint Security policies: policy metadata from the JSON plus `CatalogSettingInstances` rows (same unwrap as import), including Flat JSON local and GitHub stores.
 - Templates and Baselines master content scrolls under a pinned page header; pack panels keep natural height instead of stretching to the viewport.
 - Templates **Add local folder** opens the native folder picker and adds a `kind: local` store with `localPath` (GitHub add stays the URL/token form).
 
 ### Changed
 
+- Endpoint Security and Settings Catalog string editors use a monospace textarea for Graph XML / JSON formats, Exploit protection XML (ids and copy mentioning XML), and other large string payloads (`maximumLength` ≥ 2048). The saved Graph value is still a string; a non-blocking hint appears if XML is expected but the draft does not look like a document.
+- Inspector Settings drafts stay in place when you switch Overview, Assignments, Device status, or Settings tabs on the same object. Selecting another object, changing page, closing the inspector, or signing out with unsaved setting or script edits asks before discarding.
+- Settings Catalog and Endpoint Security editors use a compact on/off toggle for Graph boolean simple settings and choice options that are a clear true/false pair (enabled/disabled, allow/block, yes/no). Other two-option choices stay as a dropdown.
 - **Baselines** lists built-in ASD hard baselines only. Local folders and GitHub packs are **Templates** (`/intune/templates`): Axis Templated (`axis-pack.json`) or Flat JSON. Pack `baselines/*.json` files are labeled policy sets. Device compare still grades ASD baselines and an expanded policy set.
 - Overview **Recent activity** uses the Intune audit log (policy/script/app changes) instead of Entra directory audits.
 

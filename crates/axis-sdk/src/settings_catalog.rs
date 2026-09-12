@@ -137,6 +137,8 @@ pub struct CatalogSettingOption {
     pub display_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_default: Option<bool>,
     pub depended_on_by: Vec<CatalogDependentRef>,
 }
 
@@ -174,6 +176,8 @@ pub struct CatalogSettingDetail {
     pub default_option_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub string_format: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_string: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -523,10 +527,12 @@ fn map_setting_detail(raw: &Value) -> Option<CatalogSettingDetail> {
                     };
                     depended_on_by.push(CatalogDependentRef {
                         setting_definition_id,
+                        // Only Graph `required: true` is mandatory. Missing/false
+                        // keeps optional dependents (ASR per-rule exclusions).
                         required: dep_rec
                             .get("required")
                             .and_then(Value::as_bool)
-                            .unwrap_or(true),
+                            .unwrap_or(false),
                     });
                 }
             }
@@ -536,6 +542,7 @@ fn map_setting_detail(raw: &Value) -> Option<CatalogSettingDetail> {
                     .or_else(|| string_field(rec, "name"))
                     .unwrap_or(item_id),
                 description: string_field(rec, "description"),
+                is_default: rec.get("isDefault").and_then(Value::as_bool),
                 depended_on_by,
             });
         }
@@ -544,6 +551,7 @@ fn map_setting_detail(raw: &Value) -> Option<CatalogSettingDetail> {
     let value_definition = map.get("valueDefinition").and_then(as_object);
     let default_value = map.get("defaultValue").and_then(as_object);
     let mut value_type = None;
+    let mut string_format = None;
     let mut min_value = None;
     let mut max_value = None;
     let mut maximum_length = None;
@@ -552,6 +560,7 @@ fn map_setting_detail(raw: &Value) -> Option<CatalogSettingDetail> {
         value_type = Some(short_odata_type(
             def.get("@odata.type").and_then(Value::as_str),
         ));
+        string_format = string_field(def, "format").or_else(|| string_field(map, "format"));
         min_value = def.get("minimumValue").and_then(Value::as_f64);
         max_value = def.get("maximumValue").and_then(Value::as_f64);
         maximum_length = def.get("maximumLength").and_then(Value::as_i64);
@@ -570,6 +579,7 @@ fn map_setting_detail(raw: &Value) -> Option<CatalogSettingDetail> {
         options,
         default_option_id: string_field(map, "defaultOptionId"),
         value_type,
+        string_format,
         default_string,
         min_value,
         max_value,
@@ -1121,6 +1131,8 @@ pub async fn create_policy_with_template(
     template_id: &str,
     template_family: Option<&str>,
     settings: &[Value],
+    platforms: Option<&str>,
+    technologies: Option<&str>,
 ) -> Result<CreatedCatalogPolicy, GraphError> {
     let name = name.trim();
     if name.is_empty() {
@@ -1149,11 +1161,21 @@ pub async fn create_policy_with_template(
         });
     }
 
+    let platforms = platforms
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| platform.graph_platforms());
+    let technologies = technologies
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| platform.technologies_csv());
+
     let payload = json!({
         "name": name,
         "description": description.map(str::trim).filter(|value| !value.is_empty()),
-        "platforms": platform.graph_platforms(),
-        "technologies": platform.technologies_csv(),
+        "platforms": platforms,
+        "technologies": technologies,
         "roleScopeTagIds": ["0"],
         "templateReference": {
             "templateId": template_id,

@@ -492,6 +492,55 @@ select:disabled {
   color: var(--axis-danger);
 }
 
+.axis-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  width: 2.05rem;
+  height: 1.2rem;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--axis-border-strong);
+  border-radius: 999px;
+  background: var(--axis-mantle);
+  cursor: pointer;
+  vertical-align: middle;
+  transition:
+    background-color var(--axis-ease),
+    border-color var(--axis-ease);
+}
+
+.axis-toggle.is-on {
+  background: var(--axis-accent);
+  border-color: var(--axis-accent);
+}
+
+.axis-toggle:hover:not(:disabled):not(.is-on) {
+  border-color: var(--axis-accent);
+}
+
+.axis-toggle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.axis-toggle-thumb {
+  position: absolute;
+  top: 0.1rem;
+  left: 0.1rem;
+  width: 0.9rem;
+  height: 0.9rem;
+  border-radius: 999px;
+  background: var(--axis-muted-strong);
+  transition: transform var(--axis-ease);
+}
+
+.axis-toggle.is-on .axis-toggle-thumb {
+  transform: translateX(0.85rem);
+  background: var(--axis-on-accent);
+}
+
 .axis-table-wrap {
   overflow-x: auto;
 }

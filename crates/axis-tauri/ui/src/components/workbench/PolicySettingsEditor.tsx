@@ -8,14 +8,20 @@ import {
   defaultDraftForSetting,
   draftFromSettingInstance,
   diffSettingDrafts,
+  draftMatchesGraphDefault,
   draftValueSummary,
   instancesReadyForGraph,
   isFreeformSettingsCatalogPolicy,
+  settingDraftSaveError,
   settingInstanceFromRow,
   settingsCatalogPlatformFromGraph,
   type SettingValueDraft,
 } from "../../lib/catalog";
 import { formatCatalogSettingRows } from "../../lib/catalogSettingDisplay";
+import {
+  settingEditIsDirty,
+  usePersistedPolicySettingsDraft,
+} from "../../lib/inspectorDrafts";
 import {
   addSettingsToPolicy,
   catalogIndexStatus,
@@ -28,6 +34,7 @@ import {
 } from "../../lib/tauri";
 import { CatalogSettingInstances } from "./CatalogSettingInstances";
 import { useInspectorSaveAction } from "./inspectorSave";
+import { SettingValueWithDefaultCue } from "./SettingDefaultCue";
 import { SettingDescription } from "./SettingDescription";
 import { SettingDraftEditor, settingDraftHasDependents } from "./SettingDraftEditor";
 import { SettingSearchHit } from "./SettingSearchHit";
@@ -51,27 +58,6 @@ function templateFromObject(object: Record<string, unknown>) {
   };
 }
 
-type PendingEdit = {
-  detail: CatalogSettingDetail;
-  dependents: Record<string, CatalogSettingDetail>;
-  draft: SettingValueDraft;
-  original: SettingValueDraft;
-};
-
-type StagedRemove = {
-  definitionId: string;
-  displayName: string;
-  valueSummary: string;
-};
-
-function draftsEqual(left: SettingValueDraft, right: SettingValueDraft): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
-}
-
-function editIsDirty(edit: PendingEdit): boolean {
-  return !draftsEqual(edit.draft, edit.original);
-}
-
 export function PolicySettingsEditor({
   policyId,
   object,
@@ -89,8 +75,8 @@ export function PolicySettingsEditor({
   const byId = useMemo(() => collectCatalogDetailsFromPolicySettings(settings), [settings]);
   const formatted = useMemo(() => formatCatalogSettingRows(settings), [settings]);
 
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [edits, setEdits] = useState<Record<string, PendingEdit>>({});
+  const { edits, setEdits, stagedRemoves, setStagedRemoves, editingId, setEditingId } =
+    usePersistedPolicySettingsDraft(policyId);
   const [adding, setAdding] = useState(false);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<CatalogSettingSummary[]>([]);
@@ -101,20 +87,16 @@ export function PolicySettingsEditor({
   const [indexHint, setIndexHint] = useState("");
   const [categories, setCategories] = useState<CatalogCategory[]>([]);
   const [catalogById, setCatalogById] = useState<Record<string, CatalogSettingDetail>>({});
-  const [stagedRemoves, setStagedRemoves] = useState<Record<string, StagedRemove>>({});
   const [confirmSave, setConfirmSave] = useState(false);
   const [addFromSearch, setAddFromSearch] = useState(false);
   const [showUnconfigured, setShowUnconfigured] = useState(false);
   useEffect(() => {
-    setEditingId(null);
-    setEdits({});
     setAdding(false);
     setAddFromSearch(false);
     setQuery("");
     setResults([]);
     setError(null);
     setMessage(null);
-    setStagedRemoves({});
     setConfirmSave(false);
   }, [policyId]);
 
@@ -300,7 +282,8 @@ export function PolicySettingsEditor({
   }
 
   const dirtyEdits = useMemo(
-    () => Object.values(edits).filter((edit) => editIsDirty(edit) && !stagedRemoves[edit.detail.id]),
+    () =>
+      Object.values(edits).filter((edit) => settingEditIsDirty(edit) && !stagedRemoves[edit.detail.id]),
     [edits, stagedRemoves],
   );
   const removedList = useMemo(() => Object.values(stagedRemoves), [stagedRemoves]);
@@ -308,13 +291,20 @@ export function PolicySettingsEditor({
 
   const saveDrafts = useCallback(async () => {
     const pending = Object.values(edits).filter(
-      (edit) => editIsDirty(edit) && !stagedRemoves[edit.detail.id],
+      (edit) => settingEditIsDirty(edit) && !stagedRemoves[edit.detail.id],
     );
     const removeIds = Object.keys(stagedRemoves);
     if (pending.length === 0 && removeIds.length === 0) return;
     const unsupported = pending.find((edit) => edit.draft.kind === "unsupported");
     if (unsupported) {
       setError(unsupported.draft.kind === "unsupported" ? unsupported.draft.reason : "Save failed");
+      return;
+    }
+    const incomplete = pending
+      .map((edit) => settingDraftSaveError(edit.detail, edit.draft, edit.dependents))
+      .find((message) => message);
+    if (incomplete) {
+      setError(incomplete);
       return;
     }
     setBusy(true);
@@ -377,7 +367,7 @@ export function PolicySettingsEditor({
     const kept = formatted.filter((row) => !removeIds.has(row.definitionId)).length;
     const adds = Object.values(edits).filter(
       (edit) =>
-        editIsDirty(edit) && !existingIds.has(edit.detail.id) && !removeIds.has(edit.detail.id),
+        settingEditIsDirty(edit) && !existingIds.has(edit.detail.id) && !removeIds.has(edit.detail.id),
     ).length;
     return kept + adds;
   };
@@ -469,7 +459,11 @@ export function PolicySettingsEditor({
                 <span className="setting-unsaved-pill is-added">New</span>
               </p>
               <p className="muted" style={{ margin: "0.2rem 0 0", fontSize: "0.75rem" }}>
-                {draftValueSummary(activeEdit.detail, activeEdit.draft, activeEdit.dependents)}
+                <SettingValueWithDefaultCue
+                  show={draftMatchesGraphDefault(activeEdit.detail, activeEdit.draft)}
+                >
+                  {draftValueSummary(activeEdit.detail, activeEdit.draft, activeEdit.dependents)}
+                </SettingValueWithDefaultCue>
               </p>
             </div>
             <button
@@ -493,7 +487,7 @@ export function PolicySettingsEditor({
             dependents={activeEdit.dependents}
             onChange={(draft) => patchDraft(activeEdit.detail.id, draft)}
           />
-          {editIsDirty(activeEdit) ? (
+          {settingEditIsDirty(activeEdit) ? (
             <SettingValueDiff
               added
               lines={diffSettingDrafts(
@@ -520,8 +514,10 @@ export function PolicySettingsEditor({
                   {edit.detail.description ? <SettingDescription text={edit.detail.description} /> : null}
                 </div>
                 <div className="setting-instance-value">
-                  {draftValueSummary(edit.detail, edit.draft, edit.dependents)}
-                  {editIsDirty(edit) ? (
+                  <SettingValueWithDefaultCue show={draftMatchesGraphDefault(edit.detail, edit.draft)}>
+                    {draftValueSummary(edit.detail, edit.draft, edit.dependents)}
+                  </SettingValueWithDefaultCue>
+                  {settingEditIsDirty(edit) ? (
                     <SettingValueDiff
                       added
                       lines={diffSettingDrafts(
@@ -561,7 +557,7 @@ export function PolicySettingsEditor({
             const rowRemoved = Boolean(stagedRemoves[row.definitionId]);
             const rowEdit = rowRemoved ? undefined : edits[row.definitionId];
             const rowEditing = !rowRemoved && editingId === row.definitionId && Boolean(rowEdit);
-            const rowDirty = Boolean(rowEdit && editIsDirty(rowEdit));
+            const rowDirty = Boolean(rowEdit && settingEditIsDirty(rowEdit));
             const canStageRemove = rowRemoved || remainingConfigured(row.definitionId) >= 1;
             return (
               <li
@@ -618,9 +614,15 @@ export function PolicySettingsEditor({
                         )}
                       />
                     ) : rowEdit ? (
-                      draftValueSummary(rowEdit.detail, rowEdit.draft, rowEdit.dependents)
+                      <SettingValueWithDefaultCue
+                        show={draftMatchesGraphDefault(rowEdit.detail, rowEdit.draft)}
+                      >
+                        {draftValueSummary(rowEdit.detail, rowEdit.draft, rowEdit.dependents)}
+                      </SettingValueWithDefaultCue>
                     ) : (
-                      row.valueSummary
+                      <SettingValueWithDefaultCue show={row.matchesGraphDefault}>
+                        {row.valueSummary}
+                      </SettingValueWithDefaultCue>
                     )}
                     {rowEditing && rowDirty && rowEdit ? (
                       <SettingValueDiff
@@ -712,7 +714,7 @@ export function PolicySettingsEditor({
           {showUnconfigured ? unconfigured.map((detail) => {
             const rowEdit = edits[detail.id];
             const rowEditing = editingId === detail.id && Boolean(rowEdit);
-            const rowDirty = Boolean(rowEdit && editIsDirty(rowEdit));
+            const rowDirty = Boolean(rowEdit && settingEditIsDirty(rowEdit));
             return (
               <li
                 key={`unconfigured:${detail.id}`}

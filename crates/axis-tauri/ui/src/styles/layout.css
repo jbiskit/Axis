@@ -464,6 +464,10 @@
   overflow: auto;
 }
 
+.inspector-scroll [hidden] {
+  display: none !important;
+}
+
 .workspace-inspector .page-header h1 {
   font-size: var(--axis-text-lg);
 }
@@ -508,6 +512,25 @@
   gap: 0.35rem 1rem;
   grid-template-columns: minmax(10rem, 1.4fr) minmax(8rem, 1fr) auto;
   align-items: start;
+}
+
+.setting-instance-row.is-editing:has(.axis-input-multiline) .setting-instance-head {
+  grid-template-columns: minmax(10rem, 1fr) auto;
+  grid-template-areas:
+    "title actions"
+    "value value";
+}
+
+.setting-instance-row.is-editing:has(.axis-input-multiline) .setting-instance-title-block {
+  grid-area: title;
+}
+
+.setting-instance-row.is-editing:has(.axis-input-multiline) .setting-instance-value {
+  grid-area: value;
+}
+
+.setting-instance-row.is-editing:has(.axis-input-multiline) .setting-instance-actions {
+  grid-area: actions;
 }
 
 .setting-instance-name {
@@ -627,9 +650,30 @@
   font-size: 0.8125rem;
 }
 
+.setting-value-with-cue {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.setting-value-with-cue:has(.axis-input-multiline) {
+  display: block;
+  width: 100%;
+}
+
 .setting-instance-value .axis-input {
   width: 100%;
   max-width: 16rem;
+}
+
+.setting-instance-value .axis-input-multiline {
+  max-width: none;
+}
+
+.setting-multiline-hint {
+  margin: 0.35rem 0 0;
+  font-size: 0.72rem;
 }
 
 .setting-instance-inline-check {
@@ -638,6 +682,21 @@
   gap: 0.4rem;
   font-size: 0.8125rem;
   cursor: pointer;
+}
+
+.setting-boolean-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.setting-boolean-toggle-label {
+  font-size: 0.8125rem;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--axis-fg);
 }
 
 .setting-instance-note {
@@ -1675,6 +1734,15 @@
   cursor: not-allowed;
   color: var(--axis-muted);
   background: var(--axis-surface-2);
+}
+
+textarea.axis-input-multiline {
+  min-height: 12rem;
+  resize: vertical;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow: auto;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
 }
 
 .axis-pill {

@@ -8,6 +8,7 @@ import {
   type FormattedSettingRow,
 } from "../../lib/catalogSettingDisplay";
 import { SettingDescription } from "./SettingDescription";
+import { SettingValueWithDefaultCue } from "./SettingDefaultCue";
 
 function ChildTree({ children }: { children: FormattedSettingChild[] }) {
   if (children.length === 0) return null;
@@ -16,7 +17,9 @@ function ChildTree({ children }: { children: FormattedSettingChild[] }) {
       {children.map((child, index) => (
         <li key={`${child.label}-${index}`}>
           <span className="setting-instance-child-label">{child.label}</span>
-          <span className="setting-instance-child-value">{child.value}</span>
+          <span className="setting-instance-child-value">
+            <SettingValueWithDefaultCue show={child.matchesGraphDefault}>{child.value}</SettingValueWithDefaultCue>
+          </span>
           {child.children?.length ? <ChildTree children={child.children} /> : null}
         </li>
       ))}
@@ -55,7 +58,11 @@ function SettingInstanceRow({
           <p className="setting-instance-name">{row.displayName}</p>
           {row.description ? <SettingDescription text={row.description} /> : null}
         </div>
-        <p className="setting-instance-value">{row.valueSummary}</p>
+        <p className="setting-instance-value">
+          <SettingValueWithDefaultCue show={"matchesGraphDefault" in row && row.matchesGraphDefault}>
+            {row.valueSummary}
+          </SettingValueWithDefaultCue>
+        </p>
       </div>
       {unsupportedEditor ? (
         <p className="setting-instance-note">

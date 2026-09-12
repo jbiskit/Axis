@@ -16,6 +16,7 @@ import type {
   CatalogCategoriesResponse,
   CatalogIndexState,
   CatalogPolicySummary,
+  ConfigurationPolicyTemplateSummary,
   CatalogSearchResponse,
   CategorySettingsResponse,
   CreateCatalogPolicyResponse,
@@ -382,6 +383,8 @@ export async function createEndpointSecurityPolicy(input: {
   templateId: string;
   templateFamily: string;
   settings: Record<string, unknown>[];
+  platforms?: string;
+  technologies?: string;
 }): Promise<CreateCatalogPolicyResponse> {
   return invoke("create_endpoint_security_policy_cmd", input);
 }
@@ -397,6 +400,12 @@ export async function fetchConfigurationPolicyTemplate(
   templateId: string,
 ): Promise<{ templates: Record<string, unknown>[]; error: string | null }> {
   return invoke("fetch_configuration_policy_template_cmd", { templateId });
+}
+
+export async function listConfigurationPolicyTemplates(
+  templateFamily: string,
+): Promise<{ templates: ConfigurationPolicyTemplateSummary[]; error: string | null }> {
+  return invoke("list_configuration_policy_templates_cmd", { templateFamily });
 }
 
 export async function updateScriptContent(input: UpdateScriptContentInput): Promise<ActionResponse> {
