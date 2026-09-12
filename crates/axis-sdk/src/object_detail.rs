@@ -275,6 +275,27 @@ fn take_scheduled_actions(object: &mut Value) -> Option<Value> {
         .map(normalize_extra)
 }
 
+/// Fetch a configuration policy template's setting templates with their
+/// definitions — the full shape a template-backed policy can take, including
+/// group settings and their children. Mirrors the Intune portal's template
+/// editor (e.g. Endpoint Security blades).
+pub async fn fetch_configuration_policy_template(
+    access_token: &str,
+    template_id: &str,
+) -> Result<Vec<Value>, GraphError> {
+    let enc = encode_id(template_id);
+    GraphClient::new()
+        .fetch_all_pages::<Value>(
+            access_token,
+            &format!(
+                "/deviceManagement/configurationPolicyTemplates/{enc}/settingTemplates?$expand=settingDefinitions"
+            ),
+            "beta",
+            500,
+        )
+        .await
+}
+
 pub async fn fetch_graph_object_detail(
     access_token: &str,
     kind: &str,

@@ -277,7 +277,11 @@ export function buildSettingInstance(
         }
         continue;
       }
-      children.push(buildSettingInstance(childDetail, childDraft, dependents));
+      const built = buildSettingInstance(childDetail, childDraft, dependents);
+      // Optional simple-collection dependents (e.g. ASR per-rule exclusions)
+      // must be omitted when empty — Graph rejects `simpleSettingCollectionValue: []`.
+      if (isEffectivelyEmptyInstance(built)) continue;
+      children.push(built);
     }
     return {
       "@odata.type": "#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance",
@@ -304,6 +308,11 @@ export function buildSettingInstance(
   };
 }
 
+function isEffectivelyEmptyInstance(instance: Record<string, unknown>): boolean {
+  const collection = instance.simpleSettingCollectionValue;
+  return Array.isArray(collection) && collection.length === 0;
+}
+
 function groupSettingValue(children: Record<string, unknown>[]): Record<string, unknown> {
   return {
     "@odata.type": "#microsoft.graph.deviceManagementConfigurationGroupSettingValue",
@@ -321,7 +330,7 @@ function isGroupInstance(instance: Record<string, unknown>): boolean {
   return instance.groupSettingCollectionValue != null || instance.groupSettingValue != null;
 }
 
-function groupInstanceChildren(instance: Record<string, unknown>): Record<string, unknown>[] {
+export function groupInstanceChildren(instance: Record<string, unknown>): Record<string, unknown>[] {
   if (Array.isArray(instance.groupSettingCollectionValue)) {
     return instance.groupSettingCollectionValue.flatMap((entry) => {
       const record = asRecord(entry);
@@ -334,6 +343,18 @@ function groupInstanceChildren(instance: Record<string, unknown>): Record<string
   return Array.isArray(group?.children)
     ? group.children.filter((child): child is Record<string, unknown> => Boolean(asRecord(child)))
     : [];
+}
+
+/** Rebuild a group collection instance from its child instances (for edits/removals). */
+export function buildGroupCollectionInstance(
+  groupDetail: CatalogSettingDetail,
+  children: Record<string, unknown>[],
+): Record<string, unknown> {
+  return {
+    "@odata.type": "#microsoft.graph.deviceManagementConfigurationGroupSettingCollectionInstance",
+    settingDefinitionId: groupDetail.id,
+    groupSettingCollectionValue: [groupSettingValue(children)],
+  };
 }
 
 function mergeGroupInstances(
@@ -373,35 +394,51 @@ export function wrapSettingInstanceForPolicy(
   instance: Record<string, unknown>,
   detail: CatalogSettingDetail,
   byId: Record<string, CatalogSettingDetail> = {},
+  templateRefs: Record<string, string> = {},
 ): Record<string, unknown> {
+  const leafRef = templateRefs[detail.id];
+  const leaf = leafRef
+    ? {
+        ...instance,
+        settingInstanceTemplateReference: { settingInstanceTemplateId: leafRef },
+      }
+    : instance;
   const parentId = detail.rootDefinitionId?.trim();
-  if (!parentId || parentId === detail.id) return instance;
-  if (instanceDefinitionId(instance) === parentId) return instance;
+  if (!parentId || parentId === detail.id) return leaf;
+  if (instanceDefinitionId(leaf) === parentId) return leaf;
 
   const parent = byId[parentId];
   const synthetic = isSyntheticTopLevelGroupId(parentId);
   const parentIsGroup = parent
     ? /settingGroup/i.test(parent.kind) || /SettingGroup/i.test(parent["@odata.type"] ?? "")
     : false;
-  if (!synthetic && !parentIsGroup) return instance;
+  if (!synthetic && !parentIsGroup) return leaf;
 
+  const parentRef = templateRefs[parentId];
+  const group = (collection: boolean): Record<string, unknown> => {
+    const wrapped: Record<string, unknown> = collection
+      ? {
+          "@odata.type":
+            "#microsoft.graph.deviceManagementConfigurationGroupSettingCollectionInstance",
+          settingDefinitionId: parentId,
+          groupSettingCollectionValue: [groupSettingValue([leaf])],
+        }
+      : {
+          "@odata.type":
+            "#microsoft.graph.deviceManagementConfigurationGroupSettingInstance",
+          settingDefinitionId: parentId,
+          groupSettingValue: groupSettingValue([leaf]),
+        };
+    if (parentRef) {
+      wrapped.settingInstanceTemplateReference = { settingInstanceTemplateId: parentRef };
+    }
+    return wrapped;
+  };
   const asCollection =
     synthetic ||
     /collection/i.test(parent?.kind ?? "") ||
     /Collection/i.test(parent?.["@odata.type"] ?? "");
-  if (asCollection) {
-    return {
-      "@odata.type":
-        "#microsoft.graph.deviceManagementConfigurationGroupSettingCollectionInstance",
-      settingDefinitionId: parentId,
-      groupSettingCollectionValue: [groupSettingValue([instance])],
-    };
-  }
-  return {
-    "@odata.type": "#microsoft.graph.deviceManagementConfigurationGroupSettingInstance",
-    settingDefinitionId: parentId,
-    groupSettingValue: groupSettingValue([instance]),
-  };
+  return group(asCollection);
 }
 
 /** Wrap Apple parents and merge siblings that share a group collection. */
@@ -411,13 +448,21 @@ export function instancesReadyForGraph(
     detail: CatalogSettingDetail;
     byId?: Record<string, CatalogSettingDetail>;
   }>,
+  templateRefs?: Record<string, string>,
 ): Record<string, unknown>[] {
-  const wrapped = rows.map((row) =>
-    wrapSettingInstanceForPolicy(row.instance, row.detail, {
-      ...(row.byId ?? {}),
-      [row.detail.id]: row.detail,
-    }),
-  );
+  const wrapped = rows
+    .filter((row) => !isEffectivelyEmptyInstance(row.instance))
+    .map((row) =>
+      wrapSettingInstanceForPolicy(
+        row.instance,
+        row.detail,
+        {
+          ...(row.byId ?? {}),
+          [row.detail.id]: row.detail,
+        },
+        templateRefs,
+      ),
+    );
   const order: string[] = [];
   const merged = new Map<string, Record<string, unknown>>();
   for (const instance of wrapped) {
@@ -711,6 +756,50 @@ export function settingInstanceFromRow(
   return asRecord(row.settingInstance) ?? (typeof row.settingDefinitionId === "string" ? row : null);
 }
 
+function collectInstanceDefinitionIds(instance: Record<string, unknown>, into: Set<string>): void {
+  const id = textField(instance.settingDefinitionId);
+  if (id) into.add(id);
+  const group = asRecord(instance.groupSettingValue);
+  if (group && Array.isArray(group.children)) {
+    for (const child of group.children) {
+      const childInstance = childInstanceFromValue(child);
+      if (childInstance) collectInstanceDefinitionIds(childInstance, into);
+    }
+  }
+  const groupCollection = instance.groupSettingCollectionValue;
+  if (Array.isArray(groupCollection)) {
+    for (const groupValue of groupCollection) {
+      const rec = asRecord(groupValue);
+      if (!rec || !Array.isArray(rec.children)) continue;
+      for (const child of rec.children) {
+        const childInstance = childInstanceFromValue(child);
+        if (childInstance) collectInstanceDefinitionIds(childInstance, into);
+      }
+    }
+  }
+  const choice = asRecord(instance.choiceSettingValue);
+  if (choice && Array.isArray(choice.children)) {
+    for (const child of choice.children) {
+      const childInstance = childInstanceFromValue(child);
+      if (childInstance) collectInstanceDefinitionIds(childInstance, into);
+    }
+  }
+}
+
+/**
+ * All definition ids that carry a value on this policy, including nested
+ * group/choice children. Used to tell configured settings apart from
+ * template settings that are genuinely not configured.
+ */
+export function collectConfiguredSettingIds(settings: Record<string, unknown>[]): Set<string> {
+  const ids = new Set<string>();
+  for (const row of settings) {
+    const instance = settingInstanceFromRow(row);
+    if (instance) collectInstanceDefinitionIds(instance, ids);
+  }
+  return ids;
+}
+
 function childInstanceFromValue(child: unknown): Record<string, unknown> | null {
   const rec = asRecord(child);
   if (!rec) return null;
@@ -786,4 +875,121 @@ export function draftFromSettingInstance(
     kind: "unsupported",
     reason: `Cannot edit “${detail.displayName}” (${detail.kind || "complex"}) from this inspector yet.`,
   };
+}
+
+export type TemplateSettingChild = {
+  definitionId: string;
+  instanceTemplate: Record<string, unknown>;
+  definition: CatalogSettingDetail | null;
+};
+
+export type TemplateSettingNode = {
+  id: string;
+  definitionId: string;
+  instanceTemplate: Record<string, unknown>;
+  definitions: Record<string, CatalogSettingDetail>;
+  children: TemplateSettingChild[];
+};
+
+function templateChildrenFrom(
+  instanceTemplate: Record<string, unknown>,
+  definitions: Record<string, CatalogSettingDetail>,
+): TemplateSettingChild[] {
+  const rawChildren: unknown[] = [];
+  const collection = instanceTemplate.groupSettingCollectionValueTemplate;
+  if (Array.isArray(collection)) {
+    for (const entry of collection) {
+      const rec = asRecord(entry);
+      if (rec && Array.isArray(rec.children)) rawChildren.push(...rec.children);
+    }
+  }
+  const group = asRecord(instanceTemplate.groupSettingValueTemplate);
+  if (group && Array.isArray(group.children)) rawChildren.push(...group.children);
+  return rawChildren.flatMap((child) => {
+    const rec = asRecord(child);
+    const definitionId = rec ? textField(rec.settingDefinitionId) : null;
+    if (!rec || !definitionId) return [];
+    return [
+      {
+        definitionId,
+        instanceTemplate: rec,
+        definition: definitions[definitionId] ?? null,
+      },
+    ];
+  });
+}
+
+/**
+ * Parse a configuration policy template (`…/settingTemplates?$expand=settingDefinitions`)
+ * into its top-level settings. Group templates carry their children, and every
+ * node's `definitions` map holds that template setting's own definitions
+ * (including child and dependent definitions).
+ */
+export function parseConfigurationPolicyTemplate(raw: unknown): TemplateSettingNode[] {
+  const root = asRecord(raw);
+  const value = Array.isArray(raw) ? raw : Array.isArray(root?.value) ? root.value : [];
+  const nodes: TemplateSettingNode[] = [];
+  for (const item of value) {
+    const rec = asRecord(item);
+    if (!rec) continue;
+    const instanceTemplate = asRecord(rec.settingInstanceTemplate);
+    const definitionId = instanceTemplate ? textField(instanceTemplate.settingDefinitionId) : null;
+    if (!instanceTemplate || !definitionId) continue;
+    const definitions: Record<string, CatalogSettingDetail> = {};
+    const defs = Array.isArray(rec.settingDefinitions) ? rec.settingDefinitions : [];
+    for (const def of defs) {
+      const mapped = catalogDetailFromGraphDefinition(def);
+      if (mapped) definitions[mapped.id] = mapped;
+    }
+    nodes.push({
+      id: textField(rec.id) ?? definitionId,
+      definitionId,
+      instanceTemplate,
+      definitions,
+      children: templateChildrenFrom(instanceTemplate, definitions),
+    });
+  }
+  return nodes;
+}
+
+function collectInstanceIds(instance: Record<string, unknown>, into: Map<string, Record<string, unknown>>): void {
+  const id = textField(instance.settingDefinitionId);
+  if (id) into.set(id, instance);
+  const group = asRecord(instance.groupSettingValue);
+  if (group && Array.isArray(group.children)) {
+    for (const child of group.children) {
+      const childInstance = childInstanceFromValue(child);
+      if (childInstance) collectInstanceIds(childInstance, into);
+    }
+  }
+  const groupCollection = instance.groupSettingCollectionValue;
+  if (Array.isArray(groupCollection)) {
+    for (const groupValue of groupCollection) {
+      const rec = asRecord(groupValue);
+      if (!rec || !Array.isArray(rec.children)) continue;
+      for (const child of rec.children) {
+        const childInstance = childInstanceFromValue(child);
+        if (childInstance) collectInstanceIds(childInstance, into);
+      }
+    }
+  }
+  const choice = asRecord(instance.choiceSettingValue);
+  if (choice && Array.isArray(choice.children)) {
+    for (const child of choice.children) {
+      const childInstance = childInstanceFromValue(child);
+      if (childInstance) collectInstanceIds(childInstance, into);
+    }
+  }
+}
+
+/** Current instances keyed by definition id, including nested group/choice children. */
+export function collectInstancesByDefinition(
+  settings: Record<string, unknown>[],
+): Map<string, Record<string, unknown>> {
+  const map = new Map<string, Record<string, unknown>>();
+  for (const row of settings) {
+    const instance = settingInstanceFromRow(row);
+    if (instance) collectInstanceIds(instance, map);
+  }
+  return map;
 }

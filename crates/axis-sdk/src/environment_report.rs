@@ -20,13 +20,144 @@ use crate::policy_health::{
 };
 use crate::types::TenantGlance;
 use chrono::Utc;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use urlencoding::encode;
 
 const SETTINGS_PAGE_MAX: usize = 1000;
 const ASSIGNMENTS_MAX: usize = 200;
+
+fn default_true() -> bool {
+    true
+}
+
+/// Which chapters and content surfaces to include in an as-built.
+/// Defaults match prior behaviour (everything included).
+///
+/// Optional ID lists narrow a content surface when that surface is enabled:
+/// `None` = all objects; `Some(ids)` = only those IDs (`Some([])` = none).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentReportSelection {
+    #[serde(default = "default_true")]
+    pub summary: bool,
+    #[serde(default = "default_true")]
+    pub devices: bool,
+    #[serde(default = "default_true")]
+    pub groups: bool,
+    #[serde(default = "default_true")]
+    pub policies: bool,
+    #[serde(default = "default_true")]
+    pub updates: bool,
+    #[serde(default = "default_true")]
+    pub apps: bool,
+    #[serde(default = "default_true")]
+    pub enrollment: bool,
+    #[serde(default = "default_true")]
+    pub scripts: bool,
+    #[serde(default = "default_true")]
+    pub cross_platform: bool,
+    #[serde(default = "default_true")]
+    pub windows: bool,
+    #[serde(default = "default_true")]
+    pub macos: bool,
+    #[serde(default = "default_true")]
+    pub ios: bool,
+    #[serde(default = "default_true")]
+    pub android: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_ids: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_ids: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub script_ids: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enrollment_ids: Option<Vec<String>>,
+}
+
+impl Default for EnvironmentReportSelection {
+    fn default() -> Self {
+        Self {
+            summary: true,
+            devices: true,
+            groups: true,
+            policies: true,
+            updates: true,
+            apps: true,
+            enrollment: true,
+            scripts: true,
+            cross_platform: true,
+            windows: true,
+            macos: true,
+            ios: true,
+            android: true,
+            policy_ids: None,
+            app_ids: None,
+            script_ids: None,
+            enrollment_ids: None,
+        }
+    }
+}
+
+impl EnvironmentReportSelection {
+    fn includes_scope(&self, scope: &str) -> bool {
+        match scope {
+            CROSS_PLATFORM_SCOPE => self.cross_platform,
+            "Windows" => self.windows,
+            "macOS" => self.macos,
+            "iOS" | "iPadOS" => self.ios,
+            "Android" => self.android,
+            // Rare platforms (tvOS, Linux, Unspecified, …) only when the user has not narrowed OS scope.
+            _ => self.windows && self.macos && self.ios && self.android,
+        }
+    }
+
+    /// `None` = unrestricted; `Some([])` = nothing; `Some(ids)` = only those ids.
+    fn allows_id(filter: &Option<Vec<String>>, id: &str) -> bool {
+        match filter {
+            None => true,
+            Some(ids) => ids.iter().any(|allowed| allowed == id),
+        }
+    }
+
+    fn filter_is_empty(filter: &Option<Vec<String>>) -> bool {
+        matches!(filter, Some(ids) if ids.is_empty())
+    }
+
+    fn wants_policy_objects(&self) -> bool {
+        self.policies && self.any_platform() && !Self::filter_is_empty(&self.policy_ids)
+    }
+
+    fn wants_update_objects(&self) -> bool {
+        self.updates && self.windows
+    }
+
+    fn wants_app_objects(&self) -> bool {
+        self.apps && self.any_platform() && !Self::filter_is_empty(&self.app_ids)
+    }
+
+    fn wants_enrollment_objects(&self) -> bool {
+        self.enrollment && self.any_platform() && !Self::filter_is_empty(&self.enrollment_ids)
+    }
+
+    /// Tenant enrollment connectors / APNs / ADE extras only in "all enrollment" mode.
+    fn wants_enrollment_extras(&self) -> bool {
+        self.wants_enrollment_objects() && self.enrollment_ids.is_none()
+    }
+
+    fn wants_script_objects(&self) -> bool {
+        self.scripts && self.any_platform() && !Self::filter_is_empty(&self.script_ids)
+    }
+
+    fn any_platform(&self) -> bool {
+        self.cross_platform || self.windows || self.macos || self.ios || self.android
+    }
+
+    fn any_content_surface(&self) -> bool {
+        self.policies || self.updates || self.apps || self.enrollment || self.scripts
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -41,8 +172,10 @@ pub struct EnvironmentReportProgress {
 #[serde(rename_all = "camelCase")]
 pub struct EnvironmentReport {
     pub html: String,
+    pub markdown: String,
     pub organization_name: Option<String>,
     pub suggested_name: String,
+    pub suggested_markdown_name: String,
     pub object_count: u32,
     pub generated_at: String,
     pub warnings: Vec<String>,
@@ -135,52 +268,85 @@ pub async fn generate_environment_report(
     prepared_for: Option<&str>,
     prepared_by: Option<&str>,
     token_scopes: &[String],
+    selection: &EnvironmentReportSelection,
     on_progress: impl Fn(EnvironmentReportProgress),
 ) -> Result<EnvironmentReport, GraphError> {
     let generated_at = Utc::now().to_rfc3339();
     let mut warnings = Vec::new();
 
     on_progress(progress("inventory", 0, 0, "Loading tenant inventory…"));
-    let catalog = list_or_warn(
-        "Settings Catalog",
-        fetch_configuration_policies(access_token).await,
-        &mut warnings,
-    );
-    let scripts = list_or_warn(
-        "Scripts",
-        fetch_tenant_scripts(access_token).await,
-        &mut warnings,
-    );
-    let compliance = list_or_warn(
-        "Compliance policies",
-        fetch_compliance_policies(access_token).await,
-        &mut warnings,
-    );
-    let intents = list_or_warn(
-        "Endpoint Security",
-        fetch_endpoint_security_intents(access_token).await,
-        &mut warnings,
-    );
-    let windows_update = list_or_warn(
-        "Windows Update",
-        fetch_windows_update_policies(access_token).await,
-        &mut warnings,
-    );
-    let autopilot = list_or_warn(
-        "Autopilot profiles",
-        fetch_autopilot_profiles(access_token).await,
-        &mut warnings,
-    );
-    let group_policy = list_or_warn(
-        "Group Policy",
-        fetch_group_policy_configurations(access_token).await,
-        &mut warnings,
-    );
-    let enrollment = list_or_warn(
-        "Enrollment",
-        fetch_enrollment_configurations(access_token).await,
-        &mut warnings,
-    );
+    let catalog = if selection.wants_policy_objects() {
+        list_or_warn(
+            "Settings Catalog",
+            fetch_configuration_policies(access_token).await,
+            &mut warnings,
+        )
+    } else {
+        Vec::new()
+    };
+    let scripts = if selection.wants_script_objects() || selection.wants_policy_objects() {
+        list_or_warn(
+            "Scripts",
+            fetch_tenant_scripts(access_token).await,
+            &mut warnings,
+        )
+    } else {
+        Vec::new()
+    };
+    let compliance = if selection.wants_policy_objects() {
+        list_or_warn(
+            "Compliance policies",
+            fetch_compliance_policies(access_token).await,
+            &mut warnings,
+        )
+    } else {
+        Vec::new()
+    };
+    let intents = if selection.wants_policy_objects() && selection.windows {
+        list_or_warn(
+            "Endpoint Security",
+            fetch_endpoint_security_intents(access_token).await,
+            &mut warnings,
+        )
+    } else {
+        Vec::new()
+    };
+    let windows_update = if selection.wants_update_objects() {
+        list_or_warn(
+            "Windows Update",
+            fetch_windows_update_policies(access_token).await,
+            &mut warnings,
+        )
+    } else {
+        Vec::new()
+    };
+    let autopilot = if selection.wants_enrollment_objects() && selection.windows {
+        list_or_warn(
+            "Autopilot profiles",
+            fetch_autopilot_profiles(access_token).await,
+            &mut warnings,
+        )
+    } else {
+        Vec::new()
+    };
+    let group_policy = if selection.wants_policy_objects() && selection.windows {
+        list_or_warn(
+            "Group Policy",
+            fetch_group_policy_configurations(access_token).await,
+            &mut warnings,
+        )
+    } else {
+        Vec::new()
+    };
+    let enrollment = if selection.wants_enrollment_objects() {
+        list_or_warn(
+            "Enrollment",
+            fetch_enrollment_configurations(access_token).await,
+            &mut warnings,
+        )
+    } else {
+        Vec::new()
+    };
 
     on_progress(progress("posture", 0, 0, "Loading posture snapshot…"));
     let glance = match fetch_tenant_glance(access_token, token_scopes).await {
@@ -191,33 +357,45 @@ pub async fn generate_environment_report(
         }
     };
 
-    on_progress(progress("posture", 0, 0, "Loading policy device status…"));
-    let health_rows = match fetch_configuration_policy_health(access_token).await {
-        Ok(rows) => rows,
-        Err(error) => {
-            warnings.push(format!("Policy device status: {error}"));
-            Vec::new()
+    let health_rows = if selection.wants_policy_objects() {
+        on_progress(progress("posture", 0, 0, "Loading policy device status…"));
+        match fetch_configuration_policy_health(access_token).await {
+            Ok(rows) => rows,
+            Err(error) => {
+                warnings.push(format!("Policy device status: {error}"));
+                Vec::new()
+            }
         }
+    } else {
+        Vec::new()
     };
     let health_index = index_policy_health(&health_rows);
 
-    let compliance_docs = match fetch_compliance_property_docs("").await {
-        Ok(docs) => docs
-            .into_iter()
-            .map(|doc| (doc.name.clone(), doc))
-            .collect::<HashMap<_, _>>(),
-        Err(error) => {
-            warnings.push(format!("Compliance labels: {error}"));
-            HashMap::new()
+    let compliance_docs = if selection.wants_policy_objects() {
+        match fetch_compliance_property_docs("").await {
+            Ok(docs) => docs
+                .into_iter()
+                .map(|doc| (doc.name.clone(), doc))
+                .collect::<HashMap<_, _>>(),
+            Err(error) => {
+                warnings.push(format!("Compliance labels: {error}"));
+                HashMap::new()
+            }
         }
+    } else {
+        HashMap::new()
     };
 
-    let filters = match list_assignment_filters(access_token).await {
-        Ok(filters) => filters,
-        Err(error) => {
-            warnings.push(format!("Assignment filters: {error}"));
-            Vec::new()
+    let filters = if selection.any_content_surface() && selection.any_platform() {
+        match list_assignment_filters(access_token).await {
+            Ok(filters) => filters,
+            Err(error) => {
+                warnings.push(format!("Assignment filters: {error}"));
+                Vec::new()
+            }
         }
+    } else {
+        Vec::new()
     };
 
     let script_names: HashMap<String, String> = scripts
@@ -225,18 +403,67 @@ pub async fn generate_environment_report(
         .map(|script| (script.id.clone(), script.display_name.clone()))
         .collect();
 
-    let total = (catalog.len()
-        + scripts.len()
-        + compliance.len()
-        + intents.len()
-        + windows_update.len()
-        + autopilot.len()
-        + group_policy.len()
-        + enrollment.len()) as u32;
+    let catalog_work: Vec<_> = catalog
+        .iter()
+        .filter(|policy| {
+            let (scope, _) = platform_scope_from_catalog(policy.platforms.as_deref());
+            selection.includes_scope(&scope)
+                && EnvironmentReportSelection::allows_id(&selection.policy_ids, &policy.id)
+        })
+        .collect();
+    let script_work: Vec<_> = if selection.wants_script_objects() {
+        scripts
+            .iter()
+            .filter(|script| {
+                selection.includes_scope(&script_platform(&script.kind))
+                    && EnvironmentReportSelection::allows_id(&selection.script_ids, &script.id)
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let compliance_work: Vec<_> = compliance
+        .iter()
+        .filter(|policy| {
+            let (scope, _) = platform_scope_from_catalog(policy.platforms.as_deref());
+            selection.includes_scope(&scope)
+                && EnvironmentReportSelection::allows_id(&selection.policy_ids, &policy.id)
+        })
+        .collect();
+    let intent_work: Vec<_> = intents
+        .iter()
+        .filter(|policy| EnvironmentReportSelection::allows_id(&selection.policy_ids, &policy.id))
+        .collect();
+    let update_work: Vec<_> = windows_update.iter().collect();
+    let autopilot_work: Vec<_> = autopilot
+        .iter()
+        .filter(|profile| {
+            EnvironmentReportSelection::allows_id(&selection.enrollment_ids, &profile.id)
+        })
+        .collect();
+    let group_policy_work: Vec<_> = group_policy
+        .iter()
+        .filter(|policy| EnvironmentReportSelection::allows_id(&selection.policy_ids, &policy.id))
+        .collect();
+    let enrollment_work: Vec<_> = enrollment
+        .iter()
+        .filter(|policy| {
+            EnvironmentReportSelection::allows_id(&selection.enrollment_ids, &policy.id)
+        })
+        .collect();
+
+    let total = (catalog_work.len()
+        + script_work.len()
+        + compliance_work.len()
+        + intent_work.len()
+        + update_work.len()
+        + autopilot_work.len()
+        + group_policy_work.len()
+        + enrollment_work.len()) as u32;
     let mut current = 0u32;
     let mut cards = Vec::new();
 
-    for policy in &catalog {
+    for policy in catalog_work {
         current += 1;
         on_progress(progress(
             "catalog",
@@ -265,7 +492,7 @@ pub async fn generate_environment_report(
         }
     }
 
-    for script in &scripts {
+    for script in script_work {
         current += 1;
         on_progress(progress(
             "scripts",
@@ -280,7 +507,7 @@ pub async fn generate_environment_report(
         }
     }
 
-    for policy in &compliance {
+    for policy in compliance_work {
         current += 1;
         on_progress(progress(
             "compliance",
@@ -309,7 +536,7 @@ pub async fn generate_environment_report(
         }
     }
 
-    for policy in &intents {
+    for policy in intent_work {
         current += 1;
         on_progress(progress(
             "endpoint-security",
@@ -323,7 +550,7 @@ pub async fn generate_environment_report(
         }
     }
 
-    for policy in &windows_update {
+    for policy in update_work {
         current += 1;
         on_progress(progress(
             "windows-update",
@@ -352,7 +579,7 @@ pub async fn generate_environment_report(
         }
     }
 
-    for profile in &autopilot {
+    for profile in autopilot_work {
         current += 1;
         on_progress(progress(
             "autopilot",
@@ -380,7 +607,7 @@ pub async fn generate_environment_report(
         }
     }
 
-    for policy in &group_policy {
+    for policy in group_policy_work {
         current += 1;
         on_progress(progress(
             "group-policy",
@@ -408,7 +635,8 @@ pub async fn generate_environment_report(
         }
     }
 
-    for policy in &enrollment {
+    let mut enrollment_loaded = 0usize;
+    for policy in enrollment_work {
         current += 1;
         on_progress(progress(
             "enrollment",
@@ -417,29 +645,53 @@ pub async fn generate_environment_report(
             &format!("Enrollment: {}", policy.name),
         ));
         match load_enrollment_card(access_token, policy).await {
-            Ok(card) => cards.push(card),
+            Ok(card) => {
+                if selection.includes_scope(&card.scope) {
+                    enrollment_loaded += 1;
+                    cards.push(card);
+                }
+            }
             Err(error) => warnings.push(format!("{}: {error}", policy.name)),
         }
     }
 
-    on_progress(progress(
-        "enrollment",
-        current,
-        total,
-        "Loading enrollment connectors and tenant enrollment settings…",
-    ));
-    let (extra_enrollment, extra_group_ids) =
-        collect_enrollment_extras(access_token, &on_progress, &mut warnings).await;
-    cards.extend(extra_enrollment);
+    let mut extra_group_ids = Vec::new();
+    if selection.wants_enrollment_extras() {
+        on_progress(progress(
+            "enrollment",
+            current,
+            total,
+            "Loading enrollment connectors and tenant enrollment settings…",
+        ));
+        let (extra_enrollment, ids) =
+            collect_enrollment_extras(access_token, &on_progress, &mut warnings).await;
+        for card in extra_enrollment {
+            if selection.includes_scope(&card.scope) {
+                enrollment_loaded += 1;
+                cards.push(card);
+            }
+        }
+        extra_group_ids = ids;
+    }
 
-    on_progress(progress("apps", 0, 0, "Loading applications…"));
-    let apps = list_or_warn(
-        "Applications",
-        fetch_mobile_apps(access_token, None, None).await,
-        &mut warnings,
-    );
-    let (mut app_inventory, app_group_ids) =
-        collect_app_inventory(access_token, &apps, &on_progress, &mut warnings).await;
+    let mut app_inventory = empty_app_inventory();
+    let mut app_group_ids = Vec::new();
+    if selection.wants_app_objects() {
+        on_progress(progress("apps", 0, 0, "Loading applications…"));
+        let apps = fetch_apps_for_selection(access_token, selection, &mut warnings).await;
+        let apps: Vec<_> = apps
+            .into_iter()
+            .filter(|app| {
+                let platform = canonical_platform(app.platform.as_deref().unwrap_or(""));
+                selection.includes_scope(&platform)
+                    && EnvironmentReportSelection::allows_id(&selection.app_ids, &app.id)
+            })
+            .collect();
+        let (inventory, ids) =
+            collect_app_inventory(access_token, &apps, &on_progress, &mut warnings).await;
+        app_inventory = inventory;
+        app_group_ids = ids;
+    }
 
     on_progress(progress("assignments", 0, 0, "Resolving group names…"));
     let mut group_ids = Vec::new();
@@ -467,11 +719,15 @@ pub async fn generate_environment_report(
             group_ids.push(id.clone());
         }
     }
-    let groups = match resolve_directory_groups(access_token, &group_ids).await {
-        Ok(groups) => groups,
-        Err(error) => {
-            warnings.push(format!("Directory groups: {error}"));
-            Vec::new()
+    let groups = if group_ids.is_empty() {
+        Vec::new()
+    } else {
+        match resolve_directory_groups(access_token, &group_ids).await {
+            Ok(groups) => groups,
+            Err(error) => {
+                warnings.push(format!("Directory groups: {error}"));
+                Vec::new()
+            }
         }
     };
     for card in &mut cards {
@@ -483,21 +739,25 @@ pub async fn generate_environment_report(
         apply_group_metadata(&mut card.drafts, &groups);
         apply_filter_names(&mut card.drafts, &filters);
     }
+    let app_card_count = app_inventory.cards.len() as u32;
     cards.extend(app_inventory.cards.drain(..));
 
-    on_progress(progress("groups", 0, 0, "Counting group members…"));
-    let intune_groups = assemble_intune_groups(access_token, &groups, &group_uses).await;
+    let intune_groups = if selection.groups && !groups.is_empty() {
+        on_progress(progress("groups", 0, 0, "Counting group members…"));
+        assemble_intune_groups(access_token, &groups, &group_uses).await
+    } else {
+        Vec::new()
+    };
 
     let organization_name = glance.organization_name.clone();
-    let suggested_name = {
-        let org_slug = organization_name
-            .as_deref()
-            .filter(|value| !value.is_empty())
-            .map(slug)
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| "tenant".into());
-        format!("axis-{org_slug}-as-built.html")
-    };
+    let org_slug = organization_name
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .map(slug)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "tenant".into());
+    let suggested_name = format!("axis-{org_slug}-as-built.html");
+    let suggested_markdown_name = format!("axis-{org_slug}-as-built.md");
     let org_default = glance
         .organization_name
         .as_deref()
@@ -505,30 +765,104 @@ pub async fn generate_environment_report(
         .unwrap_or("This tenant");
     let prepared_for = resolve_prepared_label(prepared_for, org_default);
     let prepared_by = resolve_prepared_label(prepared_by, "Unknown");
+    let object_count = total + app_card_count;
     let layout = build_report_layout(cards);
     let html = render_html(
         axis_version,
         &prepared_for,
         &prepared_by,
         &generated_at,
+        selection,
         &glance,
         &layout,
         &intune_groups,
         &app_inventory,
         &health_rows,
         &warnings,
-        total,
-        enrollment.len(),
+        object_count,
+        enrollment_loaded,
+    );
+    let markdown = render_markdown(
+        axis_version,
+        &prepared_for,
+        &prepared_by,
+        &generated_at,
+        selection,
+        &glance,
+        &layout,
+        &intune_groups,
+        &app_inventory,
+        &health_rows,
+        &warnings,
+        enrollment_loaded,
     );
 
     Ok(EnvironmentReport {
         html,
+        markdown,
         organization_name,
         suggested_name,
-        object_count: total,
+        suggested_markdown_name,
+        object_count,
         generated_at,
         warnings,
     })
+}
+
+fn empty_app_inventory() -> AppInventory {
+    AppInventory {
+        total: 0,
+        assigned: 0,
+        failed_device_total: 0,
+        installed_device_total: 0,
+        by_mechanism: Vec::new(),
+        failing: Vec::new(),
+        cards: Vec::new(),
+    }
+}
+
+async fn fetch_apps_for_selection(
+    access_token: &str,
+    selection: &EnvironmentReportSelection,
+    warnings: &mut Vec<String>,
+) -> Vec<MobileAppSummary> {
+    let all_platforms =
+        selection.windows && selection.macos && selection.ios && selection.android;
+    if all_platforms {
+        return list_or_warn(
+            "Applications",
+            fetch_mobile_apps(access_token, None, None).await,
+            warnings,
+        );
+    }
+    let mut apps = Vec::new();
+    let mut seen = HashSet::new();
+    let mut platforms = Vec::new();
+    if selection.windows {
+        platforms.push("windows");
+    }
+    if selection.macos {
+        platforms.push("macos");
+    }
+    if selection.ios {
+        platforms.push("ios");
+    }
+    if selection.android {
+        platforms.push("android");
+    }
+    for platform in platforms {
+        let batch = list_or_warn(
+            &format!("Applications ({platform})"),
+            fetch_mobile_apps(access_token, Some(platform), None).await,
+            warnings,
+        );
+        for app in batch {
+            if seen.insert(app.id.clone()) {
+                apps.push(app);
+            }
+        }
+    }
+    apps
 }
 
 fn progress(phase: &str, current: u32, total: u32, message: &str) -> EnvironmentReportProgress {
@@ -2522,6 +2856,39 @@ fn escape_html(value: &str) -> String {
     out
 }
 
+/// Escape Markdown-significant characters in tenant / user content.
+fn escape_markdown(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '\\' | '`' | '*' | '_' | '{' | '}' | '[' | ']' | '(' | ')' | '#' | '+' | '-' | '.'
+            | '!' | '|' | '<' | '>' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            '\n' | '\r' => out.push(' '),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// Table cells only need pipe / backtick / angle escapes so dates stay readable.
+fn escape_markdown_cell(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '\\' | '`' | '|' | '<' | '>' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            '\n' | '\r' => out.push(' '),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
 fn resolve_prepared_label(value: Option<&str>, fallback: &str) -> String {
     value
         .map(str::trim)
@@ -2843,6 +3210,7 @@ fn render_html(
     prepared_for: &str,
     prepared_by: &str,
     generated_at: &str,
+    selection: &EnvironmentReportSelection,
     glance: &TenantGlance,
     layout: &ReportLayout,
     intune_groups: &[IntuneGroupRow],
@@ -2864,6 +3232,7 @@ fn render_html(
         prepared_by,
         generated_at,
         axis_version,
+        selection,
         glance.devices.total as usize,
         apps.total,
         section_total(layout, SECTION_POLICIES),
@@ -2876,15 +3245,22 @@ fn render_html(
     ));
 
     body.push_str(&render_table_of_contents(
+        selection,
         layout,
         intune_groups.len(),
         !warnings.is_empty(),
         warnings.len(),
     ));
 
-    body.push_str(&render_summary_section(glance, layout, apps, health_rows));
-    body.push_str(&render_devices_section(glance));
-    body.push_str(&render_groups_section(intune_groups));
+    if selection.summary {
+        body.push_str(&render_summary_section(glance, layout, apps, health_rows));
+    }
+    if selection.devices {
+        body.push_str(&render_devices_section(glance));
+    }
+    if selection.groups {
+        body.push_str(&render_groups_section(intune_groups));
+    }
 
     if platform_object_count(&layout.cross_platform.sections) > 0 {
         body.push_str(&render_platform_chapter(&layout.cross_platform, glance, true));
@@ -2961,6 +3337,7 @@ fn render_title_page(
     prepared_by: &str,
     generated_at: &str,
     axis_version: &str,
+    selection: &EnvironmentReportSelection,
     devices: usize,
     apps: usize,
     policies: usize,
@@ -2972,6 +3349,31 @@ fn render_title_page(
     platforms: usize,
 ) -> String {
     let _ = apps_section;
+    let mut chips = String::new();
+    if selection.devices {
+        chips.push_str(&count_chip("Devices", devices));
+    }
+    if selection.any_platform() && selection.any_content_surface() {
+        chips.push_str(&count_chip("Platforms", platforms));
+        if selection.cross_platform {
+            chips.push_str(&count_chip("Cross-platform", cross_platform));
+        }
+    }
+    if selection.policies {
+        chips.push_str(&count_chip("Policies", policies));
+    }
+    if selection.apps {
+        chips.push_str(&count_chip("Apps", apps));
+    }
+    if selection.updates {
+        chips.push_str(&count_chip("Updates", updates));
+    }
+    if selection.enrollment {
+        chips.push_str(&count_chip("Enrollment", enrollment));
+    }
+    if selection.scripts {
+        chips.push_str(&count_chip("Scripts", scripts));
+    }
     format!(
         r#"<header class="title-page" id="title-page">
 <p class="eyebrow">Axis as-built</p>
@@ -2984,37 +3386,37 @@ fn render_title_page(
 <dt>Axis</dt><dd>{}</dd>
 </dl>
 <div class="counts">
-{}{}{}{}{}{}{}{}
+{}
 </div>
 </header>"#,
         escape_html(prepared_for),
         escape_html(prepared_by),
         escape_html(generated_at),
         escape_html(axis_version),
-        count_chip("Devices", devices),
-        count_chip("Platforms", platforms),
-        count_chip("Cross-platform", cross_platform),
-        count_chip("Policies", policies),
-        count_chip("Apps", apps),
-        count_chip("Updates", updates),
-        count_chip("Enrollment", enrollment),
-        count_chip("Scripts", scripts),
+        chips,
     )
 }
 
 fn render_table_of_contents(
+    selection: &EnvironmentReportSelection,
     layout: &ReportLayout,
     group_count: usize,
     has_notes: bool,
     note_count: usize,
 ) -> String {
     let mut html = String::from(r#"<nav class="toc" id="contents"><h2>Contents</h2><ol>"#);
-    html.push_str("<li><a href=\"#summary\">Summary</a></li>");
-    html.push_str("<li><a href=\"#devices\">Devices</a></li>");
-    html.push_str(&format!(
-        "<li><a href=\"#intune-groups\">Intune groups <span>{}</span></a></li>",
-        group_count
-    ));
+    if selection.summary {
+        html.push_str("<li><a href=\"#summary\">Summary</a></li>");
+    }
+    if selection.devices {
+        html.push_str("<li><a href=\"#devices\">Devices</a></li>");
+    }
+    if selection.groups {
+        html.push_str(&format!(
+            "<li><a href=\"#intune-groups\">Intune groups <span>{}</span></a></li>",
+            group_count
+        ));
+    }
     let cross_count = platform_object_count(&layout.cross_platform.sections);
     if cross_count > 0 {
         html.push_str(&toc_platform_item(&layout.cross_platform));
@@ -3589,6 +3991,684 @@ fn render_assignments(card: &ReportCard) -> String {
     html
 }
 
+fn render_markdown(
+    axis_version: &str,
+    prepared_for: &str,
+    prepared_by: &str,
+    generated_at: &str,
+    selection: &EnvironmentReportSelection,
+    glance: &TenantGlance,
+    layout: &ReportLayout,
+    intune_groups: &[IntuneGroupRow],
+    apps: &AppInventory,
+    health_rows: &[crate::policy_health::PolicyHealth],
+    warnings: &[String],
+    enrollment_count: usize,
+) -> String {
+    let mut out = String::new();
+    out.push_str(&md_title_page(
+        prepared_for,
+        prepared_by,
+        generated_at,
+        axis_version,
+        selection,
+        glance.devices.total as usize,
+        apps.total,
+        section_total(layout, SECTION_POLICIES),
+        section_total(layout, SECTION_UPDATES),
+        section_total(layout, SECTION_ENROLLMENT).max(enrollment_count),
+        section_total(layout, SECTION_SCRIPTS),
+        platform_object_count(&layout.cross_platform.sections),
+        layout.platforms.len(),
+    ));
+    out.push('\n');
+    out.push_str(&md_table_of_contents(
+        selection,
+        layout,
+        intune_groups.len(),
+        !warnings.is_empty(),
+        warnings.len(),
+    ));
+    out.push('\n');
+
+    if selection.summary {
+        out.push_str(&md_summary_section(glance, layout, apps, health_rows));
+        out.push('\n');
+    }
+    if selection.devices {
+        out.push_str(&md_devices_section(glance));
+        out.push('\n');
+    }
+    if selection.groups {
+        out.push_str(&md_groups_section(intune_groups));
+        out.push('\n');
+    }
+
+    if platform_object_count(&layout.cross_platform.sections) > 0 {
+        out.push_str(&md_platform_chapter(&layout.cross_platform, glance, true));
+        out.push('\n');
+    }
+    for platform in &layout.platforms {
+        out.push_str(&md_platform_chapter(platform, glance, false));
+        out.push('\n');
+    }
+
+    if !warnings.is_empty() {
+        out.push_str("## Notes\n\n");
+        for warning in warnings {
+            out.push_str(&format!("- {}\n", escape_markdown(warning)));
+        }
+        out.push('\n');
+    }
+
+    out.push_str(&format!(
+        "---\n\nGenerated by Axis {}. Assignments and script source are included. This file is a point-in-time as-built, not live Graph.\n",
+        escape_markdown(axis_version)
+    ));
+    out
+}
+
+fn md_title_page(
+    prepared_for: &str,
+    prepared_by: &str,
+    generated_at: &str,
+    axis_version: &str,
+    selection: &EnvironmentReportSelection,
+    devices: usize,
+    apps: usize,
+    policies: usize,
+    updates: usize,
+    enrollment: usize,
+    scripts: usize,
+    cross_platform: usize,
+    platforms: usize,
+) -> String {
+    let mut counts = Vec::new();
+    if selection.devices {
+        counts.push(("Devices", devices));
+    }
+    if selection.any_platform() && selection.any_content_surface() {
+        counts.push(("Platforms", platforms));
+        if selection.cross_platform {
+            counts.push(("Cross-platform", cross_platform));
+        }
+    }
+    if selection.policies {
+        counts.push(("Policies", policies));
+    }
+    if selection.apps {
+        counts.push(("Apps", apps));
+    }
+    if selection.updates {
+        counts.push(("Updates", updates));
+    }
+    if selection.enrollment {
+        counts.push(("Enrollment", enrollment));
+    }
+    if selection.scripts {
+        counts.push(("Scripts", scripts));
+    }
+
+    let mut out = String::from(
+        "# Intune environment as-built\n\nAxis as-built — point-in-time snapshot of Intune configuration, organised by platform. This file is not live Graph.\n\n",
+    );
+    out.push_str(&format!(
+        "| | |\n| --- | --- |\n| Prepared for | {} |\n| Prepared by | {} |\n| Generated | {} |\n| Axis | {} |\n\n",
+        escape_markdown_cell(prepared_for),
+        escape_markdown_cell(prepared_by),
+        escape_markdown_cell(generated_at),
+        escape_markdown_cell(axis_version),
+    ));
+    if !counts.is_empty() {
+        out.push_str("| Metric | Count |\n| --- | --- |\n");
+        for (label, count) in counts {
+            out.push_str(&format!(
+                "| {} | {} |\n",
+                escape_markdown_cell(label),
+                count
+            ));
+        }
+        out.push('\n');
+    }
+    out
+}
+
+fn md_table_of_contents(
+    selection: &EnvironmentReportSelection,
+    layout: &ReportLayout,
+    group_count: usize,
+    has_notes: bool,
+    note_count: usize,
+) -> String {
+    let mut out = String::from("## Contents\n\n");
+    if selection.summary {
+        out.push_str("- [Summary](#summary)\n");
+    }
+    if selection.devices {
+        out.push_str("- [Devices](#devices)\n");
+    }
+    if selection.groups {
+        out.push_str(&format!(
+            "- [Intune groups](#intune-groups) ({group_count})\n"
+        ));
+    }
+    let cross_count = platform_object_count(&layout.cross_platform.sections);
+    if cross_count > 0 {
+        out.push_str(&md_toc_platform_item(&layout.cross_platform));
+    }
+    for platform in &layout.platforms {
+        out.push_str(&md_toc_platform_item(platform));
+    }
+    if has_notes {
+        out.push_str(&format!("- [Notes](#notes) ({note_count})\n"));
+    }
+    out.push('\n');
+    out
+}
+
+fn md_toc_platform_item(platform: &PlatformSections) -> String {
+    let id = slug(&platform.name);
+    let count = platform_object_count(&platform.sections);
+    let mut out = format!(
+        "- [{}](#{}) ({count})\n",
+        escape_markdown(&platform.name),
+        id
+    );
+    for section in ordered_section_names(&platform.sections) {
+        out.push_str(&format!(
+            "  - [{section}](#{id}-{}) ({})\n",
+            slug(section),
+            section_count(&platform.sections, section)
+        ));
+    }
+    out
+}
+
+fn md_summary_section(
+    glance: &TenantGlance,
+    layout: &ReportLayout,
+    apps: &AppInventory,
+    health_rows: &[crate::policy_health::PolicyHealth],
+) -> String {
+    let conflict_policies = if health_rows.is_empty() {
+        glance.conflicts.summary_count
+    } else {
+        health_rows.iter().filter(|row| row.has_conflict()).count() as u32
+    };
+    let conflict_devices = if health_rows.is_empty() {
+        glance.conflicts.devices_impacted
+    } else {
+        health_rows.iter().map(|row| row.conflict).sum::<u32>()
+    };
+    let compliance_rate = glance
+        .compliance
+        .rate_percent
+        .map(|value| format!("{value}%"))
+        .unwrap_or_else(|| "—".into());
+
+    let mut out = format!(
+        "## Summary\n\n{} devices in inventory: {} checking in within 7 days, {} stale. Compliance mix is {} compliant, {} noncompliant, {} in grace, {} unknown ({} rate). {} configuration policies report conflicts ({} conflicted device records). App install failures: {} devices.\n\n",
+        glance.devices.total,
+        glance.devices.active,
+        glance.devices.stale,
+        glance.compliance.compliant,
+        glance.compliance.noncompliant,
+        glance.compliance.in_grace_period,
+        glance.compliance.unknown,
+        escape_markdown(&compliance_rate),
+        conflict_policies,
+        conflict_devices,
+        apps.failed_device_total,
+    );
+    out.push_str(&md_simple_table(
+        &["Metric", "Value"],
+        &[
+            vec!["Active devices".into(), glance.devices.active.to_string()],
+            vec!["Stale devices".into(), glance.devices.stale.to_string()],
+            vec!["Compliant".into(), glance.compliance.compliant.to_string()],
+            vec!["Conflict policies".into(), conflict_policies.to_string()],
+            vec!["App failures".into(), apps.failed_device_total.to_string()],
+            vec!["Apps assigned".into(), apps.assigned.to_string()],
+            vec![
+                "Apps installed".into(),
+                apps.installed_device_total.to_string(),
+            ],
+        ],
+    ));
+    out.push('\n');
+
+    let mut platform_rows = Vec::new();
+    let cross_count = platform_object_count(&layout.cross_platform.sections);
+    if cross_count > 0 {
+        platform_rows.push(vec![
+            CROSS_PLATFORM_SCOPE.into(),
+            "—".into(),
+            section_count(&layout.cross_platform.sections, SECTION_POLICIES).to_string(),
+            section_count(&layout.cross_platform.sections, SECTION_APPS).to_string(),
+            section_count(&layout.cross_platform.sections, SECTION_ENROLLMENT).to_string(),
+            section_count(&layout.cross_platform.sections, SECTION_UPDATES).to_string(),
+            section_count(&layout.cross_platform.sections, SECTION_SCRIPTS).to_string(),
+            cross_count.to_string(),
+        ]);
+    }
+    for platform in &layout.platforms {
+        platform_rows.push(vec![
+            platform.name.clone(),
+            device_count_for_platform(glance, &platform.name).to_string(),
+            section_count(&platform.sections, SECTION_POLICIES).to_string(),
+            section_count(&platform.sections, SECTION_APPS).to_string(),
+            section_count(&platform.sections, SECTION_ENROLLMENT).to_string(),
+            section_count(&platform.sections, SECTION_UPDATES).to_string(),
+            section_count(&platform.sections, SECTION_SCRIPTS).to_string(),
+            platform_object_count(&platform.sections).to_string(),
+        ]);
+    }
+    out.push_str("### By platform\n\n");
+    out.push_str(&md_simple_table(
+        &[
+            "Platform",
+            "Devices",
+            "Policies",
+            "Apps",
+            "Enrollment",
+            "Updates",
+            "Scripts",
+            "Objects",
+        ],
+        &platform_rows,
+    ));
+    out.push('\n');
+
+    if !apps.by_mechanism.is_empty() {
+        out.push_str("### App install mechanism\n\n");
+        out.push_str(&md_simple_table(
+            &["Mechanism", "Apps", "Assigned"],
+            &apps
+                .by_mechanism
+                .iter()
+                .map(|(label, count, assigned)| {
+                    vec![label.clone(), count.to_string(), assigned.to_string()]
+                })
+                .collect::<Vec<_>>(),
+        ));
+        out.push('\n');
+    }
+    if !apps.failing.is_empty() {
+        out.push_str("### Highest install failures\n\n");
+        out.push_str(&md_simple_table(
+            &["App", "Mechanism", "Failed devices"],
+            &apps
+                .failing
+                .iter()
+                .map(|(name, mechanism, failed)| {
+                    vec![name.clone(), mechanism.clone(), failed.to_string()]
+                })
+                .collect::<Vec<_>>(),
+        ));
+        out.push('\n');
+    }
+    out
+}
+
+fn md_platform_chapter(
+    platform: &PlatformSections,
+    glance: &TenantGlance,
+    is_cross: bool,
+) -> String {
+    let id = slug(&platform.name);
+    let count = platform_object_count(&platform.sections);
+    let mut out = format!(
+        "## {} ({count})\n\n<a id=\"{id}\"></a>\n\n",
+        escape_markdown(&platform.name)
+    );
+    if is_cross {
+        out.push_str(
+            "Settings that apply across platforms or are not tied to a single OS — enrollment restrictions, multi-platform policies, and similar tenant-wide configuration.\n\n",
+        );
+    } else {
+        let devices = device_count_for_platform(glance, &platform.name);
+        out.push_str(&format!(
+            "{} managed devices on {}. Objects below are scoped to this platform.\n\n",
+            devices,
+            escape_markdown(&platform.name)
+        ));
+        out.push_str(&md_simple_table(
+            &["Metric", "Value"],
+            &[
+                vec!["Devices".into(), devices.to_string()],
+                vec![
+                    "Policies".into(),
+                    section_count(&platform.sections, SECTION_POLICIES).to_string(),
+                ],
+                vec![
+                    "Apps".into(),
+                    section_count(&platform.sections, SECTION_APPS).to_string(),
+                ],
+                vec![
+                    "Enrollment".into(),
+                    section_count(&platform.sections, SECTION_ENROLLMENT).to_string(),
+                ],
+                vec![
+                    "Scripts".into(),
+                    section_count(&platform.sections, SECTION_SCRIPTS).to_string(),
+                ],
+            ],
+        ));
+        out.push('\n');
+    }
+    for section in ordered_section_names(&platform.sections) {
+        let Some(cards) = platform.sections.get(section) else {
+            continue;
+        };
+        out.push_str(&format!(
+            "### {section} ({})\n\n<a id=\"{id}-{}\"></a>\n\n",
+            cards.len(),
+            slug(section)
+        ));
+        for card in cards {
+            out.push_str(&md_card(card));
+            out.push('\n');
+        }
+    }
+    out
+}
+
+fn md_devices_section(glance: &TenantGlance) -> String {
+    let mut os_rows = glance
+        .devices
+        .by_os
+        .iter()
+        .map(|(os, count)| (os.clone(), *count))
+        .collect::<Vec<_>>();
+    os_rows.sort_by(|left, right| {
+        right
+            .1
+            .cmp(&left.1)
+            .then(left.0.to_lowercase().cmp(&right.0.to_lowercase()))
+    });
+    let mut out = format!(
+        "## Devices ({})\n\n{} managed devices: {} active (check-in within 7 days) and {} stale.\n\n",
+        glance.devices.total,
+        glance.devices.total,
+        glance.devices.active,
+        glance.devices.stale,
+    );
+    out.push_str(&md_simple_table(
+        &["Metric", "Value"],
+        &[
+            vec!["Total".into(), glance.devices.total.to_string()],
+            vec!["Active".into(), glance.devices.active.to_string()],
+            vec!["Stale".into(), glance.devices.stale.to_string()],
+        ],
+    ));
+    out.push_str("\n### By operating system\n\n");
+    out.push_str(&md_simple_table(
+        &["Platform", "Devices"],
+        &os_rows
+            .iter()
+            .map(|(os, count)| vec![os.clone(), count.to_string()])
+            .collect::<Vec<_>>(),
+    ));
+    out.push_str("\n### Compliance mix\n\n");
+    out.push_str(&md_simple_table(
+        &["State", "Devices"],
+        &[
+            vec!["Compliant".into(), glance.compliance.compliant.to_string()],
+            vec![
+                "Noncompliant".into(),
+                glance.compliance.noncompliant.to_string(),
+            ],
+            vec![
+                "Grace period".into(),
+                glance.compliance.in_grace_period.to_string(),
+            ],
+            vec!["Unknown".into(), glance.compliance.unknown.to_string()],
+        ],
+    ));
+    out.push('\n');
+    out
+}
+
+fn md_groups_section(groups: &[IntuneGroupRow]) -> String {
+    let mut out = format!("## Intune groups ({})\n\n", groups.len());
+    if groups.is_empty() {
+        out.push_str(
+            "No Entra groups are targeted by the Intune objects in this as-built.\n\n",
+        );
+        return out;
+    }
+    out.push_str(&format!(
+        "{} Entra groups are used as include or exclude targets on Intune policies, scripts, or apps in this snapshot.\n\n",
+        groups.len()
+    ));
+    let rows = groups
+        .iter()
+        .map(|group| {
+            vec![
+                group.name.clone(),
+                group.membership.clone(),
+                group
+                    .member_count
+                    .map(|count| count.to_string())
+                    .unwrap_or_else(|| "—".into()),
+                group.uses.to_string(),
+            ]
+        })
+        .collect::<Vec<_>>();
+    out.push_str(&md_simple_table(
+        &["Group", "Membership", "Members", "Intune uses"],
+        &rows,
+    ));
+    out.push('\n');
+    out
+}
+
+fn md_simple_table(headers: &[&str], rows: &[Vec<String>]) -> String {
+    if rows.is_empty() {
+        return "None.\n".into();
+    }
+    let mut out = String::from("| ");
+    out.push_str(
+        &headers
+            .iter()
+            .map(|header| escape_markdown_cell(header))
+            .collect::<Vec<_>>()
+            .join(" | "),
+    );
+    out.push_str(" |\n| ");
+    out.push_str(
+        &headers
+            .iter()
+            .map(|_| "---")
+            .collect::<Vec<_>>()
+            .join(" | "),
+    );
+    out.push_str(" |\n");
+    for row in rows {
+        out.push_str("| ");
+        let cells: Vec<String> = (0..headers.len())
+            .map(|index| {
+                row.get(index)
+                    .map(|cell| escape_markdown_cell(cell))
+                    .unwrap_or_default()
+            })
+            .collect();
+        out.push_str(&cells.join(" | "));
+        out.push_str(" |\n");
+    }
+    out
+}
+
+fn md_card(card: &ReportCard) -> String {
+    let mut out = format!(
+        "#### {}\n\n*{} · {}*\n\n",
+        escape_markdown(&card.title),
+        escape_markdown(&card.kind_label),
+        escape_markdown(&card.platform)
+    );
+    if !card.description.trim().is_empty() {
+        out.push_str(&format!("{}\n\n", escape_markdown(&card.description)));
+    }
+    out.push_str(&md_card_status_strip(card));
+    if let Some(note) = &card.note {
+        out.push_str(&format!("> {}\n\n", escape_markdown(note)));
+    }
+
+    out.push_str(&format!(
+        "##### Metadata ({})\n\n",
+        card.metadata.len()
+    ));
+    if card.metadata.is_empty() {
+        out.push_str("None.\n\n");
+    } else {
+        out.push_str(&md_setting_tree(&card.metadata));
+        out.push('\n');
+    }
+
+    let setting_count = count_setting_rows(&card.settings);
+    out.push_str(&format!("##### Settings ({setting_count})\n\n"));
+    if card.settings.is_empty() && card.code_blocks.is_empty() {
+        out.push_str("No settings captured.\n\n");
+    } else {
+        if !card.settings.is_empty() {
+            out.push_str(&md_setting_tree(&card.settings));
+            out.push('\n');
+        }
+        for (label, source) in &card.code_blocks {
+            out.push_str(&format!("**{}**\n\n", escape_markdown(label)));
+            out.push_str(&md_fenced_code(source));
+            out.push('\n');
+        }
+    }
+
+    out.push_str(&format!(
+        "##### Assignments ({})\n\n",
+        card.drafts.len()
+    ));
+    out.push_str(&md_assignments(card));
+    out
+}
+
+fn md_card_status_strip(card: &ReportCard) -> String {
+    if let Some(stats) = &card.stats {
+        let mut rows = vec![
+            vec!["Targeted".into(), stats.targeted.to_string()],
+            vec!["Success".into(), stats.success.to_string()],
+            vec!["Conflict".into(), stats.conflict.to_string()],
+            vec!["Error".into(), stats.error.to_string()],
+            vec!["Noncompliant".into(), stats.noncompliant.to_string()],
+            vec!["Not applicable".into(), stats.not_applicable.to_string()],
+            vec!["Pending".into(), stats.pending.to_string()],
+        ];
+        if stats.in_grace > 0 {
+            rows.push(vec!["In grace".into(), stats.in_grace.to_string()]);
+        }
+        let mut out = md_simple_table(&["Status", "Devices"], &rows);
+        out.push('\n');
+        return out;
+    }
+    if let Some(stats) = &card.app_install {
+        let mut out = md_simple_table(
+            &["Status", "Devices"],
+            &[
+                vec!["Installed".into(), stats.installed.to_string()],
+                vec!["Failed".into(), stats.failed.to_string()],
+                vec!["Not installed".into(), stats.not_installed.to_string()],
+                vec!["Pending".into(), stats.pending.to_string()],
+                vec!["Not applicable".into(), stats.not_applicable.to_string()],
+            ],
+        );
+        out.push('\n');
+        return out;
+    }
+    String::new()
+}
+
+fn md_setting_tree(rows: &[SettingRow]) -> String {
+    if rows.is_empty() {
+        return String::new();
+    }
+    let mut flat = Vec::new();
+    flatten_setting_rows(rows, 0, &mut flat);
+    md_simple_table(
+        &["Setting", "Value"],
+        &flat
+            .into_iter()
+            .map(|(name, value)| vec![name, value])
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn flatten_setting_rows(rows: &[SettingRow], depth: usize, out: &mut Vec<(String, String)>) {
+    let prefix = if depth == 0 {
+        String::new()
+    } else {
+        format!("{} ", "↳".repeat(depth))
+    };
+    for row in rows {
+        out.push((format!("{prefix}{}", row.name), row.value.clone()));
+        if !row.children.is_empty() {
+            flatten_setting_rows(&row.children, depth + 1, out);
+        }
+    }
+}
+
+fn md_fenced_code(source: &str) -> String {
+    let mut ticks = 3;
+    while source.contains(&"`".repeat(ticks)) {
+        ticks += 1;
+    }
+    let fence = "`".repeat(ticks);
+    format!("{fence}\n{source}\n{fence}\n")
+}
+
+fn md_assignments(card: &ReportCard) -> String {
+    let mut out = String::new();
+    if let Some(stats) = &card.stats {
+        out.push_str("**Assignment status**\n\n");
+        let mut rows = vec![
+            vec!["Success".into(), stats.success.to_string()],
+            vec!["Conflict".into(), stats.conflict.to_string()],
+            vec!["Error".into(), stats.error.to_string()],
+            vec!["Noncompliant".into(), stats.noncompliant.to_string()],
+            vec!["Not applicable".into(), stats.not_applicable.to_string()],
+            vec!["Pending".into(), stats.pending.to_string()],
+        ];
+        if stats.in_grace > 0 {
+            rows.push(vec!["In grace period".into(), stats.in_grace.to_string()]);
+        }
+        out.push_str(&md_simple_table(&["Status", "Devices"], &rows));
+        out.push('\n');
+    }
+    if let Some(stats) = &card.app_install {
+        out.push_str("**Install status**\n\n");
+        out.push_str(&md_simple_table(
+            &["Status", "Devices"],
+            &[
+                vec!["Installed".into(), stats.installed.to_string()],
+                vec!["Failed".into(), stats.failed.to_string()],
+                vec!["Not installed".into(), stats.not_installed.to_string()],
+                vec!["Pending".into(), stats.pending.to_string()],
+                vec!["Not applicable".into(), stats.not_applicable.to_string()],
+            ],
+        ));
+        out.push('\n');
+    }
+    if card.drafts.is_empty() {
+        out.push_str("Not assigned.\n\n");
+        return out;
+    }
+    out.push_str("**Targets**\n\n");
+    let rows = card
+        .drafts
+        .iter()
+        .map(|draft| vec![assignment_target_label(draft)])
+        .collect::<Vec<_>>();
+    out.push_str(&md_simple_table(&["Target"], &rows));
+    out.push('\n');
+    out
+}
+
 const REPORT_CSS: &str = r#"
 :root {
   --crust: #11111b;
@@ -3811,6 +4891,96 @@ mod tests {
     }
 
     #[test]
+    fn escapes_markdown_specials() {
+        assert_eq!(
+            escape_markdown("A *B* | C_ [link](x)"),
+            r#"A \*B\* \| C\_ \[link\]\(x\)"#
+        );
+        assert!(!escape_markdown("line\nbreak").contains('\n'));
+    }
+
+    #[test]
+    fn markdown_title_page_includes_prepared_for_and_by() {
+        let md = md_title_page(
+            "Contoso Ltd",
+            "jane@contoso.com",
+            "2026-09-04T00:00:00Z",
+            "0.1.5",
+            &EnvironmentReportSelection::default(),
+            120,
+            45,
+            10,
+            5,
+            2,
+            1,
+            3,
+            4,
+        );
+        assert!(md.contains("Prepared for"));
+        assert!(md.contains("Prepared by"));
+        assert!(md.contains("Contoso Ltd"));
+        assert!(md.contains("jane@contoso.com"));
+        assert!(md.contains("Platforms"));
+        assert!(md.starts_with("# Intune environment as-built"));
+    }
+
+    #[test]
+    fn markdown_toc_lists_summary_before_platforms() {
+        let layout = build_report_layout(vec![
+            sample_card(SECTION_POLICIES, "Windows", "BitLocker"),
+            sample_card(SECTION_APPS, "macOS", "Company Portal"),
+            sample_card(SECTION_ENROLLMENT, CROSS_PLATFORM_SCOPE, "Enrollment restrictions"),
+        ]);
+        let md = md_table_of_contents(
+            &EnvironmentReportSelection::default(),
+            &layout,
+            2,
+            false,
+            0,
+        );
+        let summary = md.find("#summary").unwrap_or(0);
+        let devices = md.find("#devices").unwrap_or(0);
+        let cross = md.find("#cross-platform").unwrap_or(0);
+        let windows = md.find("#windows").unwrap_or(0);
+        assert!(summary < devices);
+        assert!(devices < cross);
+        assert!(cross < windows);
+        assert!(md.contains("Policies"));
+        assert!(md.contains("Apps"));
+    }
+
+    #[test]
+    fn markdown_card_uses_setting_rows_and_escapes_title() {
+        let card = ReportCard {
+            source_id: "p1".into(),
+            section: SECTION_POLICIES,
+            scope: "Windows".into(),
+            title: "BitLocker *strict*".into(),
+            description: String::new(),
+            platform: "Windows".into(),
+            kind_label: "Settings Catalog".into(),
+            drafts: Vec::new(),
+            metadata: vec![SettingRow::new("Type", "Settings Catalog")],
+            settings: vec![SettingRow::with_children(
+                "Require device encryption",
+                "Enabled",
+                vec![SettingRow::new("Nested | pipe", "value")],
+            )],
+            code_blocks: Vec::new(),
+            stats: Some(policy_stats(80, 2, 1, 4, 3, 5, 0)),
+            app_install: None,
+            note: None,
+        };
+        let md = md_card(&card);
+        assert!(md.contains(r#"BitLocker \*strict\*"#));
+        assert!(md.contains("Require device encryption"));
+        assert!(md.contains("Enabled"));
+        assert!(md.contains(r#"Nested \| pipe"#));
+        assert!(md.contains("Assignment status") || md.contains("Success"));
+        assert!(md.contains("Not assigned."));
+    }
+
+    #[test]
     fn skips_loc_labels() {
         assert!(preferred_label(&[Some("L_Empty"), Some("Require password")]).as_deref() == Some("Require password"));
         assert!(is_localization_key("l_FooBar"));
@@ -3984,6 +5154,7 @@ mod tests {
             "jane@contoso.com",
             "2026-09-04T00:00:00Z",
             "0.1.5",
+            &EnvironmentReportSelection::default(),
             120,
             45,
             10,
@@ -4002,13 +5173,49 @@ mod tests {
     }
 
     #[test]
+    fn selection_id_filters_default_to_all() {
+        let selection = EnvironmentReportSelection::default();
+        assert!(EnvironmentReportSelection::allows_id(&selection.policy_ids, "any"));
+        assert!(selection.wants_policy_objects());
+        assert!(selection.wants_enrollment_extras());
+
+        let narrowed = EnvironmentReportSelection {
+            policy_ids: Some(vec!["a".into(), "b".into()]),
+            enrollment_ids: Some(vec!["e1".into()]),
+            ..EnvironmentReportSelection::default()
+        };
+        assert!(EnvironmentReportSelection::allows_id(&narrowed.policy_ids, "a"));
+        assert!(!EnvironmentReportSelection::allows_id(&narrowed.policy_ids, "c"));
+        assert!(narrowed.wants_policy_objects());
+        assert!(!narrowed.wants_enrollment_extras());
+
+        let none = EnvironmentReportSelection {
+            policy_ids: Some(vec![]),
+            app_ids: Some(vec![]),
+            script_ids: Some(vec![]),
+            enrollment_ids: Some(vec![]),
+            ..EnvironmentReportSelection::default()
+        };
+        assert!(!none.wants_policy_objects());
+        assert!(!none.wants_app_objects());
+        assert!(!none.wants_script_objects());
+        assert!(!none.wants_enrollment_objects());
+    }
+
+    #[test]
     fn table_of_contents_lists_summary_before_platforms() {
         let layout = build_report_layout(vec![
             sample_card(SECTION_POLICIES, "Windows", "BitLocker"),
             sample_card(SECTION_APPS, "macOS", "Company Portal"),
             sample_card(SECTION_ENROLLMENT, CROSS_PLATFORM_SCOPE, "Enrollment restrictions"),
         ]);
-        let html = render_table_of_contents(&layout, 2, false, 0);
+        let html = render_table_of_contents(
+            &EnvironmentReportSelection::default(),
+            &layout,
+            2,
+            false,
+            0,
+        );
         let summary = html.find("#summary").unwrap_or(0);
         let devices = html.find("#devices").unwrap_or(0);
         let cross = html.find("#cross-platform").unwrap_or(0);

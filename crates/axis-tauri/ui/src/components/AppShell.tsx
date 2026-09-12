@@ -51,6 +51,14 @@ function NavIcon({ name }: { name: NavIconId | "chevron" }) {
           <path d="M4 19V5M4 19h16M8 15v-4M12 15V8M16 15v-6" />
         </svg>
       );
+    case "templates":
+      return (
+        <svg {...common}>
+          <path d="M8 4h11v14H8z" />
+          <path d="M6 7H5a1 1 0 0 0-1 1v11h12" />
+          <path d="M11 8h5M11 12h5" />
+        </svg>
+      );
     case "apps":
       return (
         <svg {...common}>

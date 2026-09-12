@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 
 use crate::graph::{GraphClient, GraphError};
 use crate::inventory::CatalogPolicySummary;
+use crate::{strip_keys, strip_setting_definitions};
 
 pub const NIL_CATEGORY_PARENT_ID: &str = "00000000-0000-0000-0000-000000000000";
 pub const ADMINISTRATIVE_TEMPLATES_CATEGORY_ID: &str = "48be5f9d-4941-4189-8015-dd78f87aacd5";
@@ -909,18 +910,21 @@ fn map_created_policy(
 }
 
 fn setting_envelope(instance: &Value) -> Value {
-    if instance.get("settingInstance").is_some() {
-        let mut row = instance.clone();
-        if row.get("@odata.type").is_none() {
-            row["@odata.type"] = json!("#microsoft.graph.deviceManagementConfigurationSetting");
-        }
-        row
+    let mut row = if instance.get("settingInstance").is_some() {
+        instance.clone()
     } else {
         json!({
             "@odata.type": "#microsoft.graph.deviceManagementConfigurationSetting",
             "settingInstance": instance
         })
+    };
+    // Exports fetched with $expand carry settingDefinitions (and ids) that Graph
+    // rejects in create/replace payloads — navigation links may only use odata.bind.
+    strip_setting_definitions(&mut row);
+    if row.get("@odata.type").is_none() {
+        row["@odata.type"] = json!("#microsoft.graph.deviceManagementConfigurationSetting");
     }
+    row
 }
 
 fn is_group_setting_instance(instance: &Value) -> bool {
@@ -929,11 +933,11 @@ fn is_group_setting_instance(instance: &Value) -> bool {
 }
 
 fn group_instance_children(instance: &Value) -> Vec<Value> {
-    if let Some(entries) = instance
+    let children = if let Some(entries) = instance
         .get("groupSettingCollectionValue")
         .and_then(Value::as_array)
     {
-        return entries
+        entries
             .iter()
             .flat_map(|entry| {
                 entry
@@ -942,14 +946,21 @@ fn group_instance_children(instance: &Value) -> Vec<Value> {
                     .cloned()
                     .unwrap_or_default()
             })
-            .collect();
-    }
-    instance
-        .get("groupSettingValue")
-        .and_then(|group| group.get("children"))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
+            .collect()
+    } else {
+        instance
+            .get("groupSettingValue")
+            .and_then(|group| group.get("children"))
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+    };
+    // Graph wraps group children in `settingInstance`; unwrap so
+    // setting_definition_id can key them during merges.
+    children
+        .iter()
+        .map(|child| child.get("settingInstance").cloned().unwrap_or(child.clone()))
+        .collect()
 }
 
 fn group_setting_value(children: Vec<Value>) -> Value {
@@ -988,7 +999,11 @@ fn merge_setting_instances(existing: Option<Value>, incoming: Value) -> Value {
     let definition_id = setting_definition_id(&incoming)
         .or_else(|| setting_definition_id(&existing))
         .unwrap_or_default();
-    if existing.get("groupSettingCollectionValue").is_some()
+    let reference = incoming
+        .get("settingInstanceTemplateReference")
+        .cloned()
+        .or_else(|| existing.get("settingInstanceTemplateReference").cloned());
+    let mut merged = if existing.get("groupSettingCollectionValue").is_some()
         || incoming.get("groupSettingCollectionValue").is_some()
     {
         json!({
@@ -1002,7 +1017,13 @@ fn merge_setting_instances(existing: Option<Value>, incoming: Value) -> Value {
             "settingDefinitionId": definition_id,
             "groupSettingValue": group_setting_value(children),
         })
+    };
+    if let Some(reference) = reference {
+        if !reference.is_null() {
+            merged["settingInstanceTemplateReference"] = reference;
+        }
     }
+    merged
 }
 
 fn setting_definition_id(instance: &Value) -> Option<String> {
@@ -1089,6 +1110,69 @@ pub async fn create_policy_with_settings(
     map_created_policy(&created, name)
 }
 
+/// Create a template-backed Settings Catalog policy (Endpoint Security etc.)
+/// from its template, carrying templateReference so Graph treats it as
+/// template-backed from the start.
+pub async fn create_policy_with_template(
+    access_token: &str,
+    name: &str,
+    description: Option<&str>,
+    platform: SettingsCatalogPlatform,
+    template_id: &str,
+    template_family: Option<&str>,
+    settings: &[Value],
+) -> Result<CreatedCatalogPolicy, GraphError> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(GraphError::Request {
+            status: 400,
+            code: None,
+            message: "Policy name is required".into(),
+            permission_related: false,
+        });
+    }
+    if template_id.trim().is_empty() {
+        return Err(GraphError::Request {
+            status: 400,
+            code: None,
+            message: "A template id is required for this policy.".into(),
+            permission_related: false,
+        });
+    }
+    if settings.is_empty() {
+        return Err(GraphError::Request {
+            status: 400,
+            code: None,
+            message: "Intune requires at least one setting (1–5000) on a Settings Catalog policy."
+                .into(),
+            permission_related: false,
+        });
+    }
+
+    let payload = json!({
+        "name": name,
+        "description": description.map(str::trim).filter(|value| !value.is_empty()),
+        "platforms": platform.graph_platforms(),
+        "technologies": platform.technologies_csv(),
+        "roleScopeTagIds": ["0"],
+        "templateReference": {
+            "templateId": template_id,
+            "templateFamily": template_family,
+        },
+        "settings": settings.iter().map(setting_envelope).collect::<Vec<_>>(),
+    });
+
+    let created: Value = GraphClient::new()
+        .post(
+            access_token,
+            "/deviceManagement/configurationPolicies",
+            "beta",
+            &payload,
+        )
+        .await?;
+    map_created_policy(&created, name)
+}
+
 pub async fn add_settings_to_policy(
     access_token: &str,
     policy_id: &str,
@@ -1107,11 +1191,6 @@ pub async fn add_settings_to_policy(
             "beta",
         )
         .await?;
-
-    let template_id = policy
-        .get("templateReference")
-        .and_then(as_object)
-        .and_then(|reference| string_field(reference, "templateId"));
 
     let existing = list_values(
         &client,
@@ -1135,8 +1214,6 @@ pub async fn add_settings_to_policy(
         by_definition.insert(id, instance.clone());
     }
 
-    let existing_ids: HashSet<String> = by_definition.keys().cloned().collect();
-
     for setting in settings {
         let instance = setting
             .get("settingInstance")
@@ -1150,14 +1227,6 @@ pub async fn add_settings_to_policy(
                 permission_related: false,
             });
         };
-        if template_id.is_some() && !existing_ids.contains(&id) {
-            return Err(GraphError::Request {
-                status: 400,
-                code: None,
-                message: "Cannot add catalog settings that are not already on this template-backed policy. Edit existing values here, or use a freeform Settings Catalog policy to add settings.".into(),
-                permission_related: false,
-            });
-        }
         if !by_definition.contains_key(&id) {
             order.push(id.clone());
         }
@@ -1200,19 +1269,6 @@ pub async fn remove_settings_from_policy(
             "beta",
         )
         .await?;
-
-    let template_id = policy
-        .get("templateReference")
-        .and_then(as_object)
-        .and_then(|reference| string_field(reference, "templateId"));
-    if template_id.is_some() {
-        return Err(GraphError::Request {
-            status: 400,
-            code: None,
-            message: "Cannot remove settings from a template-backed policy. Duplicate it as a freeform Settings Catalog policy first.".into(),
-            permission_related: false,
-        });
-    }
 
     let existing = list_values(
         &client,
@@ -1270,7 +1326,7 @@ async fn replace_configuration_policy_settings(
         });
     }
 
-    let payload = json!({
+    let mut payload = json!({
         "name": policy.get("name").and_then(Value::as_str).unwrap_or("Settings Catalog policy"),
         "description": policy.get("description").and_then(Value::as_str).unwrap_or(""),
         "platforms": policy.get("platforms").cloned().unwrap_or(json!("windows10")),
@@ -1278,6 +1334,30 @@ async fn replace_configuration_policy_settings(
         "roleScopeTagIds": policy.get("roleScopeTagIds").cloned().unwrap_or(json!(["0"])),
         "settings": instances.iter().map(setting_envelope).collect::<Vec<_>>(),
     });
+    // PUT replaces the whole policy — carry the template reference back so a
+    // template-backed policy (Endpoint Security etc.) keeps its template and
+    // does not silently become freeform (which drops it from template blades).
+    if let Some(reference) = policy.get("templateReference").cloned() {
+        if !reference.is_null() {
+            let cleaned = strip_keys(&reference, &["id"]);
+            payload
+                .as_object_mut()
+                .expect("object")
+                .insert("templateReference".into(), cleaned);
+        }
+    }
+    // PUT replaces the whole policy — carry the template reference back so a
+    // template-backed policy (Endpoint Security etc.) keeps its template and
+    // does not silently become freeform (which drops it from template blades).
+    if let Some(reference) = policy.get("templateReference").cloned() {
+        if !reference.is_null() {
+            let cleaned = strip_keys(&reference, &["id"]);
+            payload
+                .as_object_mut()
+                .expect("object")
+                .insert("templateReference".into(), cleaned);
+        }
+    }
 
     client
         .put_empty(
@@ -1305,6 +1385,82 @@ mod tests {
         assert_eq!(removed, 1);
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0]["settingDefinitionId"], "keep");
+    }
+
+    #[test]
+    fn envelope_strips_nested_setting_definitions() {
+        let row = json!({
+            "settingInstance": {
+                "settingDefinitionId": "asr_rule",
+                "simpleSettingValue": { "value": "1" },
+                "settingDefinitions": [{ "id": "asr_rule" }],
+            },
+            "settingDefinitions": [{ "id": "asr_rule" }],
+        });
+        let envelope = setting_envelope(&row);
+        assert!(envelope.get("settingDefinitions").is_none());
+        let instance = envelope.get("settingInstance").expect("instance");
+        assert!(instance.get("settingDefinitions").is_none());
+        assert_eq!(
+            envelope["@odata.type"],
+            "#microsoft.graph.deviceManagementConfigurationSetting"
+        );
+    }
+
+    #[test]
+    fn group_merge_keeps_wrapped_existing_children() {
+        let existing = json!({
+            "@odata.type": "#microsoft.graph.deviceManagementConfigurationGroupSettingCollectionInstance",
+            "settingDefinitionId": "group",
+            "groupSettingCollectionValue": [{
+                "children": [
+                    {
+                        "settingInstance": {
+                            "settingDefinitionId": "rule-a",
+                            "choiceSettingValue": { "value": "a" }
+                        }
+                    },
+                    {
+                        "settingInstance": {
+                            "settingDefinitionId": "rule-b",
+                            "choiceSettingValue": { "value": "b" }
+                        }
+                    }
+                ]
+            }],
+        });
+        let incoming = json!({
+            "@odata.type": "#microsoft.graph.deviceManagementConfigurationGroupSettingCollectionInstance",
+            "settingDefinitionId": "group",
+            "settingInstanceTemplateReference": { "settingInstanceTemplateId": "tpl-1" },
+            "groupSettingCollectionValue": [{
+                "children": [
+                    {
+                        "settingDefinitionId": "rule-b",
+                        "choiceSettingValue": { "value": "b-edited", "children": [] }
+                    }
+                ]
+            }],
+        });
+        let merged = merge_setting_instances(Some(existing), incoming);
+        assert_eq!(
+            merged["settingInstanceTemplateReference"]["settingInstanceTemplateId"],
+            "tpl-1"
+        );
+        let children = group_instance_children(&merged);
+        let mut ids: Vec<String> = Vec::new();
+        for child in children.clone() {
+            if let Some(id) = setting_definition_id(&child) {
+                ids.push(id);
+            }
+        }
+        ids.sort();
+        assert_eq!(ids, vec!["rule-a".to_string(), "rule-b".to_string()]);
+        let b = children
+            .iter()
+            .find(|child| setting_definition_id(child) == Some("rule-b".to_string()))
+            .expect("rule-b");
+        assert_eq!(b["choiceSettingValue"]["value"], "b-edited");
     }
 
     fn windows_root(id: &str, name: &str, children: Vec<&str>) -> CatalogCategory {

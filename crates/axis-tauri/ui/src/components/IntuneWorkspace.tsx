@@ -8,6 +8,7 @@ import type {
   MobileAppSummary,
   PackExportProgress,
   PackExportResult,
+  TemplateStoreKind,
   TenantScriptSummary,
   WindowsUpdatePolicy,
   AppProtectionPolicy,
@@ -73,13 +74,25 @@ import {
   newCustomSource,
   newLocalSource,
   packTitle,
+  resolveStoreKind,
   sanitizeSource,
   saveStoredSources,
   sourceOpenUrl,
+  templateKicker,
   tokenForSource,
 } from "../lib/baselines/sources";
 import { normalizeIntunePolicyExport, catalogDescriptionFromPolicy, catalogPlatformFromPolicy, catalogSettingsFromPolicy } from "../lib/baselines/policyExport";
-import { groupPackArtifacts, isCatalogPackArtifact, packArtifactKindLabel } from "../lib/baselines/packArtifacts";
+import {
+  groupPackArtifacts,
+  isCatalogPackArtifact,
+  isPolicySettingsExportArtifact,
+  packArtifactKindLabel,
+} from "../lib/baselines/packArtifacts";
+import {
+  PolicyExportInspect,
+  type PolicyExportResolved,
+} from "./workbench/PolicyExportInspect";
+import { BaselineMergeDialog } from "./workbench/BaselineMergeDialog";
 import { DevicesList } from "./DevicesList";
 import { DeviceDetailView, type DeviceDetailCacheEntry } from "./DeviceDetailView";
 import { SettingsSearchView } from "./SettingsSearchView";
@@ -90,6 +103,7 @@ import { EnvironmentReportView } from "./EnvironmentReportView";
 import { GraphObjectInspector } from "./workbench/GraphObjectInspector";
 import { PageHeader, SignalCard } from "./ui/PageChrome";
 import { CreateCompliancePolicyDialog } from "./workbench/CreateCompliancePolicyDialog";
+import { CreateEndpointSecurityPolicyDialog } from "./workbench/CreateEndpointSecurityPolicyDialog";
 import { CreateScriptDialog, type ScriptFamily } from "./workbench/CreateScriptDialog";
 import { DocumentTabs, InspectorWithDocumentTabs } from "./workbench/DocumentTabs";
 import { useCatalogFileImport } from "./workbench/CatalogFileImportDialog";
@@ -514,10 +528,9 @@ export function IntuneWorkspace({
       ? catalog.items.filter((item) => item.templateFamily === family)
       : catalog.items;
     return (
-      <NamedPolicyList
-        eyebrow="Endpoint Security"
-        title={blade.replace(/-/g, " ")}
-        description={family ? `templateFamily = ${family}` : "Endpoint security policies"}
+      <EndpointSecurityBlade
+        blade={blade}
+        family={family}
         items={items}
         loading={catalog.loading}
         error={catalog.error}
@@ -525,8 +538,6 @@ export function IntuneWorkspace({
         selectedId={search.get("policy")}
         onSelect={(id) => navigate(hrefWithParam(pathname, search, "policy", id))}
         onRefresh={() => void catalog.reload()}
-        objectKind="configurationPolicy"
-        incomplete="Endpoint Security setting editors are not ported. Setting instances and assignments are live from Graph."
       />
     );
   }
@@ -557,9 +568,10 @@ export function IntuneWorkspace({
     );
   }
 
-  if (pathname === "/intune/baselines") {
+  if (pathname === "/intune/baselines" || pathname === "/intune/templates") {
     return (
       <BaselinesWorkbench
+        surface={pathname === "/intune/templates" ? "templates" : "baselines"}
         selectedId={search.get("check")}
         onSelect={(id) => navigate(hrefWithParam(pathname, search, "check", id))}
         signedIn={signedIn}
@@ -1305,6 +1317,66 @@ function PoliciesHub({
   );
 }
 
+function EndpointSecurityBlade({
+  blade,
+  family,
+  items,
+  loading,
+  error,
+  truncated,
+  selectedId,
+  onSelect,
+  onRefresh,
+}: {
+  blade: string;
+  family: string | undefined;
+  items: CatalogPolicySummary[];
+  loading: boolean;
+  error: string | null;
+  truncated?: boolean;
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+  onRefresh: () => void;
+}) {
+  const [creating, setCreating] = useState(false);
+  // Resolve the blade's template from an existing policy of the same family.
+  const templateId = items.find((item) => item.templateId)?.templateId ?? null;
+  return (
+    <>
+      <NamedPolicyList
+        eyebrow="Endpoint Security"
+        title={blade.replace(/-/g, " ")}
+        description={
+          family
+            ? "Template-backed policies. Edit configured values in the inspector, or open the policy in the Intune portal to change its template."
+            : "Endpoint security policies"
+        }
+        items={items}
+        loading={loading}
+        error={error}
+        truncated={truncated}
+        selectedId={selectedId}
+        onSelect={onSelect}
+        onRefresh={onRefresh}
+        objectKind="configurationPolicy"
+        onCreate={family && templateId ? () => setCreating(true) : undefined}
+      />
+      {creating && family && templateId ? (
+        <CreateEndpointSecurityPolicyDialog
+          family={family}
+          templateId={templateId}
+          onClose={() => setCreating(false)}
+          onCreated={(id) => {
+            setCreating(false);
+            onSelect(id);
+            onRefresh();
+          }}
+        />
+      ) : null}
+    </>
+  );
+}
+
 function NamedPolicyList({
   eyebrow,
   title,
@@ -1319,6 +1391,7 @@ function NamedPolicyList({
   incomplete,
   objectKind,
   createFamily,
+  onCreate,
 }: {
   eyebrow: string;
   title: string;
@@ -1330,9 +1403,11 @@ function NamedPolicyList({
   selectedId: string | null;
   onSelect: (id: string) => void;
   onRefresh: () => void;
-  incomplete: string;
+  incomplete?: string;
   objectKind: string;
   createFamily?: "windows" | "macos" | "ios" | "android";
+  /** When provided, show a primary "Create" action (template-backed lists). */
+  onCreate?: () => void;
 }) {
   const { query, setQuery, assignedFilter, setAssignedFilter, platformFilter, setPlatformFilter } =
     useListSearchState();
@@ -1343,6 +1418,10 @@ function NamedPolicyList({
   const createButton = canCreate ? (
     <button type="button" className="axis-btn axis-btn-primary" onClick={() => setCreating(true)}>
       New
+    </button>
+  ) : onCreate ? (
+    <button type="button" className="axis-btn axis-btn-primary" onClick={onCreate}>
+      Create
     </button>
   ) : null;
   const listed = useMemo(() => withTransientItem(items, overlay), [items, overlay]);
@@ -1468,7 +1547,7 @@ function NamedPolicyList({
                 </>
               }
             />
-            <IncompleteBanner>{incomplete}</IncompleteBanner>
+            {incomplete ? <IncompleteBanner>{incomplete}</IncompleteBanner> : null}
             <LoadedInventoryBanner truncated={truncated} />
             {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
             <BulkAssignBar
@@ -2444,21 +2523,26 @@ function GitHubLeastPrivilegePatHelp() {
 }
 
 function BaselinesWorkbench({
+  surface,
   selectedId,
   onSelect,
   signedIn,
   organizationName,
 }: {
+  surface: "baselines" | "templates";
   selectedId: string | null;
   onSelect: (id: string) => void;
   signedIn: boolean;
   organizationName: string | null;
 }) {
+  const templates = surface === "templates";
   const [sourceEntries, setSourceEntries] = useState<BaselineReferenceSourceInput[]>([
     DEFAULT_E8_SOURCE,
   ]);
   const [sourcesHydrated, setSourcesHydrated] = useState(false);
   const [sourceEditorOpen, setSourceEditorOpen] = useState(false);
+  const [editingSourceKey, setEditingSourceKey] = useState<string | null>(null);
+  const [deletingSourceKey, setDeletingSourceKey] = useState<string | null>(null);
   const [referenceLoads, setReferenceLoads] = useState<
     Array<{
       source: {
@@ -2479,8 +2563,20 @@ function BaselinesWorkbench({
     }>
   >([]);
   const [e8Loading, setE8Loading] = useState(false);
+  const [refreshingSourceIds, setRefreshingSourceIds] = useState<Set<string>>(new Set());
   const [referencesError, setReferencesError] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+  const [bulkImportOpen, setBulkImportOpen] = useState(false);
+  const [bulkImportTargets, setBulkImportTargets] = useState<
+    Array<E8BaselineReference & { sourceId: string; sourceName: string }>
+  >([]);
+  const [bulkMergeOpen, setBulkMergeOpen] = useState(false);
+  const [bulkMergeTargets, setBulkMergeTargets] = useState<
+    Array<E8BaselineReference & { sourceId: string; sourceName: string }>
+  >([]);
+  /** null = use defaults (single pack expanded, or pack with selection; else collapsed). */
+  const [expandedPackIds, setExpandedPackIds] = useState<Set<string> | null>(null);
+  const [exportResolved, setExportResolved] = useState<PolicyExportResolved | null>(null);
   const [exportBusy, setExportBusy] = useState(false);
   const [exportProgress, setExportProgress] = useState<PackExportProgress | null>(null);
   const [exportResult, setExportResult] = useState<PackExportResult | null>(null);
@@ -2516,10 +2612,13 @@ function BaselinesWorkbench({
   }, [sourceEntries, sourcesHydrated]);
 
   const loadReferences = useCallback(async () => {
-    const ready = sourceEntries.map(sanitizeSource).filter(isSourceReady);
+    const ready = sourceEntries
+      .map(sanitizeSource)
+      .filter(isSourceReady)
+      .filter((entry) => (templates ? !isBuiltinSource(entry) : isBuiltinSource(entry)));
     if (ready.length === 0) {
       setReferenceLoads([]);
-      setReferencesError("Add a GitHub repository URL or a local pack folder to load baseline packs.");
+      setReferencesError(null);
       return;
     }
     setE8Loading(true);
@@ -2533,7 +2632,33 @@ function BaselinesWorkbench({
     } finally {
       setE8Loading(false);
     }
-  }, [sourceEntries]);
+  }, [sourceEntries, templates]);
+
+  const refreshSource = useCallback(
+    async (entry: BaselineReferenceSourceInput) => {
+      const normalized = sanitizeSource(entry);
+      const key = normalized.id;
+      if (!key || !isSourceReady(normalized)) return;
+      setRefreshingSourceIds((current) => new Set(current).add(key));
+      try {
+        const response = await fetchBaselineReferenceSources([normalized]);
+        const load = response.sources[0];
+        setReferenceLoads((current) => {
+          const next = current.filter((row) => row.source.id !== key);
+          return load ? [...next, load] : next;
+        });
+      } catch (error) {
+        setReferencesError(error instanceof Error ? error.message : String(error));
+      } finally {
+        setRefreshingSourceIds((current) => {
+          const next = new Set(current);
+          next.delete(key);
+          return next;
+        });
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!sourcesHydrated) return;
@@ -2544,6 +2669,50 @@ function BaselinesWorkbench({
   const sameLocalPath = (left: string, right: string) =>
     left.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase() ===
     right.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+
+  const sourceKeyFor = useCallback(
+    (entry: BaselineReferenceSourceInput, index: number) => entry.id ?? `source-${index}`,
+    [],
+  );
+
+  const openSourceEditor = useCallback((key: string) => {
+    setEditingSourceKey(key);
+    setSourceEditorOpen(true);
+  }, []);
+
+  const removeSource = useCallback(
+    (key: string) => {
+      setSourceEntries((current) =>
+        current.filter((row, rowIndex) => (row.id ?? `source-${rowIndex}`) !== key),
+      );
+      if (editingSourceKey === key) setEditingSourceKey(null);
+    },
+    [editingSourceKey],
+  );
+
+  const addLocalFolderSource = useCallback(async () => {
+    const folder = await pickLocalPackFolder("Select a local template folder");
+    if (!folder) return;
+    const entry = {
+      ...newLocalSource(),
+      localPath: folder,
+      kind: "local",
+      storeKind: "axisTemplated",
+    } as BaselineReferenceSourceInput;
+    setSourceEntries((current) => {
+      if (current.some((row) => isLocalSource(row) && sameLocalPath(row.localPath ?? "", folder))) {
+        return current;
+      }
+      return [...current, entry];
+    });
+    if (entry.id) openSourceEditor(entry.id);
+  }, [openSourceEditor]);
+
+  const addGitHubSource = useCallback(() => {
+    const entry = newCustomSource();
+    setSourceEntries((current) => [...current, entry]);
+    if (entry.id) openSourceEditor(entry.id);
+  }, [openSourceEditor]);
 
   const runTenantExport = useCallback(async () => {
     if (!signedIn || exportBusy) return;
@@ -2561,21 +2730,20 @@ function BaselinesWorkbench({
         return;
       }
       setExportResult(result);
+      const exportEntry = {
+        ...newLocalSource(),
+        name: packName,
+        localPath: result.root,
+        kind: "local",
+        storeKind: "axisTemplated",
+      } as BaselineReferenceSourceInput;
       setSourceEntries((current) => {
         if (current.some((row) => isLocalSource(row) && sameLocalPath(row.localPath ?? "", result.root))) {
           return current;
         }
-        return [
-          ...current,
-          {
-            ...newLocalSource(),
-            name: packName,
-            localPath: result.root,
-            kind: "local",
-          },
-        ];
+        return [...current, exportEntry];
       });
-      setSourceEditorOpen(true);
+      if (exportEntry.id) openSourceEditor(exportEntry.id);
     } catch (error) {
       setExportError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -2585,7 +2753,7 @@ function BaselinesWorkbench({
 
   const packs = useMemo(() => {
     const loadsById = new Map(referenceLoads.map((load) => [load.source.id, load]));
-    return sourceEntries.filter(isSourceReady).map((entry) => {
+    return sourceEntries.filter(isSourceReady).filter((entry) => (templates ? !isBuiltinSource(entry) : isBuiltinSource(entry))).map((entry) => {
       const normalizedEntry = sanitizeSource(entry);
       const load = loadsById.get(normalizedEntry.id ?? "");
       const source = load?.source;
@@ -2596,19 +2764,16 @@ function BaselinesWorkbench({
         repo: source?.repo ?? entry.repo,
       });
       return {
-        id: normalizedEntry.id ?? source?.id ?? title,
+        id: source?.id ?? normalizedEntry.id ?? title,
         title,
-        kind: isBuiltinSource(entry)
-          ? "Built-in"
-          : isLocalSource(entry)
-            ? "Local folder"
-            : "GitHub pack",
+        kind: templateKicker(entry),
         owner: source?.owner ?? entry.owner,
         repo: source?.repo ?? entry.repo,
         local: isLocalSource(entry) || source?.kind === "local",
         directoryUrl: source?.directoryUrl ?? sourceOpenUrl(entry),
         error: load?.error ?? null,
         warning: load?.warnings[0] ?? null,
+        entry,
         references: (load?.references ?? []).map((reference) => ({
           ...reference,
           sourceId: source?.id ?? normalizedEntry.id ?? "",
@@ -2616,11 +2781,24 @@ function BaselinesWorkbench({
         })),
       };
     });
-  }, [referenceLoads, sourceEntries]);
+  }, [referenceLoads, sourceEntries, templates]);
 
   const allReferences = useMemo(
     () => packs.flatMap((pack) => pack.references),
     [packs],
+  );
+
+  const catalogReferences = useMemo(
+    () => allReferences.filter((reference) => isCatalogPackArtifact(reference.artifactKind)),
+    [allReferences],
+  );
+  const catalogSelectionIds = useMemo(
+    () => catalogReferences.map((reference) => `ref:${reference.sourceId}:${reference.id}`),
+    [catalogReferences],
+  );
+  const selection = useCheckedIds(catalogSelectionIds);
+  const checkedCatalog = catalogReferences.filter((reference) =>
+    selection.checkedIds.has(`ref:${reference.sourceId}:${reference.id}`),
   );
 
   const selectedReference = selectedId?.startsWith("ref:")
@@ -2628,6 +2806,59 @@ function BaselinesWorkbench({
         (reference) => `ref:${reference.sourceId}:${reference.id}` === selectedId,
       ) ?? null
     : null;
+  const selectedIsPolicyExport = selectedReference
+    ? isPolicySettingsExportArtifact(selectedReference.artifactKind)
+    : false;
+
+  const packExpanded = useCallback(
+    (packId: string) => {
+      if (expandedPackIds != null) return expandedPackIds.has(packId);
+      if (packs.length <= 1) return true;
+      if (selectedReference?.sourceId === packId) return true;
+      return false;
+    },
+    [expandedPackIds, packs.length, selectedReference?.sourceId],
+  );
+
+  const togglePackExpanded = useCallback((packId: string) => {
+    setExpandedPackIds((current) => {
+      const base =
+        current ??
+        new Set(
+          packs.length <= 1
+            ? packs.map((pack) => pack.id)
+            : selectedReference?.sourceId
+              ? [selectedReference.sourceId]
+              : [],
+        );
+      const next = new Set(base);
+      if (next.has(packId)) next.delete(packId);
+      else next.add(packId);
+      return next;
+    });
+  }, [packs, selectedReference?.sourceId]);
+
+  useEffect(() => {
+    if (!selectedReference) return;
+    const packId = selectedReference.sourceId;
+    setExpandedPackIds((current) => {
+      if (current == null) return current;
+      if (current.has(packId)) return current;
+      const next = new Set(current);
+      next.add(packId);
+      return next;
+    });
+  }, [selectedReference]);
+
+  useEffect(() => {
+    setExportResolved(null);
+    setImportOpen(false);
+  }, [selectedId]);
+
+  const onExportResolved = useCallback((info: PolicyExportResolved | null) => {
+    setExportResolved(info);
+  }, []);
+
   const baselineModifiedMeta = (reference: E8BaselineReference) => {
     const repoModified = reference.repositoryLastModifiedDateTime;
     const policyExported = reference.policyExportedDateTime;
@@ -2636,13 +2867,18 @@ function BaselinesWorkbench({
   };
 
   return (
+    <>
     <WorkspaceSplit
       inspectorPrimary={Boolean(selectedReference)}
       master={
         selectedReference ? (
           <CompactObjectList
-            title="Pack items"
-            description="Select an item from an external pack to inspect it here."
+            title={templates ? "Template items" : "Baselines"}
+            description={
+              templates
+                ? "Select an item from a template store to inspect it here."
+                : "Select an ASD baseline to inspect it here."
+            }
             items={allReferences.map((reference) => ({
               id: `ref:${reference.sourceId}:${reference.id}`,
               title: reference.name,
@@ -2655,68 +2891,110 @@ function BaselinesWorkbench({
         ) : (
           <div className="stack">
             <PageHeader
-              eyebrow="Baselines"
-              title="Baselines"
-              description="Built-in ASD E8 stays here. Add a GitHub pack or a local folder as an external source, or export this tenant into pack folders so Axis can list and later import them. Open a device and use Baselines to grade applied catalog settings."
+              eyebrow={templates ? "Templates" : "Baselines"}
+              title={templates ? "Templates" : "Baselines"}
+              description={
+                templates
+                  ? "User template stores from a local folder or GitHub. Axis Templated reads axis-pack.json at the store root. Flat JSON lists a folder of policy files. Open a device to grade an ASD baseline or an expanded policy set."
+                  : "Built-in ASD Essential Eight hard baselines. Used to compare a device and to import one policy. User GitHub and local stores are listed under Templates."
+              }
               actions={
-                <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-                  <button
-                    type="button"
-                    className="axis-btn axis-btn-primary"
-                    onClick={() => void runTenantExport()}
-                    disabled={!signedIn || exportBusy}
-                    title={signedIn ? undefined : "Sign in to export this tenant"}
-                  >
-                    {exportBusy ? "Exporting…" : "Export tenant pack"}
-                  </button>
-                  <button type="button" className="axis-btn" onClick={() => setSourceEditorOpen((open) => !open)}>
-                    {sourceEditorOpen ? "Hide sources" : "Manage sources"}
-                  </button>
-                  <button type="button" className="axis-btn" onClick={() => void loadReferences()} disabled={e8Loading}>
-                    {e8Loading ? "Refreshing…" : "Refresh references"}
+                <div className="baseline-actions">
+                  {templates ? (
+                    <button
+                      type="button"
+                      className="axis-btn axis-btn-primary"
+                      onClick={() => void runTenantExport()}
+                      disabled={!signedIn || exportBusy}
+                      title={signedIn ? undefined : "Sign in to export this tenant"}
+                    >
+                      {exportBusy ? "Exporting…" : "Export tenant pack"}
+                    </button>
+                  ) : (
+                    <button type="button" className="axis-btn" onClick={() => navigate("/intune/templates")}>
+                      Templates
+                    </button>
+                  )}
+                  {templates ? (
+                    <>
+                      <button
+                        type="button"
+                        className="axis-btn"
+                        onClick={addGitHubSource}
+                      >
+                        Add GitHub pack
+                      </button>
+                      <button
+                        type="button"
+                        className="axis-btn"
+                        onClick={() => void addLocalFolderSource()}
+                      >
+                        Add local folder
+                      </button>
+                      <button
+                        type="button"
+                        className={`axis-btn${sourceEditorOpen ? " is-active" : ""}`}
+                        aria-pressed={sourceEditorOpen}
+                        onClick={() => setSourceEditorOpen((open) => !open)}
+                      >
+                        {sourceEditorOpen ? "Hide sources" : "Manage sources"}
+                      </button>
+                    </>
+                  ) : null}
+                  <button type="button" className="axis-btn axis-btn-ghost" onClick={() => void loadReferences()} disabled={e8Loading}>
+                    {e8Loading ? "Refreshing…" : "Refresh"}
                   </button>
                 </div>
               }
             />
+            <div className="workspace-scroll">
+            {templates ? (
             <IncompleteBanner>
-              Packs are an external listing. Import applies to Settings Catalog files under
+              Template stores are an external listing. Import applies to Settings Catalog files under
               each platform’s policies/ folder. Tenant export writes the same layout (catalog JSON,
               scripts with an <code>@axis-pack</code> header, compliance, Endpoint Security, Group
-              Policy, Windows Update, Autopilot) plus baseline JSON that selects those files.
+              Policy, Windows Update, Autopilot) plus policy-set JSON that selects those files.
               iOS, Linux, apps, and classic device configuration profiles are not exported.
             </IncompleteBanner>
-            {exportBusy || exportProgress || exportResult || exportError ? (
-              <section className="axis-panel" style={{ padding: "0.85rem" }}>
-                <p className="baseline-pack-kicker" style={{ marginTop: 0 }}>
-                  Tenant export
-                </p>
+            ) : (
+            <IncompleteBanner>
+              ASD baselines stay on this page. One-policy import creates a new Settings Catalog policy.
+              Template stores, including policy sets, are listed under Templates.
+            </IncompleteBanner>
+            )}
+            {templates && (exportBusy || exportProgress || exportResult || exportError) ? (
+              <section className="axis-panel baseline-status">
+                <div className="baseline-status-head">
+                  <p className="baseline-pack-kicker">Tenant export</p>
+                  {exportBusy ? <span className="axis-pill">Running</span> : null}
+                  {!exportBusy && exportError ? <span className="axis-pill axis-pill-danger">Failed</span> : null}
+                  {!exportBusy && exportResult ? <span className="axis-pill axis-pill-success">Done</span> : null}
+                </div>
                 {exportBusy && exportProgress ? (
-                  <p style={{ margin: "0.2rem 0 0" }}>
+                  <p className="baseline-status-line">
                     {exportProgress.total > 0
                       ? `${exportProgress.current} / ${exportProgress.total} · ${exportProgress.message}`
                       : exportProgress.message}
                   </p>
                 ) : null}
                 {exportError ? (
-                  <p className="muted" style={{ margin: "0.35rem 0 0", color: "var(--axis-danger, #b42318)" }}>
-                    {exportError}
-                  </p>
+                  <p className="baseline-status-line baseline-status-error">{exportError}</p>
                 ) : null}
                 {exportResult && !exportBusy ? (
-                  <div className="muted" style={{ marginTop: "0.35rem" }}>
-                    <p style={{ margin: 0 }}>
+                  <div className="muted baseline-status-detail">
+                    <p>
                       Wrote {exportResult.filesWritten} files ({exportResult.catalogCount} Settings Catalog)
                       under {exportResult.root}.
                     </p>
                     {exportResult.skipped.length ? (
-                      <p style={{ margin: "0.35rem 0 0" }}>
+                      <p>
                         Skipped {exportResult.skipped.length} (unsupported platform):{" "}
                         {exportResult.skipped.slice(0, 8).join(", ")}
                         {exportResult.skipped.length > 8 ? "…" : ""}
                       </p>
                     ) : null}
                     {exportResult.warnings.length ? (
-                      <p style={{ margin: "0.35rem 0 0" }}>
+                      <p>
                         {exportResult.warnings.length} warning
                         {exportResult.warnings.length === 1 ? "" : "s"} (Graph gaps or empty objects).
                         First: {exportResult.warnings[0]}
@@ -2726,255 +3004,262 @@ function BaselinesWorkbench({
                 ) : null}
               </section>
             ) : null}
-            {sourceEditorOpen ? (
-              <section className="axis-panel" style={{ padding: "0.85rem" }}>
-                <p className="muted" style={{ marginTop: 0 }}>
-                  ASD E8 is built in. Add a GitHub URL (use{" "}
-                  <code>https://github.com/jbiskit/axis-pack-template</code> as a starting repo) or a
-                  local folder. Axis reads <code>axis-pack.json</code> and lists each folder as its own
-                  category (by platform, then policies, scripts, compliance, and so on). A baseline
-                  JSON names a standard and lists pack paths to include. Packs are read-only in this
-                  version. For a
-                  private repo, mark the source private and paste a fine-grained PAT limited to that
-                  repository.{" "}
-                  <button
-                    type="button"
-                    className="axis-link"
-                    onClick={() => void openExternalUrl(GITHUB_FINE_GRAINED_TOKEN_URL)}
-                  >
-                    Create a token
-                  </button>
-                </p>
-                <div className="stack" style={{ gap: "0.5rem" }}>
+            {templates && sourceEditorOpen ? (
+              <section className="axis-panel baseline-sources">
+                <div className="baseline-sources-head">
+                  <p className="baseline-pack-kicker">Template stores</p>
+                  <p className="muted baseline-sources-hint">
+                    Stores are read-only listings of policy files. Axis Templated reads{" "}
+                    <code>axis-pack.json</code> at the store root; Flat JSON lists a folder of policy
+                    files.{" "}
+                    <button
+                      type="button"
+                      className="axis-link"
+                      onClick={() => void openExternalUrl("https://github.com/jbiskit/axis-pack-template")}
+                    >
+                      Start from the template repo
+                    </button>
+                  </p>
+                </div>
+                <ul className="baseline-source-rows">
                   {sourceEntries.map((entry, index) => {
-                    const sourceKey = entry.id ?? `source-${index}`;
-                    const builtin = isBuiltinSource(entry);
+                    if (isBuiltinSource(entry)) return null;
+                    const sourceKey = sourceKeyFor(entry, index);
+                    const ready = isSourceReady(entry);
                     return (
-                    <div key={sourceKey} style={{ border: "1px solid var(--axis-border)", borderRadius: "0.5rem", padding: "0.6rem" }}>
-                      <p className="baseline-pack-kicker">
-                        {builtin ? "Built-in" : isLocalSource(entry) ? "Local folder" : "GitHub pack"}
-                      </p>
-                      <p style={{ margin: "0.2rem 0 0.5rem", fontWeight: 650 }}>{packTitle(entry)}</p>
-                      {builtin ? (
-                        <p className="muted" style={{ margin: 0, fontSize: "0.75rem" }}>
-                          ASD Essential Eight reference from the ASD Blueprint repository.
-                        </p>
-                      ) : isLocalSource(entry) ? (
-                        <>
-                          <input
-                            className="axis-input"
-                            value={entry.name ?? ""}
-                            placeholder="Pack name (optional)"
-                            onChange={(event) => {
-                              const value = event.target.value;
-                              setSourceEntries((current) =>
-                                current.map((row, rowIndex) =>
-                                  rowIndex === index ? { ...row, name: value } : row,
-                                ),
-                              );
-                            }}
-                          />
-                          <div style={{ display: "flex", gap: "0.4rem", marginTop: "0.4rem", alignItems: "center" }}>
-                            <input
-                              className="axis-input"
-                              style={{ flex: 1 }}
-                              value={entry.localPath ?? ""}
-                              placeholder="Folder path"
-                              onChange={(event) => {
-                                const value = event.target.value;
-                                setSourceEntries((current) =>
-                                  current.map((row, rowIndex) =>
-                                    rowIndex === index ? { ...row, kind: "local", localPath: value } : row,
-                                  ),
-                                );
-                              }}
-                            />
-                            <button
-                              type="button"
-                              className="axis-btn"
-                              onClick={() => {
-                                void pickLocalPackFolder().then((folder) => {
-                                  if (!folder) return;
-                                  setSourceEntries((current) =>
-                                    current.map((row, rowIndex) =>
-                                      rowIndex === index ? { ...row, kind: "local", localPath: folder } : row,
-                                    ),
-                                  );
-                                });
-                              }}
-                            >
-                              Browse
-                            </button>
-                          </div>
-                          <input
-                            className="axis-input"
-                            style={{ marginTop: "0.4rem" }}
-                            value={entry.path}
-                            placeholder="Optional subfolder (leave empty for pack layout)"
-                            onChange={(event) => {
-                              const value = event.target.value;
-                              setSourceEntries((current) =>
-                                current.map((row, rowIndex) =>
-                                  rowIndex === index ? { ...row, path: value } : row,
-                                ),
-                              );
-                            }}
-                          />
-                        </>
-                      ) : (
-                        <>
-                          <input
-                            className="axis-input"
-                            value={entry.url ?? ""}
-                            placeholder="https://github.com/owner/repo"
-                            onChange={(event) => {
-                              const value = event.target.value;
-                              setSourceEntries((current) =>
-                                current.map((row, rowIndex) =>
-                                  rowIndex === index ? applyGitHubRepoInput(row, value) : row,
-                                ),
-                              );
-                            }}
-                          />
-                          <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", marginTop: "0.5rem" }}>
-                            <input
-                              type="checkbox"
-                              checked={Boolean(entry.private)}
-                              onChange={(event) => {
-                                const isPrivate = event.target.checked;
-                                setSourceEntries((current) =>
-                                  current.map((row, rowIndex) =>
-                                    rowIndex === index
-                                      ? { ...row, private: isPrivate, token: isPrivate ? row.token : undefined }
-                                      : row,
-                                  ),
-                                );
-                              }}
-                            />
-                            Private repository
-                          </label>
-                          {entry.private ? (
-                            <>
-                              <input
-                                className="axis-input"
-                                style={{ marginTop: "0.4rem" }}
-                                type="password"
-                                autoComplete="off"
-                                value={entry.token ?? ""}
-                                placeholder="Fine-grained PAT for this repository"
-                                onChange={(event) => {
-                                  const value = event.target.value;
-                                  setSourceEntries((current) =>
-                                    current.map((row, rowIndex) =>
-                                      rowIndex === index ? { ...row, token: value } : row,
-                                    ),
-                                  );
-                                }}
-                              />
-                              <GitHubLeastPrivilegePatHelp />
-                            </>
-                          ) : null}
-                        </>
-                      )}
-                      <div style={{ display: "flex", justifyContent: "space-between", marginTop: "0.45rem" }}>
-                        <button
-                          type="button"
-                          className="axis-link"
-                          disabled={!isSourceReady(entry)}
-                          onClick={() => void openExternalUrl(sourceOpenUrl(entry))}
-                        >
-                          {isLocalSource(entry) ? "Open folder" : "Open repository"}
-                        </button>
-                        {builtin ? (
-                          <span className="muted" style={{ fontSize: "0.75rem" }}>Always available</span>
-                        ) : (
+                      <li key={sourceKey} className="baseline-source-row">
+                        <span className="axis-pill">{templateKicker(entry)}</span>
+                        <div className="baseline-source-row-copy">
+                          <p className="baseline-source-row-name">{packTitle(entry)}</p>
+                          <p className="muted baseline-source-row-meta">
+                            {isLocalSource(entry)
+                              ? entry.localPath || "No folder set"
+                              : entry.url || "No repository set"}
+                          </p>
+                        </div>
+                        <div className="baseline-source-row-actions">
                           <button
                             type="button"
-                            className="axis-link"
-                            onClick={() => {
-                              setSourceEntries((current) => current.filter((_, rowIndex) => rowIndex !== index));
-                            }}
+                            className="axis-btn axis-btn-ghost"
+                            disabled={!ready}
+                            onClick={() => void openExternalUrl(sourceOpenUrl(entry))}
+                          >
+                            {isLocalSource(entry) ? "Open folder" : "Open repo"}
+                          </button>
+                          <button
+                            type="button"
+                            className="axis-btn"
+                            onClick={() => openSourceEditor(sourceKey)}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            className="axis-btn axis-btn-ghost baseline-source-remove"
+                            onClick={() => setDeletingSourceKey(sourceKey)}
                           >
                             Remove
                           </button>
-                        )}
-                      </div>
-                    </div>
+                        </div>
+                      </li>
                     );
                   })}
-                </div>
-                <div style={{ display: "flex", gap: "0.6rem", marginTop: "0.75rem", flexWrap: "wrap" }}>
-                  <button
-                    type="button"
-                    className="axis-btn"
-                    onClick={() => setSourceEntries((current) => [...current, newCustomSource()])}
-                  >
+                </ul>
+                {sourceEntries.every((entry) => isBuiltinSource(entry)) ? (
+                  <p className="muted baseline-source-empty">No template stores yet.</p>
+                ) : null}
+                <div className="baseline-sources-foot">
+                  <button type="button" className="axis-btn" onClick={addGitHubSource}>
                     Add GitHub pack
                   </button>
-                  <button
-                    type="button"
-                    className="axis-btn"
-                    onClick={() => setSourceEntries((current) => [...current, newLocalSource()])}
-                  >
+                  <button type="button" className="axis-btn" onClick={() => void addLocalFolderSource()}>
                     Add local folder
                   </button>
-                  <button type="button" className="axis-btn" onClick={() => void loadReferences()} disabled={e8Loading}>
-                    Reload packs
+                  <button type="button" className="axis-btn axis-btn-ghost" onClick={() => void loadReferences()} disabled={e8Loading}>
+                    Reload stores
                   </button>
                 </div>
               </section>
             ) : null}
             {referencesError ? <div className="axis-alert axis-alert-danger">Reference loading failed: {referencesError}</div> : null}
-            {packs.map((pack) => (
-              <section key={pack.id} className="axis-panel" style={{ overflow: "hidden" }}>
-                <div className="baseline-pack-head">
-                  <div>
-                    <p className="baseline-pack-kicker">{pack.kind}</p>
-                    <h2>{pack.title}</h2>
-                    <p className="muted" style={{ margin: "0.25rem 0 0", fontSize: "0.75rem" }}>
-                      {pack.local
-                        ? pack.directoryUrl || "This machine"
-                        : pack.owner && pack.repo
-                          ? `${pack.owner}/${pack.repo}`
-                          : "Repository"}
-                      {" · "}
-                      {pack.references.length} {pack.references.length === 1 ? "item" : "items"}
-                    </p>
-                  </div>
-                  <button type="button" className="axis-link" onClick={() => void openExternalUrl(pack.directoryUrl)}>
-                    {pack.local ? "Open folder" : "Open repository"}
+            {templates && !e8Loading && !sourceEntries.some((entry) => !isBuiltinSource(entry)) ? (
+              <p className="muted">No template stores yet. Add a GitHub pack or a local folder.</p>
+            ) : null}
+            {checkedCatalog.length > 0 ? (
+              <BulkAssignBar
+                count={checkedCatalog.length}
+                editLabel="Import to Intune"
+                editHint={
+                  signedIn
+                    ? "Create Settings Catalog policies from the selected exports"
+                    : "Sign in to import policies"
+                }
+                editDisabled={!signedIn}
+                onEdit={() => {
+                  setBulkImportTargets(checkedCatalog);
+                  setBulkImportOpen(true);
+                }}
+                onClear={selection.clear}
+                extra={
+                  <button
+                    type="button"
+                    className="axis-btn"
+                    disabled={!signedIn || checkedCatalog.length < 2}
+                    title={
+                      !signedIn
+                        ? "Sign in to merge policies"
+                        : checkedCatalog.length < 2
+                          ? "Select at least two Settings Catalog policies to combine"
+                          : "Merge selected Settings Catalog exports into one policy"
+                    }
+                    onClick={() => {
+                      setBulkMergeTargets(checkedCatalog);
+                      setBulkMergeOpen(true);
+                    }}
+                  >
+                    Combine and merge
                   </button>
+                }
+              />
+            ) : null}
+            {packs.map((pack) => {
+              const expanded = packExpanded(pack.id);
+              return (
+              <section key={pack.id} className="axis-panel baseline-pack">
+                <div className={`baseline-pack-head${expanded ? "" : " is-collapsed"}`}>
+                  <button
+                    type="button"
+                    className="baseline-pack-toggle"
+                    aria-expanded={expanded}
+                    onClick={() => togglePackExpanded(pack.id)}
+                  >
+                    <span className={`baseline-pack-chevron${expanded ? " is-open" : ""}`} aria-hidden="true">
+                      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75">
+                        <path d="M6 3.5 10.5 8 6 12.5" />
+                      </svg>
+                    </span>
+                    <div className="baseline-pack-toggle-copy">
+                      <p className="baseline-pack-kicker">{pack.kind}</p>
+                      <h2>{pack.title}</h2>
+                      <p className="baseline-pack-meta">
+                        {pack.local
+                          ? pack.directoryUrl || "This machine"
+                          : pack.owner && pack.repo
+                            ? `${pack.owner}/${pack.repo}`
+                            : "Repository"}
+                      </p>
+                    </div>
+                    <span className="baseline-pack-count">
+                      {pack.references.length} {pack.references.length === 1 ? "item" : "items"}
+                    </span>
+                  </button>
+                  <div className="baseline-pack-actions">
+                    <button
+                      type="button"
+                      className="axis-btn axis-btn-ghost axis-btn-icon baseline-pack-refresh"
+                      title="Reload this store"
+                      aria-label={`Reload ${pack.title}`}
+                      disabled={refreshingSourceIds.has(pack.id)}
+                      onClick={() => void refreshSource(pack.entry)}
+                    >
+                      <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.75"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        aria-hidden="true"
+                        className={refreshingSourceIds.has(pack.id) ? "baseline-spin" : undefined}
+                      >
+                        <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                        <path d="M21 3v6h-6" />
+                      </svg>
+                    </button>
+                    <button type="button" className="axis-btn axis-btn-ghost baseline-pack-open" onClick={() => void openExternalUrl(pack.directoryUrl)}>
+                      {pack.local ? "Open folder" : "Open repository"}
+                    </button>
+                    {templates ? (
+                      <button
+                        type="button"
+                        className="axis-btn axis-btn-ghost axis-btn-icon baseline-pack-delete"
+                        title="Remove this store"
+                        aria-label={`Remove ${pack.title}`}
+                        onClick={() => setDeletingSourceKey(pack.id)}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                          <path d="M3 6h18" />
+                          <path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" />
+                          <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                          <path d="M10 11v6M14 11v6" />
+                        </svg>
+                      </button>
+                    ) : null}
+                  </div>
                 </div>
+                {expanded ? (
+                <>
                 {pack.error ? (
-                  <div className="axis-alert axis-alert-danger" style={{ margin: "0.75rem" }}>
+                  <div className="axis-alert axis-alert-danger baseline-pack-alert">
                     {pack.error}
                   </div>
                 ) : null}
                 {pack.warning ? (
-                  <div className="axis-alert axis-alert-warning" style={{ margin: "0.75rem" }}>
+                  <div className="axis-alert axis-alert-warning baseline-pack-alert">
                     {pack.warning}
                   </div>
                 ) : null}
-                {groupPackArtifacts(pack.references).map((section) => (
-                  <div key={section.kind}>
-                    <p className="baseline-pack-kicker" style={{ padding: "0.75rem 0.75rem 0" }}>
+                {groupPackArtifacts(pack.references).map((section) => {
+                  const sectionCatalog = isCatalogPackArtifact(section.kind);
+                  const sectionIds = sectionCatalog
+                    ? section.items.map((reference) => `ref:${reference.sourceId}:${reference.id}`)
+                    : [];
+                  const sectionSelected = sectionIds.filter((id) => selection.checkedIds.has(id)).length;
+                  const sectionAllSelected =
+                    sectionIds.length > 0 && sectionSelected === sectionIds.length;
+                  return (
+                  <div key={section.kind} className="baseline-pack-section">
+                    <p className="baseline-pack-kicker baseline-pack-section-label">
                       {section.label}
                     </p>
                     <table className="axis-table">
                       <thead>
                         <tr>
+                          {sectionCatalog ? (
+                            <th className="axis-table-check">
+                              <SelectCheckbox
+                                checked={sectionAllSelected}
+                                indeterminate={sectionSelected > 0 && !sectionAllSelected}
+                                label={`Select all ${section.label}`}
+                                onChange={() => selection.setMany(sectionIds, !sectionAllSelected)}
+                              />
+                            </th>
+                          ) : null}
                           <th>Name</th>
                           <th>Version</th>
                           <th>Modified</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {section.items.map((reference) => (
+                        {section.items.map((reference) => {
+                          const rowId = `ref:${reference.sourceId}:${reference.id}`;
+                          return (
                           <tr
                             key={`${reference.sourceId}:${reference.id}`}
                             className="row-link"
-                            onClick={() => onSelect(`ref:${reference.sourceId}:${reference.id}`)}
+                            onClick={() => onSelect(rowId)}
                           >
+                            {sectionCatalog ? (
+                              <td className="axis-table-check">
+                                <SelectCheckbox
+                                  checked={selection.checkedIds.has(rowId)}
+                                  label={`Select ${reference.name}`}
+                                  onChange={() => selection.toggle(rowId)}
+                                />
+                              </td>
+                            ) : null}
                             <td>{reference.name}</td>
                             <td className="muted">{reference.version ?? "—"}</td>
                             <td className="muted">
@@ -2985,16 +3270,24 @@ function BaselinesWorkbench({
                                   : "—"}
                             </td>
                           </tr>
-                        ))}
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
-                ))}
+                  );
+                })}
                 {!e8Loading && !pack.error && pack.references.length === 0 ? (
-                  <p className="muted" style={{ padding: "1rem" }}>No items were returned from this pack.</p>
+                  <p className="muted baseline-pack-empty">
+                    {templates ? "No items were returned from this template store." : "No baselines were returned from ASD Blueprint."}
+                  </p>
+                ) : null}
+                </>
                 ) : null}
               </section>
-            ))}
+              );
+            })}
+            </div>
           </div>
         )
       }
@@ -3003,7 +3296,7 @@ function BaselinesWorkbench({
           <div className="stack">
             <PageHeader
               eyebrow={selectedReference.sourceName}
-              title={selectedReference.name}
+              title={exportResolved?.name ?? selectedReference.name}
               actions={
                 <div className="device-actions">
                   {isCatalogPackArtifact(selectedReference.artifactKind) ? (
@@ -3021,78 +3314,403 @@ function BaselinesWorkbench({
                 </div>
               }
             />
-            <section className="axis-panel" style={{ padding: "0.85rem" }}>
-              <dl className="meta-grid">
-                <div>
-                  <dt>Version</dt>
-                  <dd>{selectedReference.version ?? "—"}</dd>
-                </div>
-                <div>
-                  <dt>Repository modified</dt>
-                  <dd>
-                    {selectedReference.repositoryLastModifiedDateTime
-                      ? formatRelative(selectedReference.repositoryLastModifiedDateTime)
-                      : selectedReference.policyExportedDateTime
-                        ? `Fallback: ${formatRelative(selectedReference.policyExportedDateTime)}`
-                        : "—"}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Policy exported</dt>
-                  <dd>{formatRelative(selectedReference.policyExportedDateTime)}</dd>
-                </div>
-                <div>
-                  <dt>Category</dt>
-                  <dd>{packArtifactKindLabel(selectedReference.artifactKind)}</dd>
-                </div>
-                <div>
-                  <dt>Pack</dt>
-                  <dd>{selectedReference.sourceName}</dd>
-                </div>
-              </dl>
-              <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.75rem" }}>
-                <button type="button" className="axis-btn" onClick={() => void openExternalUrl(selectedReference.sourceUrl)}>
-                  {selectedReference.downloadUrl.startsWith("https://") ? "Open source entry" : "Open file"}
-                </button>
-                <button type="button" className="axis-btn" onClick={() => void openExternalUrl(selectedReference.downloadUrl)}>
-                  {selectedReference.downloadUrl.startsWith("https://") ? "Open raw export" : "Open export file"}
-                </button>
-              </div>
-            </section>
-            {isCatalogPackArtifact(selectedReference.artifactKind) ? (
-              <IncompleteBanner>
-                Import creates a new Settings Catalog policy. Review its settings and assignments
-                before deployment.
-              </IncompleteBanner>
+            {selectedIsPolicyExport ? (
+              <PolicyExportInspect
+                reference={selectedReference}
+                sources={sourceEntries}
+                storeLabel={templates ? "Store" : "Baseline"}
+                formatRelative={formatRelative}
+                openExternalUrl={openExternalUrl}
+                onResolved={onExportResolved}
+                banner={
+                  isCatalogPackArtifact(selectedReference.artifactKind) ? (
+                    <IncompleteBanner>
+                      Import creates a new Settings Catalog policy. Review its settings and assignments
+                      before deployment.
+                    </IncompleteBanner>
+                  ) : (
+                    <IncompleteBanner>
+                      {templates
+                        ? "This item is listed from a template store. Axis does not import it as a Settings Catalog policy."
+                        : "This ASD baseline is listed for compare and one-policy import."}
+                    </IncompleteBanner>
+                  )
+                }
+              />
             ) : (
-              <IncompleteBanner>
-                This item is listed from the pack as an external source. Axis does not import it as a
-                Settings Catalog policy.
-              </IncompleteBanner>
+              <>
+                <section className="axis-panel baseline-inspect-meta">
+                  <dl className="meta-grid">
+                    <div>
+                      <dt>Version</dt>
+                      <dd>{selectedReference.version ?? "—"}</dd>
+                    </div>
+                    <div>
+                      <dt>Repository modified</dt>
+                      <dd>
+                        {selectedReference.repositoryLastModifiedDateTime
+                          ? formatRelative(selectedReference.repositoryLastModifiedDateTime)
+                          : selectedReference.policyExportedDateTime
+                            ? `Fallback: ${formatRelative(selectedReference.policyExportedDateTime)}`
+                            : "—"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Policy exported</dt>
+                      <dd>{formatRelative(selectedReference.policyExportedDateTime)}</dd>
+                    </div>
+                    <div>
+                      <dt>Category</dt>
+                      <dd>{packArtifactKindLabel(selectedReference.artifactKind)}</dd>
+                    </div>
+                    <div>
+                      <dt>{templates ? "Store" : "Baseline"}</dt>
+                      <dd>{selectedReference.sourceName}</dd>
+                    </div>
+                  </dl>
+                  <div className="baseline-inspect-actions">
+                    <button type="button" className="axis-btn" onClick={() => void openExternalUrl(selectedReference.sourceUrl)}>
+                      {selectedReference.downloadUrl.startsWith("https://") ? "Open source entry" : "Open file"}
+                    </button>
+                    <button type="button" className="axis-btn" onClick={() => void openExternalUrl(selectedReference.downloadUrl)}>
+                      {selectedReference.downloadUrl.startsWith("https://") ? "Open raw export" : "Open export file"}
+                    </button>
+                  </div>
+                </section>
+                <IncompleteBanner>
+                  {templates
+                    ? "This item is listed from a template store. Axis does not import it as a Settings Catalog policy."
+                    : "This ASD baseline is listed for compare and one-policy import."}
+                </IncompleteBanner>
+              </>
             )}
             {importOpen && isCatalogPackArtifact(selectedReference.artifactKind) ? (
               <BaselineImportDialog
                 reference={selectedReference}
                 sources={sourceEntries}
+                kicker={templates ? "Template import" : "Baseline import"}
                 onClose={() => setImportOpen(false)}
               />
             ) : null}
           </div>
         ) : (
-          <InspectorEmpty label="Select an item under a pack to inspect it here. Close clears the selection and stays on Baselines." />
+          <InspectorEmpty
+            label={
+              templates
+                ? "Select an item under a template store to inspect it here."
+                : "Select a baseline to inspect it here."
+            }
+          />
         )
       }
     />
+    {bulkImportOpen && bulkImportTargets.length > 0 ? (
+      <BaselineBulkImportDialog
+        references={bulkImportTargets}
+        sources={sourceEntries}
+        kicker={templates ? "Template bulk import" : "Baseline bulk import"}
+        onClose={() => {
+          setBulkImportOpen(false);
+          setBulkImportTargets([]);
+        }}
+        onDone={() => {
+          setBulkImportOpen(false);
+          setBulkImportTargets([]);
+          selection.clear();
+        }}
+      />
+    ) : null}
+    {bulkMergeOpen && bulkMergeTargets.length > 1 ? (
+      <BaselineMergeDialog
+        references={bulkMergeTargets}
+        sources={sourceEntries}
+        kicker={templates ? "Template combine and merge" : "Baseline combine and merge"}
+        onClose={() => {
+          setBulkMergeOpen(false);
+          setBulkMergeTargets([]);
+        }}
+        onDone={() => {
+          setBulkMergeOpen(false);
+          setBulkMergeTargets([]);
+          selection.clear();
+        }}
+      />
+    ) : null}
+    {editingSourceKey != null ? (
+      <TemplateSourceDialog
+        sourceKey={editingSourceKey}
+        sourceEntries={sourceEntries}
+        onChange={setSourceEntries}
+        onClose={() => setEditingSourceKey(null)}
+      />
+    ) : null}
+    {deletingSourceKey != null ? (
+      <ConfirmRemoveSourceDialog
+        sourceKey={deletingSourceKey}
+        sourceEntries={sourceEntries}
+        onConfirm={() => {
+          removeSource(deletingSourceKey);
+          setDeletingSourceKey(null);
+        }}
+        onCancel={() => setDeletingSourceKey(null)}
+      />
+    ) : null}
+    </>
+  );
+}
+
+function ConfirmRemoveSourceDialog({
+  sourceKey,
+  sourceEntries,
+  onConfirm,
+  onCancel,
+}: {
+  sourceKey: string;
+  sourceEntries: BaselineReferenceSourceInput[];
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const entry = sourceEntries.find(
+    (row, rowIndex) => (row.id ?? `source-${rowIndex}`) === sourceKey,
+  );
+  if (!entry) return null;
+  return (
+    <div
+      className="axis-modal-backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onCancel();
+      }}
+    >
+      <div className="axis-modal" role="alertdialog" aria-modal="true" aria-labelledby="remove-source-title">
+        <h2 id="remove-source-title">Remove {packTitle(entry)}?</h2>
+        <p className="muted">
+          This store is removed from Axis only. {" "}
+          {isLocalSource(entry)
+            ? "The folder on this machine is not touched."
+            : "The repository is not touched."}
+        </p>
+        <div className="axis-modal-actions">
+          <button type="button" className="axis-btn" onClick={onCancel}>
+            Cancel
+          </button>
+          <button type="button" className="axis-btn axis-btn-danger" onClick={onConfirm}>
+            Remove store
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TemplateSourceDialog({
+  sourceKey,
+  sourceEntries,
+  onChange,
+  onClose,
+}: {
+  sourceKey: string;
+  sourceEntries: BaselineReferenceSourceInput[];
+  onChange: (next: BaselineReferenceSourceInput[]) => void;
+  onClose: () => void;
+}) {
+  const index = sourceEntries.findIndex(
+    (entry, rowIndex) => (entry.id ?? `source-${rowIndex}`) === sourceKey,
+  );
+  const entry = index >= 0 ? sourceEntries[index] : null;
+
+  if (!entry) return null;
+
+  const storeKind = resolveStoreKind(entry) ?? "axisTemplated";
+  const patch = (partial: Partial<BaselineReferenceSourceInput>) => {
+    onChange(
+      sourceEntries.map((row, rowIndex) =>
+        rowIndex === index ? { ...row, ...partial } : row,
+      ),
+    );
+  };
+  const setStoreKind = (kind: TemplateStoreKind) => {
+    onChange(
+      sourceEntries.map((row, rowIndex) =>
+        rowIndex === index
+          ? sanitizeSource({ ...row, storeKind: kind, path: kind === "axisTemplated" ? "" : row.path })
+          : row,
+      ),
+    );
+  };
+
+  return (
+    <div
+      className="axis-modal-backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div className="axis-modal" role="dialog" aria-modal="true" aria-labelledby="template-source-title">
+        <div className="assignment-dialog-head">
+          <div>
+            <p className="axis-kicker">Template store</p>
+            <h2 id="template-source-title">{packTitle(entry)}</h2>
+          </div>
+        </div>
+
+        <div className="baseline-source-dialog-kind">
+          <div className="axis-seg" role="group" aria-label="Store kind">
+            <button
+              type="button"
+              className={`axis-seg-btn${storeKind === "axisTemplated" ? " is-active" : ""}`}
+              onClick={() => setStoreKind("axisTemplated")}
+            >
+              Axis Templated
+            </button>
+            <button
+              type="button"
+              className={`axis-seg-btn${storeKind === "flatJson" ? " is-active" : ""}`}
+              onClick={() => setStoreKind("flatJson")}
+            >
+              Flat JSON
+            </button>
+          </div>
+          <p className="muted baseline-source-kind-hint">
+            {storeKind === "axisTemplated"
+              ? "Store root containing axis-pack.json. Policy sets select files; they are not baselines."
+              : "Folder of policy JSON files. A GitHub tree path or local subfolder is the catalog dump."}
+          </p>
+        </div>
+
+        <div className="baseline-source-fields">
+          {isLocalSource(entry) ? (
+            <>
+              <label className="device-field">
+                Name
+                <input
+                  className="axis-input"
+                  value={entry.name ?? ""}
+                  placeholder="Template name (optional)"
+                  onChange={(event) => patch({ name: event.target.value })}
+                />
+              </label>
+              <label className="device-field">
+                Folder
+                <span className="baseline-source-path">
+                  <input
+                    className="axis-input"
+                    value={entry.localPath ?? ""}
+                    placeholder="Folder path"
+                    onChange={(event) =>
+                      patch({ kind: "local", localPath: event.target.value })
+                    }
+                  />
+                  <button
+                    type="button"
+                    className="axis-btn"
+                    onClick={() => {
+                      void pickLocalPackFolder().then((folder) => {
+                        if (!folder) return;
+                        patch({ kind: "local", localPath: folder });
+                      });
+                    }}
+                  >
+                    Browse
+                  </button>
+                </span>
+              </label>
+              {storeKind === "flatJson" ? (
+                <label className="device-field">
+                  Subfolder
+                  <input
+                    className="axis-input"
+                    value={entry.path}
+                    placeholder="Optional subfolder (empty scans this folder)"
+                    onChange={(event) => patch({ path: event.target.value, storeKind: "flatJson" })}
+                  />
+                </label>
+              ) : null}
+            </>
+          ) : (
+            <>
+              <label className="device-field">
+                Repository
+                <input
+                  className="axis-input"
+                  value={entry.url ?? ""}
+                  placeholder="https://github.com/owner/repo"
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    onChange(
+                      sourceEntries.map((row, rowIndex) =>
+                        rowIndex === index ? applyGitHubRepoInput(row, value) : row,
+                      ),
+                    );
+                  }}
+                />
+              </label>
+              {storeKind === "flatJson" ? (
+                <label className="device-field">
+                  Folder path
+                  <input
+                    className="axis-input"
+                    value={entry.path}
+                    placeholder="Folder path in the repository"
+                    onChange={(event) => patch({ path: event.target.value, storeKind: "flatJson" })}
+                  />
+                </label>
+              ) : null}
+              <label className="axis-check baseline-source-private">
+                <input
+                  type="checkbox"
+                  checked={Boolean(entry.private)}
+                  onChange={(event) => {
+                    const isPrivate = event.target.checked;
+                    patch({ private: isPrivate, token: isPrivate ? entry.token : undefined });
+                  }}
+                />
+                Private repository
+              </label>
+              {entry.private ? (
+                <>
+                  <input
+                    className="axis-input"
+                    type="password"
+                    autoComplete="off"
+                    value={entry.token ?? ""}
+                    placeholder="Fine-grained PAT for this repository"
+                    onChange={(event) => patch({ token: event.target.value })}
+                  />
+                  <GitHubLeastPrivilegePatHelp />
+                </>
+              ) : null}
+            </>
+          )}
+        </div>
+
+        <div className="axis-modal-actions">
+          <button
+            type="button"
+            className="axis-link"
+            disabled={!isSourceReady(entry)}
+            onClick={() => void openExternalUrl(sourceOpenUrl(entry))}
+            style={{ marginRight: "auto" }}
+          >
+            {isLocalSource(entry) ? "Open folder" : "Open repository"}
+          </button>
+          <button type="button" className="axis-btn axis-btn-primary" onClick={onClose}>
+            Done
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
 function BaselineImportDialog({
   reference,
   sources,
+  kicker,
   onClose,
 }: {
   reference: E8BaselineReference & { sourceId: string; sourceName: string };
   sources: BaselineReferenceSourceInput[];
+  kicker: string;
   onClose: () => void;
 }) {
   const [name, setName] = useState(reference.name);
@@ -3105,25 +3723,13 @@ function BaselineImportDialog({
 
   useEffect(() => {
     let cancelled = false;
-    void fetchBaselineExport(
-      reference.downloadUrl,
-      tokenForSource(sources, reference.sourceId),
-    )
-      .then((response) => {
+    void loadCatalogImportDraft(reference, sources)
+      .then((draft) => {
         if (cancelled) return;
-        if (response.error || response.document == null) {
-          throw new Error(response.error ?? "The baseline export was empty.");
-        }
-        const fileName = reference.downloadUrl.split("/").pop() ?? `${reference.name}.json`;
-        const policy = normalizeIntunePolicyExport(response.document, fileName);
-        const importedName =
-          (typeof policy.name === "string" && policy.name.trim()) ||
-          (typeof policy.displayName === "string" && policy.displayName.trim()) ||
-          reference.name;
-        setName(importedName);
-        setDescription(catalogDescriptionFromPolicy(policy));
-        setPlatform(catalogPlatformFromPolicy(policy));
-        setSettings(catalogSettingsFromPolicy(policy));
+        setName(draft.name);
+        setDescription(draft.description);
+        setPlatform(draft.platform);
+        setSettings(draft.settings);
       })
       .catch((err: unknown) => {
         if (!cancelled) {
@@ -3182,7 +3788,7 @@ function BaselineImportDialog({
       <div className="axis-modal object-action-pane" role="dialog" aria-modal="true">
         <div className="assignment-dialog-head">
           <div>
-            <p className="axis-kicker">Baseline import</p>
+            <p className="axis-kicker">{kicker}</p>
             <h2>{reference.name}</h2>
           </div>
           <button type="button" className="axis-btn" disabled={saving} onClick={onClose}>
@@ -3240,6 +3846,326 @@ function BaselineImportDialog({
               onClick={() => void importPolicy()}
             >
               {saving ? "Importing…" : "Import policy"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+type CatalogImportDraft = {
+  name: string;
+  description: string;
+  platform: "windows" | "macos";
+  settings: Record<string, unknown>[];
+};
+
+async function loadCatalogImportDraft(
+  reference: E8BaselineReference & { sourceId: string },
+  sources: BaselineReferenceSourceInput[],
+): Promise<CatalogImportDraft> {
+  const response = await fetchBaselineExport(
+    reference.downloadUrl,
+    tokenForSource(sources, reference.sourceId),
+  );
+  if (response.error || response.document == null) {
+    throw new Error(response.error ?? "The baseline export was empty.");
+  }
+  const fileName = reference.downloadUrl.split(/[\\/]/).pop() ?? `${reference.name}.json`;
+  const policy = normalizeIntunePolicyExport(response.document, fileName);
+  const settings = catalogSettingsFromPolicy(policy);
+  if (settings.length === 0) {
+    throw new Error("No Settings Catalog instances in this file.");
+  }
+  const importedName =
+    (typeof policy.name === "string" && policy.name.trim()) ||
+    (typeof policy.displayName === "string" && policy.displayName.trim()) ||
+    reference.name;
+  return {
+    name: importedName,
+    description: catalogDescriptionFromPolicy(policy),
+    platform: catalogPlatformFromPolicy(policy),
+    settings,
+  };
+}
+
+type BulkImportRow = {
+  key: string;
+  referenceName: string;
+  include: boolean;
+  name: string;
+  platform: "windows" | "macos";
+  settings: Record<string, unknown>[];
+  description: string;
+  error: string | null;
+  status: "loading" | "ready" | "error";
+};
+
+function BaselineBulkImportDialog({
+  references,
+  sources,
+  kicker,
+  onClose,
+  onDone,
+}: {
+  references: Array<E8BaselineReference & { sourceId: string; sourceName: string }>;
+  sources: BaselineReferenceSourceInput[];
+  kicker: string;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const referenceKey = references.map((reference) => `${reference.sourceId}:${reference.id}`).join("\0");
+  const [rows, setRows] = useState<BulkImportRow[]>(() =>
+    references.map((reference) => ({
+      key: `ref:${reference.sourceId}:${reference.id}`,
+      referenceName: reference.name,
+      include: true,
+      name: reference.name,
+      platform: "windows" as const,
+      settings: [],
+      description: "",
+      error: null,
+      status: "loading" as const,
+    })),
+  );
+  const [saving, setSaving] = useState(false);
+  const [progress, setProgress] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setRows(
+      references.map((reference) => ({
+        key: `ref:${reference.sourceId}:${reference.id}`,
+        referenceName: reference.name,
+        include: true,
+        name: reference.name,
+        platform: "windows" as const,
+        settings: [],
+        description: "",
+        error: null,
+        status: "loading" as const,
+      })),
+    );
+    void (async () => {
+      for (const reference of references) {
+        if (cancelled) return;
+        const key = `ref:${reference.sourceId}:${reference.id}`;
+        try {
+          const draft = await loadCatalogImportDraft(reference, sources);
+          if (cancelled) return;
+          setRows((current) =>
+            current.map((row) =>
+              row.key === key
+                ? {
+                    ...row,
+                    name: draft.name,
+                    description: draft.description,
+                    platform: draft.platform,
+                    settings: draft.settings,
+                    include: true,
+                    error: null,
+                    status: "ready",
+                  }
+                : row,
+            ),
+          );
+        } catch (err) {
+          if (cancelled) return;
+          setRows((current) =>
+            current.map((row) =>
+              row.key === key
+                ? {
+                    ...row,
+                    include: false,
+                    error: err instanceof Error ? err.message : String(err),
+                    status: "error",
+                  }
+                : row,
+            ),
+          );
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [referenceKey, sources]);
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape" && !saving) onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose, saving]);
+
+  const ready = rows.filter(
+    (row) => row.include && row.status === "ready" && row.name.trim() && row.settings.length > 0,
+  );
+  const stillLoading = rows.some((row) => row.status === "loading");
+
+  function patchRow(key: string, patch: Partial<BulkImportRow>) {
+    setRows((current) => current.map((row) => (row.key === key ? { ...row, ...patch } : row)));
+  }
+
+  async function importPolicies() {
+    if (ready.length === 0) return;
+    setSaving(true);
+    setError(null);
+    const created: Array<{ id: string; name: string }> = [];
+    const failures: string[] = [];
+    try {
+      for (const [index, row] of ready.entries()) {
+        setProgress(`Creating ${index + 1} of ${ready.length}…`);
+        const response = await createSettingsCatalogPolicy({
+          name: row.name.trim(),
+          description: row.description,
+          platform: row.platform,
+          settings: row.settings,
+        });
+        if (response.error || !response.policy) {
+          failures.push(`${row.name}: ${response.error ?? "Create failed."}`);
+          continue;
+        }
+        created.push(response.policy);
+      }
+      if (created.length === 0) {
+        setError(failures[0] ?? "Import failed.");
+        return;
+      }
+      if (failures.length > 0) {
+        setError(
+          `Imported ${created.length}. ${failures.length} issue${failures.length === 1 ? "" : "s"}: ${failures.slice(0, 4).join(" ")}`,
+        );
+        return;
+      }
+      onDone();
+      if (created.length === 1) {
+        navigate(
+          `/intune/policies/settings-catalog?platform=${ready[0]?.platform ?? "windows"}&policy=${encodeURIComponent(
+            created[0].id,
+          )}`,
+        );
+      } else {
+        navigate("/intune/policies/settings-catalog");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Import failed.");
+    } finally {
+      setSaving(false);
+      setProgress(null);
+    }
+  }
+
+  return (
+    <div
+      className="axis-modal-backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !saving) onClose();
+      }}
+    >
+      <div className="axis-modal axis-modal-wide" role="dialog" aria-modal="true">
+        <div className="assignment-dialog-head">
+          <div>
+            <p className="axis-kicker">{kicker}</p>
+            <h2>
+              {references.length} polic{references.length === 1 ? "y" : "ies"}
+            </h2>
+            <p className="muted" style={{ margin: "0.35rem 0 0", fontSize: "0.75rem" }}>
+              Each selected Settings Catalog export is normalized and created unassigned, same as a
+              single import.
+            </p>
+          </div>
+          <button type="button" className="axis-btn" disabled={saving} onClick={onClose}>
+            Close
+          </button>
+        </div>
+        {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
+        {progress ? <p className="muted">{progress}</p> : null}
+        {stillLoading ? <p className="muted">Downloading and validating exports…</p> : null}
+        <div className="object-action-fields" style={{ maxHeight: "40vh", overflow: "auto" }}>
+          <table className="axis-table">
+            <thead>
+              <tr>
+                <th>Import</th>
+                <th>Policy name</th>
+                <th>Platform</th>
+                <th>Settings</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.key}>
+                  <td>
+                    <input
+                      type="checkbox"
+                      checked={row.include && row.status === "ready"}
+                      disabled={saving || row.status !== "ready"}
+                      onChange={(event) => patchRow(row.key, { include: event.target.checked })}
+                      aria-label={`Import ${row.referenceName}`}
+                    />
+                  </td>
+                  <td>
+                    {row.status === "error" ? (
+                      <div>
+                        <div>{row.referenceName}</div>
+                        <p className="muted" style={{ margin: "0.2rem 0 0", color: "var(--axis-danger, #b42318)" }}>
+                          {row.error}
+                        </p>
+                      </div>
+                    ) : (
+                      <input
+                        className="axis-input"
+                        value={row.name}
+                        disabled={saving || row.status !== "ready"}
+                        onChange={(event) => patchRow(row.key, { name: event.target.value })}
+                      />
+                    )}
+                  </td>
+                  <td>
+                    <select
+                      className="axis-input"
+                      value={row.platform}
+                      disabled={saving || row.status !== "ready"}
+                      onChange={(event) =>
+                        patchRow(row.key, { platform: event.target.value as "windows" | "macos" })
+                      }
+                    >
+                      <option value="windows">Windows</option>
+                      <option value="macos">macOS</option>
+                    </select>
+                  </td>
+                  <td className="muted">
+                    {row.status === "loading"
+                      ? "…"
+                      : row.status === "error"
+                        ? "—"
+                        : String(row.settings.length)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="object-action-footer">
+          <p className="muted">
+            {ready.length} ready · created policies stay unassigned until you edit assignments.
+          </p>
+          <div className="device-actions">
+            <button type="button" className="axis-btn" disabled={saving} onClick={onClose}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="axis-btn axis-btn-primary"
+              disabled={saving || stillLoading || ready.length === 0}
+              onClick={() => void importPolicies()}
+            >
+              {saving
+                ? "Importing…"
+                : `Import ${ready.length} polic${ready.length === 1 ? "y" : "ies"}`}
             </button>
           </div>
         </div>

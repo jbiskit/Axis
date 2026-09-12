@@ -4,6 +4,7 @@ import {
   bundleFromCategoryMap,
   buildSettingInstance,
   collectCatalogDetailsFromPolicySettings,
+  collectConfiguredSettingIds,
   defaultDraftForSetting,
   draftFromSettingInstance,
   diffSettingDrafts,
@@ -102,10 +103,13 @@ export function PolicySettingsEditor({
   const [catalogById, setCatalogById] = useState<Record<string, CatalogSettingDetail>>({});
   const [stagedRemoves, setStagedRemoves] = useState<Record<string, StagedRemove>>({});
   const [confirmSave, setConfirmSave] = useState(false);
+  const [addFromSearch, setAddFromSearch] = useState(false);
+  const [showUnconfigured, setShowUnconfigured] = useState(false);
   useEffect(() => {
     setEditingId(null);
     setEdits({});
     setAdding(false);
+    setAddFromSearch(false);
     setQuery("");
     setResults([]);
     setError(null);
@@ -240,7 +244,21 @@ export function PolicySettingsEditor({
     }
     const dependents = bundled?.dependents ?? {};
     setAdding(false);
+    setAddFromSearch(false);
     upsertEdit(definitionId, detail, dependents, draftFromSettingInstance(instance, detail, dependents));
+  }
+
+  function addUnconfigured(definitionId: string) {
+    const bundled = bundleFromCategoryMap(definitionId, byId);
+    const detail = bundled?.detail ?? byId[definitionId];
+    if (!detail) {
+      setError("This setting’s catalog definition was not returned with the policy.");
+      return;
+    }
+    const dependents = bundled?.dependents ?? {};
+    setAdding(false);
+    setAddFromSearch(false);
+    upsertEdit(definitionId, detail, dependents, defaultDraftForSetting(detail, dependents));
   }
 
   async function openCatalogSetting(summary: CatalogSettingSummary) {
@@ -263,6 +281,7 @@ export function PolicySettingsEditor({
       const existingInstance = settings
         .map((row) => settingInstanceFromRow(row))
         .find((row) => row?.settingDefinitionId === summary.id);
+      setAddFromSearch(true);
       upsertEdit(
         summary.id,
         detail,
@@ -328,6 +347,7 @@ export function PolicySettingsEditor({
       setEdits({});
       setStagedRemoves({});
       setAdding(false);
+      setAddFromSearch(false);
       setConfirmSave(false);
       onSaved();
     } catch (err) {
@@ -342,10 +362,13 @@ export function PolicySettingsEditor({
     disabled: busy || pendingCount === 0,
     busy,
   });
-  const existingIds = new Set(
-    settings
-      .map((row) => settingInstanceFromRow(row)?.settingDefinitionId)
-      .filter((id): id is string => typeof id === "string"),
+  const existingIds = useMemo(() => collectConfiguredSettingIds(settings), [settings]);
+  const unconfigured = useMemo(
+    () =>
+      Object.values(byId).filter(
+        (detail) => !existingIds.has(detail.id) && !stagedRemoves[detail.id],
+      ),
+    [byId, existingIds, stagedRemoves],
   );
   const lastSettingTitle = "Intune requires at least one setting on a Settings Catalog policy.";
   const remainingConfigured = (extraRemoveId?: string) => {
@@ -360,13 +383,16 @@ export function PolicySettingsEditor({
   };
   const activeEdit = editingId ? edits[editingId] ?? null : null;
   const addingNewSetting = Boolean(
-    activeEdit && !existingIds.has(activeEdit.detail.id) && !stagedRemoves[activeEdit.detail.id],
+    addFromSearch &&
+      activeEdit &&
+      !existingIds.has(activeEdit.detail.id) &&
+      !stagedRemoves[activeEdit.detail.id],
   );
   const pendingAdds = Object.values(edits).filter(
     (edit) =>
       !existingIds.has(edit.detail.id) &&
       !stagedRemoves[edit.detail.id] &&
-      !(addingNewSetting && activeEdit?.detail.id === edit.detail.id),
+      edit.detail.id !== editingId,
   );
 
   return (
@@ -377,18 +403,25 @@ export function PolicySettingsEditor({
             ? `${pendingCount} unsaved change${pendingCount === 1 ? "" : "s"}. Save from the object header.`
             : freeform
               ? "Change a configured value, remove a setting, or search the catalog to add another setting to this policy."
-              : "Template-backed policy — existing values can be changed. Adding or removing catalog settings stays on a freeform policy."}
+              : "Template-backed policy — change a configured value, add a setting from this template, or mark one back as not configured."}
         </p>
-        {freeform ? (
+        <button
+          type="button"
+          className="axis-btn"
+          onClick={() => {
+            setAdding((open) => !open);
+            setError(null);
+          }}
+        >
+          {adding ? "Close search" : "Add setting"}
+        </button>
+        {unconfigured.length > 0 ? (
           <button
             type="button"
             className="axis-btn"
-            onClick={() => {
-              setAdding((open) => !open);
-              setError(null);
-            }}
+            onClick={() => setShowUnconfigured((open) => !open)}
           >
-            {adding ? "Close search" : "Add setting"}
+            {showUnconfigured ? "Hide not configured" : `Show not configured (${unconfigured.length})`}
           </button>
         ) : null}
       </div>
@@ -474,7 +507,7 @@ export function PolicySettingsEditor({
           ) : null}
         </section>
       ) : null}
-      {formatted.length > 0 || pendingAdds.length > 0 ? (
+      {formatted.length > 0 || pendingAdds.length > 0 || (showUnconfigured && unconfigured.length > 0) ? (
         <ul className="setting-instance-list">
           {pendingAdds.map((edit) => (
             <li key={`add:${edit.detail.id}`} className="setting-instance-row is-added">
@@ -529,7 +562,7 @@ export function PolicySettingsEditor({
             const rowEdit = rowRemoved ? undefined : edits[row.definitionId];
             const rowEditing = !rowRemoved && editingId === row.definitionId && Boolean(rowEdit);
             const rowDirty = Boolean(rowEdit && editIsDirty(rowEdit));
-            const canStageRemove = freeform && (rowRemoved || remainingConfigured(row.definitionId) >= 1);
+            const canStageRemove = rowRemoved || remainingConfigured(row.definitionId) >= 1;
             return (
               <li
                 key={row.key}
@@ -620,41 +653,41 @@ export function PolicySettingsEditor({
                         View only
                       </span>
                     ) : null}
-                    {freeform ? (
-                      <button
-                        type="button"
-                        className="axis-btn"
-                        disabled={busy || !canStageRemove}
-                        title={
-                          !canStageRemove
-                            ? lastSettingTitle
-                            : rowRemoved
-                              ? "Keep this setting on the policy"
-                              : "Stage removal; save from the object header"
+                    <button
+                      type="button"
+                      className="axis-btn"
+                      disabled={busy || !canStageRemove}
+                      title={
+                        !canStageRemove
+                          ? lastSettingTitle
+                          : rowRemoved
+                            ? "Keep this setting on the policy"
+                            : freeform
+                              ? "Stage removal; save from the object header"
+                              : "Mark back as not configured; save from the object header"
+                      }
+                      onClick={() => {
+                        if (rowRemoved) {
+                          setStagedRemoves((current) => {
+                            const next = { ...current };
+                            delete next[row.definitionId];
+                            return next;
+                          });
+                          return;
                         }
-                        onClick={() => {
-                          if (rowRemoved) {
-                            setStagedRemoves((current) => {
-                              const next = { ...current };
-                              delete next[row.definitionId];
-                              return next;
-                            });
-                            return;
-                          }
-                          revertEdit(row.definitionId);
-                          setStagedRemoves((current) => ({
-                            ...current,
-                            [row.definitionId]: {
-                              definitionId: row.definitionId,
-                              displayName: row.displayName,
-                              valueSummary: row.valueSummary,
-                            },
-                          }));
-                        }}
-                      >
-                        {rowRemoved ? "Undo" : "Remove"}
-                      </button>
-                    ) : null}
+                        revertEdit(row.definitionId);
+                        setStagedRemoves((current) => ({
+                          ...current,
+                          [row.definitionId]: {
+                            definitionId: row.definitionId,
+                            displayName: row.displayName,
+                            valueSummary: row.valueSummary,
+                          },
+                        }));
+                      }}
+                    >
+                      {rowRemoved ? "Undo" : freeform ? "Remove" : "Not configured"}
+                    </button>
                   </div>
                 </div>
                 {row.unsupportedEditor ? (
@@ -676,11 +709,96 @@ export function PolicySettingsEditor({
               </li>
             );
           })}
+          {showUnconfigured ? unconfigured.map((detail) => {
+            const rowEdit = edits[detail.id];
+            const rowEditing = editingId === detail.id && Boolean(rowEdit);
+            const rowDirty = Boolean(rowEdit && editIsDirty(rowEdit));
+            return (
+              <li
+                key={`unconfigured:${detail.id}`}
+                className={`setting-instance-row is-unconfigured${rowEditing ? " is-editing" : ""}${rowDirty ? " is-dirty" : ""}`}
+              >
+                <div className="setting-instance-head">
+                  <div className="setting-instance-title-block">
+                    <p className="setting-instance-name">{detail.displayName}</p>
+                    {detail.description ? <SettingDescription text={detail.description} /> : null}
+                  </div>
+                  <div className="setting-instance-value">
+                    {rowEditing && rowEdit ? (
+                      <SettingDraftEditor
+                        detail={rowEdit.detail}
+                        draft={rowEdit.draft}
+                        dependents={rowEdit.dependents}
+                        onChange={(draft) => patchDraft(detail.id, draft)}
+                        compact
+                      />
+                    ) : rowDirty && rowEdit ? (
+                      <SettingValueDiff
+                        added
+                        lines={diffSettingDrafts(
+                          rowEdit.detail,
+                          rowEdit.original,
+                          rowEdit.draft,
+                          rowEdit.dependents,
+                          { added: true },
+                        )}
+                      />
+                    ) : (
+                      <span className="muted">Not configured</span>
+                    )}
+                    {rowEditing && rowDirty && rowEdit ? (
+                      <SettingValueDiff
+                        added
+                        lines={diffSettingDrafts(
+                          rowEdit.detail,
+                          rowEdit.original,
+                          rowEdit.draft,
+                          rowEdit.dependents,
+                          { added: true },
+                        )}
+                      />
+                    ) : null}
+                  </div>
+                  <div className="setting-instance-actions">
+                    {rowEditing ? (
+                      <button type="button" className="axis-btn" onClick={() => revertEdit(detail.id)}>
+                        Revert
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="axis-btn"
+                        disabled={busy}
+                        onClick={() => addUnconfigured(detail.id)}
+                      >
+                        Add
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {rowEditing && rowEdit && settingDraftHasDependents(rowEdit.draft) ? (
+                  <div className="policy-setting-inline-editor">
+                    <SettingDraftEditor
+                      detail={rowEdit.detail}
+                      draft={rowEdit.draft}
+                      dependents={rowEdit.dependents}
+                      onChange={(draft) => patchDraft(detail.id, draft)}
+                      dependentsOnly
+                    />
+                  </div>
+                ) : null}
+              </li>
+            );
+          }) : null}
         </ul>
+      ) : unconfigured.length > 0 ? (
+        <p className="muted">
+          No settings are configured on this policy yet. Show not configured settings to add from the
+          template, or use Add setting.
+        </p>
       ) : settings.length === 0 ? (
         <p className="muted">
-          No settings on this policy yet.
-          {freeform ? " Use Add setting to search the catalog and save here." : ""}
+          No settings on this policy yet. Use Add setting to search the catalog and save here.
         </p>
       ) : (
         <CatalogSettingInstances settings={settings} />

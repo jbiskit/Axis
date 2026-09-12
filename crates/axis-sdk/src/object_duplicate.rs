@@ -111,7 +111,7 @@ fn string_field(object: &Value, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn strip_keys(value: &Value, keys: &[&str]) -> Value {
+pub fn strip_keys(value: &Value, keys: &[&str]) -> Value {
     match value {
         Value::Object(map) => {
             let mut next = Map::new();
@@ -128,7 +128,7 @@ fn strip_keys(value: &Value, keys: &[&str]) -> Value {
     }
 }
 
-fn strip_setting_definitions(value: &mut Value) {
+pub fn strip_setting_definitions(value: &mut Value) {
     match value {
         Value::Object(map) => {
             map.remove("settingDefinitions");

@@ -498,10 +498,13 @@ export type E8BaselineReferencesResponse = {
   error: string | null;
 };
 
+/** Axis Templated pack root (`axis-pack.json`) or an explicit folder of policy JSON. */
+export type TemplateStoreKind = "axisTemplated" | "flatJson";
+
 export type BaselineReferenceSourceInput = {
   id?: string;
   name?: string;
-  /** `github` (default) or `local`. */
+  /** `github` (default) or `local`. Transport, not a baseline type. */
   kind?: "github" | "local";
   /** Absolute folder on this machine when `kind` is `local`. */
   localPath?: string;
@@ -511,6 +514,11 @@ export type BaselineReferenceSourceInput = {
   repo: string;
   gitRef: string;
   path: string;
+  /**
+   * How to read a user template store. Built-in ASD ignores this.
+   * `axisTemplated` uses an empty path and `axis-pack.json`. `flatJson` scans `path` (or the local folder).
+   */
+  storeKind?: TemplateStoreKind;
   /** When true, Axis sends the stored PAT with GitHub requests. */
   private?: boolean;
   /** GitHub PAT for this private repo. Stored locally on this machine only. Prefer a fine-grained token limited to the repository. */
@@ -540,10 +548,36 @@ export type PackExportProgress = {
   message: string;
 };
 
+export type EnvironmentReportSelection = {
+  summary: boolean;
+  devices: boolean;
+  groups: boolean;
+  policies: boolean;
+  updates: boolean;
+  apps: boolean;
+  enrollment: boolean;
+  scripts: boolean;
+  crossPlatform: boolean;
+  windows: boolean;
+  macos: boolean;
+  ios: boolean;
+  android: boolean;
+  /** `null`/`undefined` = all policies; array = only those IDs (empty = none). */
+  policyIds?: string[] | null;
+  /** `null`/`undefined` = all apps; array = only those IDs (empty = none). */
+  appIds?: string[] | null;
+  /** `null`/`undefined` = all scripts; array = only those IDs (empty = none). */
+  scriptIds?: string[] | null;
+  /** `null`/`undefined` = all enrollment objects; array = only those IDs (empty = none). */
+  enrollmentIds?: string[] | null;
+};
+
 export type EnvironmentReport = {
   html: string;
+  markdown: string;
   organizationName?: string | null;
   suggestedName: string;
+  suggestedMarkdownName: string;
   objectCount: number;
   generatedAt: string;
   warnings: string[];
@@ -916,6 +950,7 @@ export type NavIconId =
   | "enrollment"
   | "settings"
   | "baselines"
+  | "templates"
   | "apps"
   | "apps-setup"
   | "policies"

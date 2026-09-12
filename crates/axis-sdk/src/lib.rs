@@ -80,20 +80,22 @@ pub use devices::fetch_managed_device_list;
 pub use e8_baselines::*;
 pub use environment_report::{
     generate_environment_report, EnvironmentReport, EnvironmentReportProgress,
+    EnvironmentReportSelection,
 };
 pub use glance::{fetch_tenant_glance, list_intune_audit_events};
 pub use graph::GraphError;
 pub use inventory::*;
 pub use object_detail::{
-    create_tenant_script, fetch_graph_object_detail, update_script_content, CreateTenantScriptInput,
-    GraphObjectDetail, UpdateScriptContentInput,
+    create_tenant_script, fetch_configuration_policy_template, fetch_graph_object_detail,
+    update_script_content, CreateTenantScriptInput, GraphObjectDetail, UpdateScriptContentInput,
 };
 pub use object_metadata::{
     can_delete_graph_object, can_update_object_metadata, delete_graph_object,
     update_object_metadata, UpdateObjectMetadataInput, UpdatedObjectMetadata,
 };
 pub use object_duplicate::{
-    can_duplicate_kind, duplicate_graph_object, copy_display_name, DuplicatedObject,
+    can_duplicate_kind, duplicate_graph_object, copy_display_name, strip_keys,
+    strip_setting_definitions, DuplicatedObject,
 };
 pub use pack_export::{
     dest_dir_from_save_as, export_selected_graph_objects, export_tenant_pack, pretty_json,

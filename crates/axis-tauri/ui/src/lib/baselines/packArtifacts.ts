@@ -63,7 +63,7 @@ function contentLabel(content: string): string {
       return "Enrolment · Autopilot";
     case PACK_BASELINE_KIND:
     case "baseline-checks":
-      return "Baselines";
+      return "Policy sets";
     case PACK_CATALOG_KIND:
       return "Policies";
     default:
@@ -82,9 +82,20 @@ export function isCatalogPackArtifact(kind: string | undefined): boolean {
   return packContentKind(kind) === PACK_CATALOG_KIND;
 }
 
+/** Catalog policies and Endpoint Security exports that carry Settings Catalog `settings[]`. */
+export function isPolicySettingsExportArtifact(kind: string | undefined): boolean {
+  const content = packContentKind(kind);
+  return content === PACK_CATALOG_KIND || content === "endpoint-security";
+}
+
 export function isBaselinePackArtifact(kind: string | undefined): boolean {
   const content = packContentKind(kind);
   return content === PACK_BASELINE_KIND || content === "baseline-checks";
+}
+
+/** `baselines/*.json` includes lists are policy sets, not ASD baselines. */
+export function isPolicySetPackArtifact(kind: string | undefined): boolean {
+  return isBaselinePackArtifact(kind);
 }
 
 export function groupPackArtifacts<T extends { artifactKind?: string }>(items: T[]): Array<{

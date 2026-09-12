@@ -1,4 +1,6 @@
-import type { BaselineReferenceSourceInput } from "../../types/inventory";
+import type { BaselineReferenceSourceInput, TemplateStoreKind } from "../../types/inventory";
+
+export type { TemplateStoreKind };
 
 export const SOURCE_STORAGE_KEY = "axis-baseline-reference-sources-v1";
 export const BUILTIN_E8_SOURCE_ID = "e8-github";
@@ -32,6 +34,40 @@ export function isLocalSource(source: {
   return (source.kind ?? "").toLowerCase() === "local" || Boolean(source.localPath?.trim());
 }
 
+export function isTemplateStoreKind(value: string | undefined): value is TemplateStoreKind {
+  return value === "axisTemplated" || value === "flatJson";
+}
+
+/** User template stores only. Built-in ASD is not a template. Missing values follow the old path rule. */
+export function resolveStoreKind(source: {
+  id?: string;
+  storeKind?: string;
+  path?: string;
+}): TemplateStoreKind | undefined {
+  if (isBuiltinSource(source)) return undefined;
+  if (isTemplateStoreKind(source.storeKind)) return source.storeKind;
+  return source.path?.trim() ? "flatJson" : "axisTemplated";
+}
+
+export function storeKindLabel(kind: TemplateStoreKind | undefined): string {
+  if (kind === "flatJson") return "Flat JSON";
+  if (kind === "axisTemplated") return "Axis Templated";
+  return "";
+}
+
+export function templateKicker(source: {
+  id?: string;
+  kind?: string;
+  localPath?: string;
+  storeKind?: string;
+  path?: string;
+}): string {
+  if (isBuiltinSource(source)) return "Built-in";
+  const transport = isLocalSource(source) ? "Local folder" : "GitHub";
+  const kind = storeKindLabel(resolveStoreKind(source));
+  return kind ? `${transport} · ${kind}` : transport;
+}
+
 export function packTitle(source: {
   id?: string;
   name?: string;
@@ -46,10 +82,10 @@ export function packTitle(source: {
   if (isLocalSource(source)) {
     const folder = source.localPath?.trim().replace(/[\\/]+$/, "");
     const parts = folder?.split(/[\\/]/).filter(Boolean) ?? [];
-    return parts[parts.length - 1] || "Local pack";
+    return parts[parts.length - 1] || "Local template";
   }
   if (source.owner?.trim() && source.repo?.trim()) return `${source.owner}/${source.repo}`;
-  return "Custom pack";
+  return "Template";
 }
 
 export function ensureBuiltinSources(sources: BaselineReferenceSourceInput[]): BaselineReferenceSourceInput[] {
@@ -70,6 +106,7 @@ export function ensureBuiltinSources(sources: BaselineReferenceSourceInput[]): B
       token: undefined,
       kind: "github",
       localPath: undefined,
+      storeKind: undefined,
     },
     ...rest,
   ];
@@ -147,12 +184,19 @@ export function applyGitHubRepoInput(
   const next: BaselineReferenceSourceInput = { ...source, url: input };
   if (!parsed) return next;
   const sameRepo = source.owner === parsed.owner && source.repo === parsed.repo;
+  const path = parsed.path !== undefined ? parsed.path : sameRepo ? source.path : "";
+  const explicitPath = Boolean(path.trim());
   return {
     ...next,
     owner: parsed.owner,
     repo: parsed.repo,
     gitRef: parsed.gitRef?.trim() || (sameRepo ? source.gitRef || "main" : "main"),
-    path: parsed.path !== undefined ? parsed.path : sameRepo ? source.path : "",
+    path,
+    storeKind: explicitPath
+      ? "flatJson"
+      : sameRepo && isTemplateStoreKind(source.storeKind)
+        ? source.storeKind
+        : "axisTemplated",
     name: source.name?.trim() && sameRepo ? source.name : `${parsed.owner}/${parsed.repo}`,
   };
 }
@@ -166,7 +210,11 @@ export function isSourceReady(source: BaselineReferenceSourceInput): boolean {
 export function sanitizeSource(entry: BaselineReferenceSourceInput): BaselineReferenceSourceInput {
   if (isLocalSource(entry) && !isBuiltinSource(entry)) {
     const localPath = (entry.localPath ?? "").trim();
-    const path = (entry.path ?? "").trim().replace(/^[/\\]+|[/\\]+$/g, "").replace(/\\/g, "/");
+    const storeKind = resolveStoreKind(entry) ?? "axisTemplated";
+    const path =
+      storeKind === "axisTemplated"
+        ? ""
+        : (entry.path ?? "").trim().replace(/^[/\\]+|[/\\]+$/g, "").replace(/\\/g, "/");
     const id =
       entry.id?.trim() ||
       (localPath ? `local:${localPath}:${path}` : undefined);
@@ -180,6 +228,7 @@ export function sanitizeSource(entry: BaselineReferenceSourceInput): BaselineRef
       repo: "",
       gitRef: "",
       path,
+      storeKind,
       private: false,
       token: undefined,
     };
@@ -188,10 +237,16 @@ export function sanitizeSource(entry: BaselineReferenceSourceInput): BaselineRef
   const owner = (parsed?.owner ?? entry.owner ?? "").trim();
   const repo = (parsed?.repo ?? entry.repo ?? "").trim().replace(/\.git$/i, "");
   const gitRef = (parsed?.gitRef ?? entry.gitRef ?? "").trim() || "main";
-  const path = (parsed?.path ?? entry.path ?? "").trim().replace(/^\/+|\/+$/g, "");
+  const parsedPath = (parsed?.path ?? entry.path ?? "").trim().replace(/^\/+|\/+$/g, "");
+  const builtin = isBuiltinSource(entry) || isBuiltinSource({ id: entry.id?.trim() });
+  const storeKind = builtin ? undefined : resolveStoreKind({ ...entry, path: parsedPath }) ?? "axisTemplated";
+  const path = storeKind === "axisTemplated" ? "" : parsedPath;
   const privateRepo = entry.private === true || Boolean(entry.token?.trim());
   const token = privateRepo ? entry.token?.trim() || undefined : undefined;
-  const url = (entry.url ?? "").trim() || (owner && repo ? githubDirectoryUrl({ owner, repo, gitRef, path }) : "");
+  const url =
+    storeKind === "axisTemplated" && owner && repo
+      ? githubDirectoryUrl({ owner, repo, gitRef, path: "" })
+      : (entry.url ?? "").trim() || (owner && repo ? githubDirectoryUrl({ owner, repo, gitRef, path }) : "");
   const id =
     entry.id?.trim() ||
     (owner && repo ? `repo:${owner}/${repo}:${gitRef}:${path}` : undefined);
@@ -205,6 +260,7 @@ export function sanitizeSource(entry: BaselineReferenceSourceInput): BaselineRef
     repo,
     gitRef,
     path,
+    storeKind,
     private: privateRepo,
     token,
   };
@@ -223,6 +279,7 @@ export function newCustomSource(): BaselineReferenceSourceInput {
     repo: "",
     gitRef: "main",
     path: "",
+    storeKind: "axisTemplated",
     private: false,
   };
 }
@@ -241,6 +298,7 @@ export function newLocalSource(): BaselineReferenceSourceInput {
     repo: "",
     gitRef: "",
     path: "",
+    storeKind: "axisTemplated",
     private: false,
   };
 }

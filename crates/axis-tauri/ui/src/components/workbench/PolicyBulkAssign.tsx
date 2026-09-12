@@ -40,6 +40,18 @@ export function useCheckedIds(visibleIds: readonly string[]) {
     setCheckedIds(new Set(visibleIds));
   }
 
+  /** Select or clear a subset without touching other checked ids. */
+  function setMany(ids: readonly string[], selected: boolean) {
+    setCheckedIds((current) => {
+      const next = new Set(current);
+      for (const id of ids) {
+        if (selected) next.add(id);
+        else next.delete(id);
+      }
+      return next;
+    });
+  }
+
   function clear() {
     setCheckedIds(clearSelectionIds());
     setBulkEditorOpen(false);
@@ -63,6 +75,7 @@ export function useCheckedIds(visibleIds: readonly string[]) {
     allSelected,
     toggle,
     toggleAll,
+    setMany,
     clear,
     openBulkEditor,
     closeBulkEditor,
@@ -107,6 +120,7 @@ export function BulkAssignBar({
   extra,
   editDisabled = false,
   editHint,
+  editLabel = "Update assignments",
 }: {
   count: number;
   onEdit: () => void;
@@ -114,6 +128,8 @@ export function BulkAssignBar({
   extra?: ReactNode;
   editDisabled?: boolean;
   editHint?: string;
+  /** Primary action label (defaults to assignment bulk-edit). */
+  editLabel?: string;
 }) {
   if (count === 0) return null;
   return (
@@ -130,7 +146,7 @@ export function BulkAssignBar({
           title={editHint}
           onClick={onEdit}
         >
-          Update assignments
+          {editLabel}
         </button>
         <button type="button" className="axis-btn" onClick={onClear}>
           Clear selection
