@@ -251,6 +251,7 @@ fn summary_from_created(
         is_assigned: Some(false),
         template_family: None,
         template_id: None,
+        template_display_name: None,
         odata_type: object
             .get("@odata.type")
             .and_then(Value::as_str)

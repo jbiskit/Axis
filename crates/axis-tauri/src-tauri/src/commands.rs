@@ -9,7 +9,7 @@ use axis_sdk::{
     fetch_applied_policy_settings, fetch_autopilot_profiles, fetch_baseline_export_json,
     fetch_baseline_reference_sources, fetch_compliance_policies,
     fetch_configuration_policies, fetch_device_configurations, fetch_e8_baseline_references,
-    fetch_configuration_policy_template,
+    fetch_configuration_policy_template, list_configuration_policy_templates,
     fetch_endpoint_security_intents, fetch_enrollment_configurations, fetch_graph_object_detail,
     fetch_group_policy_configurations, fetch_managed_device_detail, fetch_policy_setting_issues,
     fetch_mobile_apps, fetch_script_run_status, fetch_remediation_scripts, fetch_setting_conflict_details, fetch_store_apps,
@@ -28,6 +28,7 @@ use axis_sdk::{
     AppliedPolicySettingsLoad, AssignmentCapabilities, AssignmentDraft, AssignmentFilter, AutopilotDevice, AutopilotProfile,
     BaselineReferenceSourceInput, BaselineReferenceSourceLoad, BitLockerRecoveryKeySummary,
     CatalogCategory, CatalogIndexState, CatalogPolicySummary, CatalogSearchResult,
+    ConfigurationPolicyTemplateSummary,
     CompliancePolicyStatusReport,
     CategorySettingsLoad, CreateCompliancePolicyInput, CreateDirectoryGroupInput, CreateTenantScriptInput, CreatedCatalogPolicy, UpdateCompliancePolicyInput,
     DirectoryAuditEvent, DirectoryGroup, DuplicatedObject,
@@ -758,6 +759,36 @@ pub async fn fetch_configuration_policy_template_cmd(
     }
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigurationPolicyTemplatesListResponse {
+    templates: Vec<ConfigurationPolicyTemplateSummary>,
+    error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn list_configuration_policy_templates_cmd(
+    state: State<'_, AppState>,
+    template_family: String,
+) -> Result<ConfigurationPolicyTemplatesListResponse, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Ok(ConfigurationPolicyTemplatesListResponse {
+            templates: vec![],
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match list_configuration_policy_templates(&token, &template_family).await {
+        Ok(templates) => Ok(ConfigurationPolicyTemplatesListResponse {
+            templates,
+            error: None,
+        }),
+        Err(error) => Ok(ConfigurationPolicyTemplatesListResponse {
+            templates: vec![],
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
 #[tauri::command]
 pub async fn fetch_managed_device_detail_cmd(
     state: State<'_, AppState>,
@@ -1082,6 +1113,8 @@ pub async fn create_endpoint_security_policy_cmd(
     template_id: String,
     template_family: String,
     settings: Vec<Value>,
+    platforms: Option<String>,
+    technologies: Option<String>,
 ) -> Result<CreateCatalogPolicyResponse, String> {
     let catalog_platform = parse_catalog_platform(&platform);
     let Some(token) = session_token(&state).await? else {
@@ -1099,6 +1132,8 @@ pub async fn create_endpoint_security_policy_cmd(
         &template_id,
         Some(&template_family),
         &settings,
+        platforms.as_deref(),
+        technologies.as_deref(),
     )
     .await
     {

@@ -254,6 +254,7 @@ pub fn run() {
             commands::fetch_enrollment_configurations_cmd,
             commands::fetch_graph_object_detail_cmd,
             commands::fetch_configuration_policy_template_cmd,
+            commands::list_configuration_policy_templates_cmd,
             commands::fetch_managed_device_detail_cmd,
             commands::fetch_e8_baseline_references_cmd,
             commands::fetch_baseline_reference_sources_cmd,

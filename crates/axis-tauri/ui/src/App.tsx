@@ -2,11 +2,13 @@ import { AppShell } from "./components/AppShell";
 import { IntuneWorkspace } from "./components/IntuneWorkspace";
 import { LoginScreen } from "./components/LoginScreen";
 import { PopoutView } from "./components/PopoutView";
+import { UnsavedLeaveGuard } from "./components/workbench/UnsavedLeaveGuard";
 import { UpdateDialog } from "./components/UpdateDialog";
 import { useDevices } from "./hooks/useDevices";
 import { useHashRoute } from "./hooks/useHashRoute";
 import { useSession } from "./hooks/useSession";
 import { useUpdater } from "./hooks/useUpdater";
+import { requestLeave } from "./lib/inspectorDrafts";
 import { isPopoutRoute } from "./lib/popout";
 
 export default function App() {
@@ -49,6 +51,7 @@ export default function App() {
             <PopoutView kind={route.search.get("kind") ?? ""} id={route.search.get("id") ?? ""} />
           )}
         </main>
+        <UnsavedLeaveGuard />
       </div>
     );
   }
@@ -99,8 +102,10 @@ export default function App() {
         onAutoCheckChange={updater.setAutoCheck}
         onCheckForUpdate={() => void updater.checkNow()}
         onSignOut={() => {
-          window.location.hash = "/intune";
-          void session.logout();
+          requestLeave(() => {
+            window.location.hash = "/intune";
+            void session.logout();
+          });
         }}
       >
         <IntuneWorkspace
@@ -119,6 +124,7 @@ export default function App() {
           onRefreshDevices={() => void devices.reload()}
         />
       </AppShell>
+      <UnsavedLeaveGuard />
       {updateDialog}
     </>
   );

@@ -71,9 +71,13 @@ export function platformFilterOptionsFromList(
   return options;
 }
 
-export function matchesCatalogPolicyQuery(item: CatalogPolicySummary, query: string): boolean {
+export function matchesCatalogPolicyQuery(
+  item: CatalogPolicySummary,
+  query: string,
+  extraHaystack?: string,
+): boolean {
   return matchesListQuery(
-    `${item.name} ${item.description ?? ""} ${item.platforms ?? ""} ${item.templateFamily ?? ""} ${assignedSearchToken(item.isAssigned)}`,
+    `${item.name} ${item.description ?? ""} ${item.platforms ?? ""} ${item.templateFamily ?? ""} ${item.templateDisplayName ?? ""} ${item.templateId ?? ""} ${extraHaystack ?? ""} ${assignedSearchToken(item.isAssigned)}`,
     query,
   );
 }
@@ -83,11 +87,12 @@ export function matchesCatalogPolicyFilters(
   query: string,
   assigned: AssignedFilter,
   platform: string,
+  extraHaystack?: string,
 ): boolean {
   return (
     matchesAssignedFilter(item.isAssigned, assigned) &&
     matchesPlatformFilter(policyPlatformHaystack(item), platform) &&
-    matchesCatalogPolicyQuery(item, query)
+    matchesCatalogPolicyQuery(item, query, extraHaystack)
   );
 }
 
@@ -194,12 +199,14 @@ export type CatalogPolicySortKey =
   | "settings"
   | "assigned"
   | "family"
+  | "profile"
   | "modified";
 
 export function compareCatalogPolicy(
   a: CatalogPolicySummary,
   b: CatalogPolicySummary,
   key: CatalogPolicySortKey,
+  profileName?: (item: CatalogPolicySummary) => string,
 ): number {
   switch (key) {
     case "name":
@@ -212,6 +219,13 @@ export function compareCatalogPolicy(
       return compareBool(a.isAssigned, b.isAssigned) || compareText(a.name, b.name);
     case "family":
       return compareText(a.templateFamily ?? "none", b.templateFamily ?? "none") || compareText(a.name, b.name);
+    case "profile":
+      return (
+        compareText(
+          profileName?.(a) ?? a.templateDisplayName ?? a.templateFamily,
+          profileName?.(b) ?? b.templateDisplayName ?? b.templateFamily,
+        ) || compareText(a.name, b.name)
+      );
     case "modified":
       return compareIso(a.lastModifiedDateTime, b.lastModifiedDateTime) || compareText(a.name, b.name);
   }

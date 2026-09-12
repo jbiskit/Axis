@@ -9,10 +9,12 @@ import {
   defaultDraftForSetting,
   draftFromSettingInstance,
   diffSettingDrafts,
+  draftMatchesGraphDefault,
   draftValueSummary,
   groupInstanceChildren,
   instancesReadyForGraph,
   parseConfigurationPolicyTemplate,
+  settingDraftSaveError,
   type SettingValueDraft,
   type TemplateSettingNode,
 } from "../../lib/catalog";
@@ -21,31 +23,12 @@ import {
   fetchConfigurationPolicyTemplate,
   removeSettingsFromPolicy,
 } from "../../lib/tauri";
+import { SettingValueWithDefaultCue } from "./SettingDefaultCue";
 import { SettingDescription } from "./SettingDescription";
 import { SettingDraftEditor } from "./SettingDraftEditor";
 import { SettingValueDiff } from "./SettingValueDiff";
+import { settingEditIsDirty, usePersistedPolicySettingsDraft } from "../../lib/inspectorDrafts";
 import { useInspectorSaveAction } from "./inspectorSave";
-
-type PendingEdit = {
-  detail: CatalogSettingDetail;
-  dependents: Record<string, CatalogSettingDetail>;
-  draft: SettingValueDraft;
-  original: SettingValueDraft;
-};
-
-type StagedRemove = {
-  definitionId: string;
-  displayName: string;
-  valueSummary: string;
-};
-
-function draftsEqual(left: SettingValueDraft, right: SettingValueDraft): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
-}
-
-function editIsDirty(edit: PendingEdit): boolean {
-  return !draftsEqual(edit.draft, edit.original);
-}
 
 function templateIdFromObject(object: Record<string, unknown>): string | null {
   const reference =
@@ -77,9 +60,8 @@ export function TemplatePolicySettingsEditor({
   const templateId = templateIdFromObject(object);
   const [nodes, setNodes] = useState<TemplateSettingNode[] | null>(null);
   const [templateError, setTemplateError] = useState<string | null>(null);
-  const [edits, setEdits] = useState<Record<string, PendingEdit>>({});
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [stagedRemoves, setStagedRemoves] = useState<Record<string, StagedRemove>>({});
+  const { edits, setEdits, stagedRemoves, setStagedRemoves, editingId, setEditingId } =
+    usePersistedPolicySettingsDraft(policyId);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -87,9 +69,6 @@ export function TemplatePolicySettingsEditor({
   const [showUnconfigured, setShowUnconfigured] = useState(false);
 
   useEffect(() => {
-    setEdits({});
-    setEditingId(null);
-    setStagedRemoves({});
     setError(null);
     setMessage(null);
     setConfirmSave(false);
@@ -221,7 +200,7 @@ export function TemplatePolicySettingsEditor({
   }
 
   const dirtyEdits = useMemo(
-    () => Object.values(edits).filter((edit) => editIsDirty(edit) && !stagedRemoves[edit.detail.id]),
+    () => Object.values(edits).filter((edit) => settingEditIsDirty(edit) && !stagedRemoves[edit.detail.id]),
     [edits, stagedRemoves],
   );
   const removedList = useMemo(() => Object.values(stagedRemoves), [stagedRemoves]);
@@ -230,8 +209,15 @@ export function TemplatePolicySettingsEditor({
   const saveDrafts = useCallback(async () => {
     if (pendingCount === 0) return;
     const pending = Object.values(edits).filter(
-      (edit) => editIsDirty(edit) && !stagedRemoves[edit.detail.id],
+      (edit) => settingEditIsDirty(edit) && !stagedRemoves[edit.detail.id],
     );
+    const incomplete = pending
+      .map((edit) => settingDraftSaveError(edit.detail, edit.draft, edit.dependents))
+      .find((message) => message);
+    if (incomplete) {
+      setError(incomplete);
+      return;
+    }
     setBusy(true);
     setError(null);
     setMessage(null);
@@ -347,20 +333,40 @@ export function TemplatePolicySettingsEditor({
   ) {
     const rowEdit = edits[definitionId];
     const rowEditing = editingId === definitionId && Boolean(rowEdit);
-    const rowDirty = Boolean(rowEdit && editIsDirty(rowEdit));
+    const rowDirty = Boolean(rowEdit && settingEditIsDirty(rowEdit));
     const rowRemoved = Boolean(stagedRemoves[definitionId]);
     const configured = Boolean(instance);
+    const canEdit = Boolean(detail) && !rowRemoved;
     const displayName = detail?.displayName ?? definitionId;
     const description = detail?.description ?? detail?.helpText ?? undefined;
+    const configuredDraft =
+      instance && detail ? draftFromSettingInstance(instance, detail, {}) : undefined;
     const valueSummary = instance
-      ? detail
-        ? draftValueSummary(detail, draftFromSettingInstance(instance, detail, {}), {})
+      ? detail && configuredDraft
+        ? draftValueSummary(detail, configuredDraft, {})
         : "Configured"
       : "Not configured";
+    const showGraphDefault = Boolean(
+      instance && detail && configuredDraft && draftMatchesGraphDefault(detail, configuredDraft),
+    );
     return (
       <li
         key={`${isChild ? "child" : "setting"}:${definitionId}`}
-        className={`setting-instance-row${rowEditing ? " is-editing" : ""}${rowDirty ? " is-dirty" : ""}${rowRemoved ? " is-removed" : ""}${isChild ? " is-child" : ""}`}
+        className={`setting-instance-row${rowEditing ? " is-editing" : ""}${rowDirty ? " is-dirty" : ""}${rowRemoved ? " is-removed" : ""}${isChild ? " is-child" : ""}${canEdit ? " is-activatable" : ""}`}
+        title={canEdit ? "Double-click to edit" : undefined}
+        onMouseDown={(event) => {
+          if (canEdit && event.detail > 1) event.preventDefault();
+        }}
+        onDoubleClick={(event) => {
+          if (!canEdit) return;
+          if (
+            event.target instanceof Element &&
+            event.target.closest("button, a, input, textarea, select, label")
+          ) {
+            return;
+          }
+          openEdit(definitionId);
+        }}
       >
         <div className="setting-instance-head">
           <div className="setting-instance-title-block">
@@ -400,7 +406,9 @@ export function TemplatePolicySettingsEditor({
                 )}
               />
             ) : (
-              <span className={configured ? undefined : "muted"}>{valueSummary}</span>
+              <span className={configured ? undefined : "muted"}>
+                <SettingValueWithDefaultCue show={showGraphDefault}>{valueSummary}</SettingValueWithDefaultCue>
+              </span>
             )}
             {rowEditing && rowDirty && rowEdit ? (
               <SettingValueDiff

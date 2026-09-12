@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { persistComplianceDraft, readComplianceDraft } from "../../lib/inspectorDrafts";
 import {
   clearedValueForField,
   complianceSettingRows,
@@ -153,11 +154,14 @@ export function ComplianceSettingsView({
     return map;
   }, [rows]);
   const actions = useMemo(() => scheduledActionRows(extras), [extras]);
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [drafts, setDrafts] = useState<Record<string, string>>(
+    () => readComplianceDraft(policyId) ?? {},
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
+  const skipDraftPersist = useRef(true);
 
   useEffect(() => {
     if (!odataType) {
@@ -178,11 +182,15 @@ export function ComplianceSettingsView({
   useEffect(() => {
     const reset = lastPolicyId.current !== policyId;
     lastPolicyId.current = policyId;
+    const cached = reset ? readComplianceDraft(policyId) : null;
+    if (reset) skipDraftPersist.current = true;
     setDrafts((current) => {
       const next: Record<string, string> = {};
       for (const row of rows) {
         const fresh = draftValueForField(row.field, row.value);
-        next[row.field.key] = reset ? fresh : (current[row.field.key] ?? fresh);
+        next[row.field.key] = reset
+          ? (cached?.[row.field.key] ?? fresh)
+          : (current[row.field.key] ?? fresh);
       }
       return next;
     });
@@ -199,6 +207,14 @@ export function ComplianceSettingsView({
     return current !== draftValueForField(row.field, row.value);
   });
   const dirty = dirtyKeys.length > 0;
+
+  useEffect(() => {
+    if (skipDraftPersist.current) {
+      skipDraftPersist.current = false;
+      return;
+    }
+    persistComplianceDraft(policyId, drafts, dirty);
+  }, [dirty, drafts, policyId]);
 
   async function save() {
     if (!odataType || !dirty) return;

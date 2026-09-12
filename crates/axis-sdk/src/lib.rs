@@ -87,7 +87,8 @@ pub use graph::GraphError;
 pub use inventory::*;
 pub use object_detail::{
     create_tenant_script, fetch_configuration_policy_template, fetch_graph_object_detail,
-    update_script_content, CreateTenantScriptInput, GraphObjectDetail, UpdateScriptContentInput,
+    list_configuration_policy_templates, update_script_content, ConfigurationPolicyTemplateSummary,
+    CreateTenantScriptInput, GraphObjectDetail, UpdateScriptContentInput,
 };
 pub use object_metadata::{
     can_delete_graph_object, can_update_object_metadata, delete_graph_object,

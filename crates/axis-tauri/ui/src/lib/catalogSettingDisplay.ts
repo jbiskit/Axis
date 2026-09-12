@@ -1,7 +1,10 @@
+import { configuredValueMatchesGraphDefault, graphHasDeclaredDefault } from "./catalogDefaults";
+
 export type CatalogDefinitionOption = {
   itemId: string;
   name?: string;
   displayName?: string;
+  isDefault?: boolean | null;
 };
 
 export type CatalogDefinitionMeta = {
@@ -13,11 +16,14 @@ export type CatalogDefinitionMeta = {
   categoryId?: string | null;
   options: CatalogDefinitionOption[];
   kind?: string;
+  defaultOptionId?: string | null;
+  defaultString?: string | null;
 };
 
 export type FormattedSettingChild = {
   label: string;
   value: string;
+  matchesGraphDefault?: boolean;
   children?: FormattedSettingChild[];
 };
 
@@ -27,6 +33,7 @@ export type FormattedSettingRow = {
   displayName: string;
   description?: string;
   valueSummary: string;
+  matchesGraphDefault?: boolean;
   instanceKind: string;
   unsupportedEditor: boolean;
   children: FormattedSettingChild[];
@@ -238,7 +245,13 @@ function parseDefinition(raw: unknown): CatalogDefinitionMeta | null {
       itemId,
       name: text(item.name) ?? undefined,
       displayName: text(item.displayName) ?? undefined,
+      isDefault: typeof item.isDefault === "boolean" ? item.isDefault : null,
     });
+  }
+  const defaultValue = asRecord(record.defaultValue);
+  let defaultString: string | null = null;
+  if (defaultValue && "value" in defaultValue && defaultValue.value != null) {
+    defaultString = String(defaultValue.value).trim().replace(/^"|"$/g, "") || null;
   }
   return {
     id,
@@ -249,6 +262,8 @@ function parseDefinition(raw: unknown): CatalogDefinitionMeta | null {
     categoryId: text(record.categoryId),
     options,
     kind: text(record["@odata.type"]) ?? text(record.kind) ?? undefined,
+    defaultOptionId: text(record.defaultOptionId),
+    defaultString,
   };
 }
 
@@ -276,6 +291,18 @@ function optionLabel(
   return catalogUiLabel([match?.displayName, match?.name], optionId, definitionId);
 }
 
+function matchesGraphDefault(
+  def: CatalogDefinitionMeta | undefined,
+  configured: Parameters<typeof configuredValueMatchesGraphDefault>[1],
+): boolean {
+  return Boolean(def && graphHasDeclaredDefault(def) && configuredValueMatchesGraphDefault(def, configured));
+}
+
+function asSimpleConfigured(value: unknown): string | number | boolean {
+  if (typeof value === "boolean" || typeof value === "number") return value;
+  return value == null ? "" : String(value);
+}
+
 function formatPrimitive(value: unknown): string {
   if (value === null || value === undefined || value === "") return "(empty)";
   if (typeof value === "boolean") return value ? "Enabled" : "Disabled";
@@ -301,6 +328,7 @@ function summarizeChildren(
       {
         label: summary.displayName,
         value: summary.valueSummary,
+        matchesGraphDefault: summary.matchesGraphDefault,
         children: summary.children.length ? summary.children : undefined,
       },
     ];
@@ -314,6 +342,7 @@ function summarizeInstance(
   displayName: string;
   description?: string;
   valueSummary: string;
+  matchesGraphDefault?: boolean;
   instanceKind: string;
   unsupportedEditor: boolean;
   children: FormattedSettingChild[];
@@ -337,6 +366,7 @@ function summarizeInstance(
       displayName,
       description,
       valueSummary: nestedSummary ? `${option} · ${nestedSummary}` : option,
+      matchesGraphDefault: matchesGraphDefault(def, { kind: "choice", optionItemId: choice.value }),
       instanceKind,
       unsupportedEditor: false,
       children: nested,
@@ -350,6 +380,7 @@ function summarizeInstance(
       displayName,
       description,
       valueSummary: formatPrimitive(simple.value),
+      matchesGraphDefault: matchesGraphDefault(def, { kind: "simple", value: asSimpleConfigured(simple.value) }),
       instanceKind,
       unsupportedEditor: false,
       children: [],
@@ -380,10 +411,11 @@ function summarizeInstance(
   }
 
   if (instance.simpleSettingCollectionValue != null) {
-    const values = collectionEntries(instance.simpleSettingCollectionValue).map((item) => {
+    const rawValues = collectionEntries(instance.simpleSettingCollectionValue).map((item) => {
       const record = asRecord(item);
-      return formatPrimitive(record?.value ?? item);
+      return record?.value ?? item;
     });
+    const values = rawValues.map((item) => formatPrimitive(item));
     const children = values.map((value, index) => ({
       label: `Value ${index + 1}`,
       value,
@@ -398,6 +430,10 @@ function summarizeInstance(
           : values.length <= 4
             ? values.join(", ")
             : `${values.slice(0, 4).join(", ")} (+${values.length - 4} more)`,
+      matchesGraphDefault: matchesGraphDefault(def, {
+        kind: "simpleCollection",
+        values: rawValues.map((item) => (item == null ? "" : String(item))),
+      }),
       instanceKind,
       unsupportedEditor: false,
       children,
@@ -405,11 +441,11 @@ function summarizeInstance(
   }
 
   if (instance.choiceSettingCollectionValue != null) {
-    const labels = collectionEntries(instance.choiceSettingCollectionValue).map((item) => {
+    const optionIds = collectionEntries(instance.choiceSettingCollectionValue).map((item) => {
       const record = asRecord(item);
-      const value = String(record?.value ?? item);
-      return optionLabel(value, def, definitionId);
+      return String(record?.value ?? item);
     });
+    const labels = optionIds.map((value) => optionLabel(value, def, definitionId));
     const children = labels.map((value, index) => ({
       label: `Selection ${index + 1}`,
       value,
@@ -424,6 +460,9 @@ function summarizeInstance(
           : labels.length <= 4
             ? labels.join(", ")
             : `${labels.slice(0, 4).join(", ")} (+${labels.length - 4} more)`,
+      matchesGraphDefault:
+        optionIds.length === 1 &&
+        matchesGraphDefault(def, { kind: "choice", optionItemId: optionIds[0]! }),
       instanceKind,
       unsupportedEditor: false,
       children,
@@ -489,6 +528,7 @@ export function formatCatalogSettingRows(settings: Record<string, unknown>[]): F
         displayName: summary.displayName,
         description: summary.description,
         valueSummary: summary.valueSummary,
+        matchesGraphDefault: summary.matchesGraphDefault,
         instanceKind: summary.instanceKind,
         unsupportedEditor: summary.unsupportedEditor,
         children: summary.children,

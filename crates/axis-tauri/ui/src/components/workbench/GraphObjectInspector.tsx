@@ -16,6 +16,7 @@ import {
   writeCachedAssignmentDrafts,
   writeCachedObjectDetail,
 } from "../../lib/inspectorCache";
+import { requestLeave, useInspectorDirty } from "../../lib/inspectorDrafts";
 import { parseScriptInspectorKind } from "../../lib/scriptKinds";
 import type { AssignmentDraft, GraphObjectDetail } from "../../types/inventory";
 import { OpenInIntune } from "../intune/OpenInIntune";
@@ -529,6 +530,7 @@ export function GraphObjectInspector({
       scriptMeta.runAsUser !== savedMeta.runAsUser ||
       scriptMeta.enforceSignatureCheck !== savedMeta.enforceSignatureCheck ||
       scriptMeta.runAs64Bit !== savedMeta.runAs64Bit);
+  useInspectorDirty(`script:${kind}:${id}`, dirty);
 
   const saveScripts = useCallback(async () => {
     if (!detail) return;
@@ -610,11 +612,13 @@ export function GraphObjectInspector({
   }, [canEditScripts, detail, dirty, saveBusy, saveScripts]);
 
   function handleClose() {
-    if (popout) {
-      void closeThisWindow();
-      return;
-    }
-    onClose();
+    requestLeave(() => {
+      if (popout) {
+        void closeThisWindow();
+        return;
+      }
+      onClose();
+    });
   }
 
   return (
@@ -772,8 +776,7 @@ export function GraphObjectInspector({
               ) : null}
             </section>
           ) : null}
-          {tab === "payload" ? (
-            <div className="stack">
+          <div className="stack" hidden={tab !== "payload"}>
               {canEditScripts ? (
                 <section className="axis-panel" style={{ padding: "1rem 1.1rem" }}>
                   <div className="inspector-form">
@@ -950,7 +953,6 @@ export function GraphObjectInspector({
                 </p>
               ) : null}
             </div>
-          ) : null}
         </>
       ) : null}
       </div>

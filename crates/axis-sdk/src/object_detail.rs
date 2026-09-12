@@ -275,6 +275,190 @@ fn take_scheduled_actions(object: &mut Value) -> Option<Value> {
         .map(normalize_extra)
 }
 
+/// A Settings Catalog policy template listed from Graph
+/// (`deviceManagement/configurationPolicyTemplates`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigurationPolicyTemplateSummary {
+    pub id: String,
+    pub display_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platforms: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub technologies: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template_family: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lifecycle_state: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_id: Option<String>,
+}
+
+fn graph_string(value: Option<&Value>) -> Option<String> {
+    let value = value?;
+    if let Some(text) = value.as_str() {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        return Some(trimmed.to_string());
+    }
+    if value.is_null() {
+        return None;
+    }
+    Some(value.to_string())
+}
+
+fn graph_i64(value: Option<&Value>) -> Option<i64> {
+    let value = value?;
+    value.as_i64().or_else(|| value.as_u64().map(|n| n as i64))
+}
+
+fn template_family_is_safe(family: &str) -> bool {
+    !family.is_empty()
+        && family
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric())
+}
+
+fn is_active_template(state: Option<&str>) -> bool {
+    match state {
+        None => true,
+        Some(value) => value.eq_ignore_ascii_case("active"),
+    }
+}
+
+fn template_version(row: &ConfigurationPolicyTemplateSummary) -> i64 {
+    if let Some(version) = row.version {
+        return version;
+    }
+    row.id
+        .rsplit_once('_')
+        .and_then(|(_, suffix)| suffix.parse::<i64>().ok())
+        .unwrap_or(0)
+}
+
+/// Shared lineage when Graph versions a template: `baseId`, or `{base}_{version}` on `id`.
+fn template_base_key(row: &ConfigurationPolicyTemplateSummary) -> Option<String> {
+    if let Some(base) = row
+        .base_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Some(base.to_ascii_lowercase());
+    }
+    let (base, suffix) = row.id.rsplit_once('_')?;
+    if base.is_empty() || !suffix.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    Some(base.to_ascii_lowercase())
+}
+
+/// Distinct Intune profile: family + display name (case-insensitive) + platform.
+fn template_profile_key(row: &ConfigurationPolicyTemplateSummary) -> String {
+    format!(
+        "{}\0{}\0{}",
+        row.template_family
+            .as_deref()
+            .unwrap_or("")
+            .to_ascii_lowercase(),
+        row.display_name.to_ascii_lowercase(),
+        row.platforms.as_deref().unwrap_or("").to_ascii_lowercase(),
+    )
+}
+
+fn fold_latest_templates(
+    rows: impl IntoIterator<Item = ConfigurationPolicyTemplateSummary>,
+    key_fn: impl Fn(&ConfigurationPolicyTemplateSummary) -> String,
+) -> Vec<ConfigurationPolicyTemplateSummary> {
+    let mut by_key: std::collections::HashMap<String, ConfigurationPolicyTemplateSummary> =
+        std::collections::HashMap::new();
+    for row in rows {
+        let key = key_fn(&row);
+        match by_key.get(&key) {
+            Some(existing) if template_version(existing) >= template_version(&row) => {}
+            _ => {
+                by_key.insert(key, row);
+            }
+        }
+    }
+    by_key.into_values().collect()
+}
+
+/// One picker row per distinct Intune profile: latest active template when Graph
+/// returns versioned copies (shared `baseId` / versioned `id`) or casing-only
+/// `displayName` aliases. The winner keeps Graph's `displayName` and `id`.
+fn prefer_latest_templates(
+    rows: Vec<ConfigurationPolicyTemplateSummary>,
+) -> Vec<ConfigurationPolicyTemplateSummary> {
+    let active: Vec<_> = rows
+        .iter()
+        .filter(|row| is_active_template(row.lifecycle_state.as_deref()))
+        .cloned()
+        .collect();
+    let source = if active.is_empty() { rows } else { active };
+    let by_base = fold_latest_templates(source, |row| {
+        template_base_key(row).unwrap_or_else(|| format!("id:{}", row.id))
+    });
+    let mut templates = fold_latest_templates(by_base, |row| template_profile_key(row));
+    templates.sort_by(|left, right| {
+        left.display_name
+            .to_ascii_lowercase()
+            .cmp(&right.display_name.to_ascii_lowercase())
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    templates
+}
+
+/// List Settings Catalog templates for an Endpoint Security family
+/// (`templateFamily eq 'endpointSecurityAttackSurfaceReduction'`, etc.).
+pub async fn list_configuration_policy_templates(
+    access_token: &str,
+    template_family: &str,
+) -> Result<Vec<ConfigurationPolicyTemplateSummary>, GraphError> {
+    let family = template_family.trim();
+    if !template_family_is_safe(family) {
+        return Err(GraphError::Request {
+            status: 400,
+            code: None,
+            message: "A template family is required.".into(),
+            permission_related: false,
+        });
+    }
+    let filter = format!("templateFamily eq '{family}'");
+    let path = format!(
+        "/deviceManagement/configurationPolicyTemplates?$filter={}&$select=id,baseId,displayName,description,platforms,technologies,templateFamily,lifecycleState,version,displayVersion",
+        urlencoding::encode(&filter)
+    );
+    let rows = GraphClient::new()
+        .fetch_all_pages::<Value>(access_token, &path, "beta", 200)
+        .await?;
+    let parsed = rows
+        .into_iter()
+        .filter_map(|row| {
+            let id = graph_string(row.get("id"))?;
+            let display_name = graph_string(row.get("displayName")).unwrap_or_else(|| id.clone());
+            Some(ConfigurationPolicyTemplateSummary {
+                id,
+                display_name,
+                description: graph_string(row.get("description")),
+                platforms: graph_string(row.get("platforms")),
+                technologies: graph_string(row.get("technologies")),
+                template_family: graph_string(row.get("templateFamily")),
+                lifecycle_state: graph_string(row.get("lifecycleState")),
+                version: graph_i64(row.get("version")),
+                base_id: graph_string(row.get("baseId")),
+            })
+        })
+        .collect();
+    Ok(prefer_latest_templates(parsed))
+}
+
 /// Fetch a configuration policy template's setting templates with their
 /// definitions — the full shape a template-backed policy can take, including
 /// group settings and their children. Mirrors the Intune portal's template
@@ -906,5 +1090,163 @@ mod tests {
         assert!(object.get("scheduledActionsForRule").is_none());
         assert_eq!(actions[0]["ruleName"], "PasswordRequired");
         assert_eq!(actions[0]["scheduledActionConfigurations"][0]["actionType"], "block");
+    }
+
+    fn sample_template(
+        id: &str,
+        display_name: &str,
+        version: Option<i64>,
+        lifecycle: Option<&str>,
+        base_id: Option<&str>,
+        platforms: &str,
+    ) -> ConfigurationPolicyTemplateSummary {
+        ConfigurationPolicyTemplateSummary {
+            id: id.into(),
+            display_name: display_name.into(),
+            description: None,
+            platforms: Some(platforms.into()),
+            technologies: Some("mdm".into()),
+            template_family: Some("endpointSecurityAntivirus".into()),
+            lifecycle_state: lifecycle.map(str::to_string),
+            version,
+            base_id: base_id.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn latest_active_template_wins_per_base() {
+        let rows = vec![
+            sample_template(
+                "asr-rules_1",
+                "Attack Surface Reduction Rules",
+                Some(1),
+                Some("deprecated"),
+                Some("asr-rules"),
+                "windows10",
+            ),
+            sample_template(
+                "asr-rules_2",
+                "Attack Surface Reduction Rules",
+                Some(2),
+                Some("active"),
+                Some("asr-rules"),
+                "windows10",
+            ),
+            sample_template(
+                "device-control_1",
+                "Device Control",
+                Some(1),
+                Some("active"),
+                Some("device-control"),
+                "windows10",
+            ),
+        ];
+        let templates = prefer_latest_templates(rows);
+        assert_eq!(templates.len(), 2);
+        assert_eq!(templates[0].id, "asr-rules_2");
+        assert_eq!(templates[1].id, "device-control_1");
+    }
+
+    #[test]
+    fn latest_active_collapses_same_name_and_casing_aliases() {
+        let rows = vec![
+            sample_template(
+                "av_1",
+                "Microsoft Defender Antivirus",
+                Some(1),
+                Some("active"),
+                Some("av-v1"),
+                "windows10",
+            ),
+            sample_template(
+                "av_3",
+                "Microsoft Defender Antivirus",
+                Some(3),
+                Some("active"),
+                Some("av-v3"),
+                "windows10",
+            ),
+            sample_template(
+                "av_2",
+                "Microsoft Defender Antivirus",
+                Some(2),
+                Some("deprecated"),
+                Some("av-v2"),
+                "windows10",
+            ),
+            sample_template(
+                "excl_1",
+                "Microsoft Defender Antivirus exclusions",
+                Some(1),
+                Some("active"),
+                Some("excl-v1"),
+                "windows10",
+            ),
+            sample_template(
+                "excl_2",
+                "Microsoft Defender Antivirus Exclusions",
+                Some(2),
+                Some("active"),
+                Some("excl-v2"),
+                "windows10",
+            ),
+            sample_template(
+                "mac_1",
+                "macOS Endpoint Security AV",
+                Some(1),
+                Some("active"),
+                Some("mac-av"),
+                "macOS",
+            ),
+            sample_template(
+                "update_1",
+                "Defender Update controls",
+                Some(1),
+                Some("active"),
+                Some("update"),
+                "windows10",
+            ),
+        ];
+        let templates = prefer_latest_templates(rows);
+        let names: Vec<_> = templates
+            .iter()
+            .map(|row| (row.display_name.as_str(), row.id.as_str()))
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                ("Defender Update controls", "update_1"),
+                ("macOS Endpoint Security AV", "mac_1"),
+                ("Microsoft Defender Antivirus", "av_3"),
+                ("Microsoft Defender Antivirus Exclusions", "excl_2"),
+            ]
+        );
+    }
+
+    #[test]
+    fn same_name_on_different_platforms_stays_separate() {
+        let rows = vec![
+            sample_template(
+                "av-win_2",
+                "Microsoft Defender Antivirus",
+                Some(2),
+                Some("active"),
+                None,
+                "windows10",
+            ),
+            sample_template(
+                "av-mac_1",
+                "Microsoft Defender Antivirus",
+                Some(1),
+                Some("active"),
+                None,
+                "macOS",
+            ),
+        ];
+        let templates = prefer_latest_templates(rows);
+        assert_eq!(templates.len(), 2);
+        assert_eq!(templates[0].platforms.as_deref(), Some("macOS"));
+        assert_eq!(templates[1].platforms.as_deref(), Some("windows10"));
+        assert_eq!(templates[1].id, "av-win_2");
     }
 }

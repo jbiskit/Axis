@@ -1,20 +1,27 @@
 import { useEffect, useMemo, useState } from "react";
-import type { CatalogSettingDetail } from "../../types/inventory";
+import type {
+  CatalogSettingDetail,
+  ConfigurationPolicyTemplateSummary,
+} from "../../types/inventory";
 import {
   buildSettingInstance,
   bundleFromCategoryMap,
   defaultDraftForSetting,
   diffSettingDrafts,
+  draftMatchesGraphDefault,
   draftValueSummary,
   instancesReadyForGraph,
   parseConfigurationPolicyTemplate,
+  settingDraftSaveError,
   type SettingValueDraft,
   type TemplateSettingNode,
 } from "../../lib/catalog";
 import {
   createEndpointSecurityPolicy,
   fetchConfigurationPolicyTemplate,
+  listConfigurationPolicyTemplates,
 } from "../../lib/tauri";
+import { SettingValueWithDefaultCue } from "./SettingDefaultCue";
 import { SettingDescription } from "./SettingDescription";
 import { SettingDraftEditor } from "./SettingDraftEditor";
 import { SettingValueDiff } from "./SettingValueDiff";
@@ -34,21 +41,34 @@ function editIsDirty(edit: PendingEdit): boolean {
   return !draftsEqual(edit.draft, edit.original);
 }
 
+function graphEnum(value?: string | null): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed || !/[a-zA-Z]/.test(trimmed)) return undefined;
+  return trimmed;
+}
+
+function catalogPlatformFromTemplate(platforms?: string | null): string {
+  const value = graphEnum(platforms)?.toLowerCase() ?? "";
+  if (value.includes("macos") || value.includes("mac")) return "macos";
+  return "windows";
+}
+
 /**
  * Create a new template-backed Endpoint Security policy from its template:
- * name it, configure settings from the template's structure, then create.
+ * pick the Graph profile for this family, name it, configure settings, then create.
  */
 export function CreateEndpointSecurityPolicyDialog({
   family,
-  templateId,
   onClose,
   onCreated,
 }: {
   family: string;
-  templateId: string;
   onClose: () => void;
   onCreated: (id: string, name: string) => void;
 }) {
+  const [profiles, setProfiles] = useState<ConfigurationPolicyTemplateSummary[] | null>(null);
+  const [profilesError, setProfilesError] = useState<string | null>(null);
+  const [templateId, setTemplateId] = useState("");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [nodes, setNodes] = useState<TemplateSettingNode[] | null>(null);
@@ -58,8 +78,52 @@ export function CreateEndpointSecurityPolicyDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const selectedProfile = useMemo(
+    () => profiles?.find((profile) => profile.id === templateId) ?? null,
+    [profiles, templateId],
+  );
+
   useEffect(() => {
     let cancelled = false;
+    setProfiles(null);
+    setProfilesError(null);
+    setTemplateId("");
+    void listConfigurationPolicyTemplates(family)
+      .then((response) => {
+        if (cancelled) return;
+        if (response.error) {
+          setProfiles([]);
+          setProfilesError(response.error);
+          return;
+        }
+        setProfiles(response.templates);
+        if (response.templates.length === 1) {
+          setTemplateId(response.templates[0].id);
+        }
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setProfiles([]);
+        setProfilesError(
+          typeof err === "string"
+            ? err
+            : err instanceof Error
+              ? err.message
+              : "Could not load policy templates.",
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [family]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setNodes(null);
+    setTemplateError(null);
+    setEdits({});
+    setEditingId(null);
+    if (!templateId) return;
     void fetchConfigurationPolicyTemplate(templateId)
       .then((response) => {
         if (cancelled) return;
@@ -168,7 +232,14 @@ export function CreateEndpointSecurityPolicyDialog({
   );
 
   async function create() {
-    if (!name.trim() || pending.length === 0 || busy) return;
+    if (!name.trim() || !templateId || pending.length === 0 || busy) return;
+    const incomplete = pending
+      .map((edit) => settingDraftSaveError(edit.detail, edit.draft, edit.dependents))
+      .find((message) => message);
+    if (incomplete) {
+      setError(incomplete);
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -184,10 +255,12 @@ export function CreateEndpointSecurityPolicyDialog({
       const response = await createEndpointSecurityPolicy({
         name: name.trim(),
         description: description.trim() || undefined,
-        platform: "windows",
+        platform: catalogPlatformFromTemplate(selectedProfile?.platforms),
         templateId,
         templateFamily: family,
         settings: instances,
+        platforms: graphEnum(selectedProfile?.platforms),
+        technologies: graphEnum(selectedProfile?.technologies),
       });
       if (response.error || !response.policy) {
         setError(response.error ?? "Create failed.");
@@ -205,16 +278,34 @@ export function CreateEndpointSecurityPolicyDialog({
     const rowEdit = edits[definitionId];
     const rowEditing = editingId === definitionId && Boolean(rowEdit);
     const rowDirty = Boolean(rowEdit && editIsDirty(rowEdit));
+    const canEdit = Boolean(detail);
     const displayName = detail?.displayName ?? definitionId;
     const description = detail?.description ?? detail?.helpText ?? undefined;
-    const valueSummary =
-      rowEdit && !rowEditing && !rowDirty
-        ? draftValueSummary(rowEdit.detail, rowEdit.original, rowEdit.dependents)
-        : "Not configured";
+    const configuredDraft = rowEdit && !rowEditing && !rowDirty ? rowEdit.original : undefined;
+    const valueSummary = configuredDraft
+      ? draftValueSummary(rowEdit.detail, configuredDraft, rowEdit.dependents)
+      : "Not configured";
+    const showGraphDefault = Boolean(
+      configuredDraft && draftMatchesGraphDefault(rowEdit.detail, configuredDraft),
+    );
     return (
       <li
         key={`${isChild ? "child" : "setting"}:${definitionId}`}
-        className={`setting-instance-row${rowEditing ? " is-editing" : ""}${rowDirty ? " is-dirty" : ""}${isChild ? " is-child" : ""}`}
+        className={`setting-instance-row${rowEditing ? " is-editing" : ""}${rowDirty ? " is-dirty" : ""}${isChild ? " is-child" : ""}${canEdit ? " is-activatable" : ""}`}
+        title={canEdit ? "Double-click to edit" : undefined}
+        onMouseDown={(event) => {
+          if (canEdit && event.detail > 1) event.preventDefault();
+        }}
+        onDoubleClick={(event) => {
+          if (!canEdit) return;
+          if (
+            event.target instanceof Element &&
+            event.target.closest("button, a, input, textarea, select, label")
+          ) {
+            return;
+          }
+          openEdit(definitionId);
+        }}
       >
         <div className="setting-instance-head">
           <div className="setting-instance-title-block">
@@ -242,7 +333,9 @@ export function CreateEndpointSecurityPolicyDialog({
                 )}
               />
             ) : (
-              <span className="muted">{valueSummary}</span>
+              <span className="muted">
+                <SettingValueWithDefaultCue show={showGraphDefault}>{valueSummary}</SettingValueWithDefaultCue>
+              </span>
             )}
             {rowEditing && rowDirty && rowEdit ? (
               <SettingValueDiff
@@ -302,9 +395,31 @@ export function CreateEndpointSecurityPolicyDialog({
           </button>
         </div>
         {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
+        {profilesError ? <div className="axis-alert axis-alert-danger">{profilesError}</div> : null}
         {templateError ? <div className="axis-alert axis-alert-warning">{templateError}</div> : null}
-        {nodes == null ? <p className="muted">Loading template…</p> : null}
+        {profiles == null ? <p className="muted">Loading profiles…</p> : null}
         <div className="object-action-fields">
+          <label className="device-field">
+            Profile
+            <select
+              className="axis-input"
+              value={templateId}
+              disabled={busy || !profiles || profiles.length === 0}
+              onChange={(event) => setTemplateId(event.target.value)}
+            >
+              <option value="">
+                {profiles && profiles.length === 0 ? "No profiles returned" : "Select a profile"}
+              </option>
+              {(profiles ?? []).map((profile) => (
+                <option key={profile.id} value={profile.id}>
+                  {profile.displayName}
+                </option>
+              ))}
+            </select>
+          </label>
+          {selectedProfile?.description ? (
+            <SettingDescription text={selectedProfile.description} />
+          ) : null}
           <label className="device-field">
             Policy name
             <input
@@ -326,6 +441,7 @@ export function CreateEndpointSecurityPolicyDialog({
             />
           </label>
         </div>
+        {templateId && nodes == null ? <p className="muted">Loading template…</p> : null}
         {nodes != null && nodes.length > 0 ? (
           <div className="create-es-settings">
             <p className="axis-kicker">Settings</p>
@@ -368,7 +484,7 @@ export function CreateEndpointSecurityPolicyDialog({
           <button
             type="button"
             className="axis-btn axis-btn-primary"
-            disabled={busy || !name.trim() || pending.length === 0}
+            disabled={busy || !name.trim() || !templateId || pending.length === 0}
             onClick={() => void create()}
           >
             {busy ? "Creating…" : "Create policy"}
