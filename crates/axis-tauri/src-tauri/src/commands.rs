@@ -2,12 +2,14 @@ use crate::AppState;
 use axis_sdk::{
     add_settings_to_policy, remove_settings_from_policy, apply_filter_names, apply_group_metadata, assign_object_assignments,
     assignment_capabilities, collect_managed_device_diagnostics, create_directory_group,
-    create_compliance_policy, create_policy_with_settings, create_tenant_script, delete_graph_object, delete_managed_device, fetch_compliance_policy_status_with_options, fetch_compliance_property_docs, update_compliance_policy,
+    create_compliance_policy, create_policy_with_settings, create_policy_with_template,
+    create_tenant_script, delete_graph_object, delete_managed_device, fetch_compliance_policy_status_with_options, fetch_compliance_property_docs, update_compliance_policy,
     duplicate_graph_object,
     drafts_from_graph_assignments, fetch_app_protection_policies, fetch_autopilot_devices,
     fetch_applied_policy_settings, fetch_autopilot_profiles, fetch_baseline_export_json,
     fetch_baseline_reference_sources, fetch_compliance_policies,
     fetch_configuration_policies, fetch_device_configurations, fetch_e8_baseline_references,
+    fetch_configuration_policy_template,
     fetch_endpoint_security_intents, fetch_enrollment_configurations, fetch_graph_object_detail,
     fetch_group_policy_configurations, fetch_managed_device_detail, fetch_policy_setting_issues,
     fetch_mobile_apps, fetch_script_run_status, fetch_remediation_scripts, fetch_setting_conflict_details, fetch_store_apps,
@@ -15,6 +17,7 @@ use axis_sdk::{
     dest_dir_from_save_as, export_selected_graph_objects, export_tenant_pack, PackExportObject,
     PackExportOptions, PackExportProgress, PackExportResult, SelectedExportResult,
     generate_environment_report, EnvironmentReport, EnvironmentReportProgress,
+    EnvironmentReportSelection,
     decode_access_token_claims,
     get_laps_credential_info, initiate_on_demand_remediation, list_assignment_filters,
     list_bitlocker_recovery_keys, list_catalog_categories, list_intune_audit_events, load_category_settings,
@@ -98,6 +101,7 @@ pub async fn fetch_e8_baseline_references_cmd() -> Result<E8BaselineReferencesRe
                 directory_url: "https://github.com/ASD-Blueprint/ASD-Blueprint-for-Secure-Cloud/tree/main/static/content/files/intune-config-policies".into(),
                 api_url: "https://api.github.com/repos/ASD-Blueprint/ASD-Blueprint-for-Secure-Cloud/contents/static/content/files/intune-config-policies?ref=main".into(),
                 has_token: false,
+                store_kind: String::new(),
             },
             references: Vec::new(),
             warnings: Vec::new(),
@@ -297,11 +301,16 @@ async fn save_as_path(
             .set_title(&title)
             .set_file_name(&suggested_name);
         if json_filter {
-            if suggested_name.rsplit('.').next().is_some_and(|ext| ext.eq_ignore_ascii_case("html")) {
-                dialog = dialog.add_filter("HTML", &["html"]);
-            } else {
-                dialog = dialog.add_filter("JSON", &["json"]);
-            }
+            let ext = suggested_name
+                .rsplit('.')
+                .next()
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            dialog = match ext.as_str() {
+                "html" | "htm" => dialog.add_filter("HTML", &["html"]),
+                "md" | "markdown" => dialog.add_filter("Markdown", &["md"]),
+                _ => dialog.add_filter("JSON", &["json"]),
+            };
         }
         dialog.save_file()
     })
@@ -342,6 +351,7 @@ pub async fn generate_environment_report_cmd(
     state: State<'_, AppState>,
     prepared_for: Option<String>,
     prepared_by: Option<String>,
+    selection: Option<EnvironmentReportSelection>,
 ) -> Result<EnvironmentReport, String> {
     let Some(token) = session_token(&state).await? else {
         return Err("Sign in to generate an as-built report.".into());
@@ -354,12 +364,14 @@ pub async fn generate_environment_report_cmd(
         .map(str::to_string)
         .collect::<Vec<_>>();
     let version = app.package_info().version.to_string();
+    let selection = selection.unwrap_or_default();
     generate_environment_report(
         &token,
         &version,
         prepared_for.as_deref(),
         prepared_by.as_deref(),
         &token_scopes,
+        &selection,
         |progress: EnvironmentReportProgress| {
             let _ = app.emit(ENVIRONMENT_REPORT_PROGRESS_EVENT, &progress);
         },
@@ -716,6 +728,36 @@ pub async fn fetch_graph_object_detail_cmd(
     }
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigurationPolicyTemplateResponse {
+    templates: Vec<serde_json::Value>,
+    error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn fetch_configuration_policy_template_cmd(
+    state: State<'_, AppState>,
+    template_id: String,
+) -> Result<ConfigurationPolicyTemplateResponse, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Ok(ConfigurationPolicyTemplateResponse {
+            templates: vec![],
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match fetch_configuration_policy_template(&token, &template_id).await {
+        Ok(templates) => Ok(ConfigurationPolicyTemplateResponse {
+            templates,
+            error: None,
+        }),
+        Err(error) => Ok(ConfigurationPolicyTemplateResponse {
+            templates: vec![],
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
 #[tauri::command]
 pub async fn fetch_managed_device_detail_cmd(
     state: State<'_, AppState>,
@@ -755,7 +797,10 @@ pub async fn desktop_capability(name: String) -> Result<CapabilityStatus, String
             "Win32 packaging, local catalog folders, and IntuneWinAppUtil still run on the Next.js host. The Tauri shell has not wired local filesystem packaging yet."
         }
         "gitBaselines" | "localBaselinePack" => {
-            "GitHub baseline exports can be compared on a device. Generic Git/local baseline packs are still resolved by the Next.js API."
+            return Ok(CapabilityStatus {
+                available: true,
+                reason: "GitHub and local template stores are listed on Templates. ASD hard baselines stay on Baselines. The desktop app fetches these sources directly.".into(),
+            });
         }
         "monacoScripts" => {
             return Ok(CapabilityStatus {
@@ -1011,6 +1056,48 @@ pub async fn create_settings_catalog_policy_cmd(
         &name,
         description.as_deref(),
         catalog_platform,
+        &settings,
+    )
+    .await
+    {
+        Ok(policy) => Ok(CreateCatalogPolicyResponse {
+            policy: Some(policy),
+            error: None,
+            mode: "live",
+        }),
+        Err(error) => Ok(CreateCatalogPolicyResponse {
+            policy: None,
+            error: Some(error.to_string()),
+            mode: "live",
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn create_endpoint_security_policy_cmd(
+    state: State<'_, AppState>,
+    name: String,
+    description: Option<String>,
+    platform: String,
+    template_id: String,
+    template_family: String,
+    settings: Vec<Value>,
+) -> Result<CreateCatalogPolicyResponse, String> {
+    let catalog_platform = parse_catalog_platform(&platform);
+    let Some(token) = session_token(&state).await? else {
+        return Ok(CreateCatalogPolicyResponse {
+            policy: None,
+            error: Some("Not signed in.".into()),
+            mode: "live",
+        });
+    };
+    match create_policy_with_template(
+        &token,
+        &name,
+        description.as_deref(),
+        catalog_platform,
+        &template_id,
+        Some(&template_family),
         &settings,
     )
     .await

@@ -99,6 +99,101 @@ body {
   outline-offset: 2px;
 }
 
+/* Shared selection controls — custom checkboxes and radios */
+input[type="checkbox"],
+input[type="radio"] {
+  appearance: none;
+  display: inline-grid;
+  place-content: center;
+  width: 0.95rem;
+  height: 0.95rem;
+  margin: 0;
+  border: 1px solid var(--axis-border-strong);
+  border-radius: var(--axis-radius-sm);
+  background: var(--axis-mantle);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition:
+    background-color var(--axis-ease),
+    border-color var(--axis-ease);
+}
+
+input[type="radio"] {
+  border-radius: 999px;
+}
+
+input[type="checkbox"]::before,
+input[type="radio"]::before {
+  content: "";
+  width: 0.55rem;
+  height: 0.55rem;
+  transform: scale(0);
+  transition: transform var(--axis-ease);
+  background: var(--axis-on-accent);
+}
+
+input[type="checkbox"]::before {
+  clip-path: polygon(14% 44%, 0 65%, 50% 100%, 100% 16%, 80% 0%, 43% 62%);
+}
+
+input[type="radio"]::before {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 999px;
+}
+
+input[type="checkbox"]:hover:not(:disabled),
+input[type="radio"]:hover:not(:disabled) {
+  border-color: var(--axis-accent);
+}
+
+input[type="checkbox"]:checked,
+input[type="radio"]:checked,
+input[type="checkbox"]:indeterminate {
+  background: var(--axis-accent);
+  border-color: var(--axis-accent);
+}
+
+input[type="checkbox"]:checked::before,
+input[type="radio"]:checked::before {
+  transform: scale(1);
+}
+
+input[type="checkbox"]:indeterminate::before {
+  width: 0.5rem;
+  height: 2px;
+  clip-path: none;
+  border-radius: 1px;
+  transform: scale(1);
+}
+
+input[type="checkbox"]:disabled,
+input[type="radio"]:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Shared select styling */
+select {
+  border: 1px solid var(--axis-border);
+  border-radius: var(--axis-radius);
+  background: var(--axis-mantle);
+  color: var(--axis-fg);
+  font: inherit;
+}
+
+select:focus {
+  outline: none;
+  border-color: var(--axis-accent);
+  box-shadow: 0 0 0 1px var(--axis-ring);
+}
+
+select:disabled {
+  cursor: not-allowed;
+  color: var(--axis-muted);
+  background: var(--axis-surface-2);
+}
+
 @keyframes axis-enter {
   from {
     opacity: 0;
@@ -347,16 +442,17 @@ body {
 
 .axis-seg {
   display: inline-flex;
-  overflow: hidden;
+  gap: 2px;
+  padding: 2px;
   border: 1px solid var(--axis-border);
-  border-radius: var(--axis-radius);
+  border-radius: 999px;
   background: var(--axis-mantle);
 }
 
 .axis-seg-btn {
   margin: 0;
   border: 0;
-  border-radius: 0;
+  border-radius: 999px;
   background: transparent;
   padding: 0.22rem 0.7rem;
   min-height: 1.6rem;
@@ -366,10 +462,9 @@ body {
   letter-spacing: 0.02em;
   color: var(--axis-muted);
   cursor: pointer;
-}
-
-.axis-seg-btn + .axis-seg-btn {
-  border-left: 1px solid var(--axis-border);
+  transition:
+    color var(--axis-ease),
+    background-color var(--axis-ease);
 }
 
 .axis-seg-btn:hover:not(:disabled):not(.is-active) {
@@ -380,6 +475,11 @@ body {
 .axis-seg-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.axis-seg-btn.is-active {
+  background: var(--axis-accent-soft);
+  color: var(--axis-accent);
 }
 
 .axis-seg-include.is-active {

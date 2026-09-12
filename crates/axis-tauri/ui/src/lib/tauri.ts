@@ -34,6 +34,7 @@ import type {
   BaselineReferenceSourceInput,
   BaselineReferenceSourcesResponse,
   EnvironmentReport,
+  EnvironmentReportSelection,
   PackExportResult,
   SelectedExportResult,
   PickedJsonFile,
@@ -292,10 +293,12 @@ export async function saveTextFile(input: {
 export async function generateEnvironmentReport(input?: {
   preparedFor?: string | null;
   preparedBy?: string | null;
+  selection?: EnvironmentReportSelection | null;
 }): Promise<EnvironmentReport> {
   return invoke<EnvironmentReport>("generate_environment_report_cmd", {
     preparedFor: input?.preparedFor?.trim() || null,
     preparedBy: input?.preparedBy?.trim() || null,
+    selection: input?.selection ?? null,
   });
 }
 
@@ -372,11 +375,28 @@ export async function createSettingsCatalogPolicy(input: {
   return invoke("create_settings_catalog_policy_cmd", input);
 }
 
+export async function createEndpointSecurityPolicy(input: {
+  name: string;
+  description?: string;
+  platform: string;
+  templateId: string;
+  templateFamily: string;
+  settings: Record<string, unknown>[];
+}): Promise<CreateCatalogPolicyResponse> {
+  return invoke("create_endpoint_security_policy_cmd", input);
+}
+
 export async function fetchGraphObjectDetail(
   kind: string,
   id: string,
 ): Promise<GraphObjectDetailResponse> {
   return invoke("fetch_graph_object_detail_cmd", { kind, id });
+}
+
+export async function fetchConfigurationPolicyTemplate(
+  templateId: string,
+): Promise<{ templates: Record<string, unknown>[]; error: string | null }> {
+  return invoke("fetch_configuration_policy_template_cmd", { templateId });
 }
 
 export async function updateScriptContent(input: UpdateScriptContentInput): Promise<ActionResponse> {

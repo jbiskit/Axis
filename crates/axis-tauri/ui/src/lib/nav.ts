@@ -182,6 +182,7 @@ export const INTUNE_NAV: NavItem[] = [
     children: WINDOWS_UPDATE_BLADES,
   },
   { href: "/intune/baselines", label: "Baselines", icon: "baselines", section: "Manage" },
+  { href: "/intune/templates", label: "Templates", icon: "templates", section: "Manage" },
   {
     href: "/intune/apps",
     label: "Apps",

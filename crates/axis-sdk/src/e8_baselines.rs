@@ -31,6 +31,9 @@ pub struct E8BaselineSource {
     pub api_url: String,
     #[serde(default)]
     pub has_token: bool,
+    /// `axisTemplated` or `flatJson`. Not returned to the UI; listing uses it to choose the scan.
+    #[serde(default, skip_serializing)]
+    pub store_kind: String,
 }
 
 fn default_source_kind() -> String {
@@ -94,6 +97,10 @@ pub struct BaselineReferenceSourceInput {
     /// Never returned in listing payloads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
+    /// `axisTemplated` (pack root + `axis-pack.json`) or `flatJson` (explicit policy folder).
+    /// Empty keeps the previous rule: an empty path is templated, a path is a flat listing.
+    #[serde(default)]
+    pub store_kind: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -350,6 +357,47 @@ fn rfc3339_from_system_time(time: SystemTime) -> Option<String> {
     Some(datetime.to_rfc3339())
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TemplateStoreMode {
+    AxisTemplated,
+    FlatJson,
+}
+
+/// User template shape. Built-in ASD keeps an explicit path and must not load `axis-pack.json`.
+fn template_store_mode(store_kind: &str, configured_path: &str) -> TemplateStoreMode {
+    if store_kind.eq_ignore_ascii_case("axisTemplated") {
+        return TemplateStoreMode::AxisTemplated;
+    }
+    if store_kind.eq_ignore_ascii_case("flatJson") {
+        return TemplateStoreMode::FlatJson;
+    }
+    if configured_path.trim().trim_matches('/').is_empty() {
+        TemplateStoreMode::AxisTemplated
+    } else {
+        TemplateStoreMode::FlatJson
+    }
+}
+
+fn listing_plan(store_kind: &str, configured_path: &str) -> (bool, String) {
+    match template_store_mode(store_kind, configured_path) {
+        TemplateStoreMode::AxisTemplated => (true, String::new()),
+        TemplateStoreMode::FlatJson => (
+            false,
+            configured_path.trim().trim_matches('/').to_string(),
+        ),
+    }
+}
+
+fn policy_scan_paths(pack_listing: bool, scan_path: &str, pack: Option<&AxisPackManifest>) -> Vec<String> {
+    if pack_listing {
+        return resolve_policy_scan_roots("", pack);
+    }
+    if scan_path.is_empty() {
+        return vec![String::new()];
+    }
+    resolve_policy_scan_roots(scan_path, None)
+}
+
 fn is_local_source_input(input: &BaselineReferenceSourceInput) -> bool {
     input.kind.trim().eq_ignore_ascii_case("local")
         || nonempty(&input.local_path).is_some()
@@ -475,6 +523,7 @@ fn default_source() -> E8BaselineSource {
         directory_url,
         api_url,
         has_token: false,
+        store_kind: String::new(),
     }
 }
 
@@ -545,6 +594,7 @@ fn source_from_input(input: BaselineReferenceSourceInput) -> (E8BaselineSource, 
             directory_url,
             api_url,
             has_token: token.is_some(),
+            store_kind: input.store_kind.trim().to_string(),
         },
         token,
     )
@@ -597,6 +647,7 @@ fn local_source_from_input(input: BaselineReferenceSourceInput) -> Result<E8Base
         directory_url,
         api_url: String::new(),
         has_token: false,
+        store_kind: input.store_kind.trim().to_string(),
     })
 }
 
@@ -796,7 +847,8 @@ async fn fetch_source_references(
     let client = reqwest::Client::new();
     let token_ref = token.as_deref();
     let configured_path = source.path.clone();
-    let pack = if configured_path.is_empty() {
+    let (pack_listing, scan_path) = listing_plan(&source.store_kind, &configured_path);
+    let pack = if pack_listing {
         load_axis_pack_manifest(&client, &source, token_ref).await
     } else {
         None
@@ -808,8 +860,9 @@ async fn fetch_source_references(
     if let Some(name) = pack.as_ref().and_then(AxisPackManifest::display_name) {
         source.name = name;
     }
-    let scan_paths = resolve_policy_scan_roots(&configured_path, pack.as_ref());
-    if source.path.is_empty() {
+    let scan_paths = policy_scan_paths(pack_listing, &scan_path, pack.as_ref());
+    if pack_listing {
+        source.path.clear();
         if let Some(first) = scan_paths.first().cloned() {
             source.path = first.clone();
             source.directory_url =
@@ -821,7 +874,7 @@ async fn fetch_source_references(
 
     let mut files = Vec::new();
     let mut warnings = Vec::new();
-    let allow_missing_subdir = configured_path.is_empty();
+    let allow_missing_subdir = pack_listing;
     for path in &scan_paths {
         match collect_github_files(
             &client,
@@ -845,8 +898,8 @@ async fn fetch_source_references(
     files.dedup_by(|left, right| left.path == right.path && left.name == right.name);
 
     let mut references = Vec::new();
-    let fetch_commit_dates = !configured_path.is_empty() && files.len() <= 25;
-    let parse_catalog_bodies = !configured_path.is_empty();
+    let fetch_commit_dates = !pack_listing && files.len() <= 25;
+    let parse_catalog_bodies = !pack_listing;
 
     for item in files {
         let Some(download_url) = item.download_url.clone() else {
@@ -948,7 +1001,11 @@ async fn fetch_source_references(
         });
     }
 
-    for (kind, path) in resolve_artifact_scans(&configured_path, pack.as_ref()) {
+    for (kind, path) in if pack_listing {
+        resolve_artifact_scans("", pack.as_ref())
+    } else {
+        Vec::new()
+    } {
         let mut artifact_files = Vec::new();
         match collect_github_files(
             &client,
@@ -1146,7 +1203,8 @@ fn fetch_local_source_references(
         )));
     }
     let configured_path = source.path.clone();
-    let pack = if configured_path.is_empty() {
+    let (pack_listing, scan_path) = listing_plan(&source.store_kind, &configured_path);
+    let pack = if pack_listing {
         load_local_pack_manifest(&root)
     } else {
         None
@@ -1158,8 +1216,9 @@ fn fetch_local_source_references(
     if let Some(name) = pack.as_ref().and_then(AxisPackManifest::display_name) {
         source.name = name;
     }
-    let scan_paths = resolve_policy_scan_roots(&configured_path, pack.as_ref());
-    if source.path.is_empty() {
+    let scan_paths = policy_scan_paths(pack_listing, &scan_path, pack.as_ref());
+    if pack_listing {
+        source.path.clear();
         if let Some(first) = scan_paths.first().cloned() {
             source.path = first.clone();
             source.directory_url = if first.is_empty() {
@@ -1236,7 +1295,11 @@ fn fetch_local_source_references(
         });
     }
 
-    for (kind, path) in resolve_artifact_scans(&configured_path, pack.as_ref()) {
+    for (kind, path) in if pack_listing {
+        resolve_artifact_scans("", pack.as_ref())
+    } else {
+        Vec::new()
+    } {
         let mut artifact_files = Vec::new();
         collect_local_files(
             &root,
@@ -1292,6 +1355,7 @@ pub async fn fetch_baseline_reference_sources(
             path: E8_PATH.into(),
             private: false,
             token: None,
+            store_kind: String::new(),
         }]
     } else {
         sources
@@ -1329,6 +1393,7 @@ pub async fn fetch_baseline_reference_sources(
                         directory_url: String::new(),
                         api_url: String::new(),
                         has_token: false,
+                        store_kind: String::new(),
                     },
                     references: Vec::new(),
                     warnings: Vec::new(),
@@ -1515,6 +1580,7 @@ mod tests {
             path: String::new(),
             private: false,
             token: None,
+            store_kind: String::new(),
         })
         .unwrap();
         let load = super::fetch_local_source_references(source).unwrap();
@@ -1549,5 +1615,18 @@ mod tests {
             kind == "windows/group-policy" && path == "windows/group-policy"
         }));
         assert!(scans.iter().any(|(kind, path)| kind == "baseline" && path == "baselines"));
+    }
+
+    #[test]
+    fn store_kind_overrides_path_accident() {
+        let (pack, path) = super::listing_plan("axisTemplated", "policies");
+        assert!(pack);
+        assert!(path.is_empty());
+        let (pack, path) = super::listing_plan("flatJson", "");
+        assert!(!pack);
+        assert!(path.is_empty());
+        let (pack, path) = super::listing_plan("", "static/content/files/intune-config-policies");
+        assert!(!pack);
+        assert_eq!(path, "static/content/files/intune-config-policies");
     }
 }

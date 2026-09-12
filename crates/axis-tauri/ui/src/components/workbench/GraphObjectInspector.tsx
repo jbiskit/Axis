@@ -29,6 +29,7 @@ import { CompliancePolicyStatus } from "./CompliancePolicyStatus";
 import { ComplianceSettingsView } from "./ComplianceSettingsView";
 import { InspectorSaveButton, InspectorSaveProvider } from "./inspectorSave";
 import { PolicySettingsEditor } from "./PolicySettingsEditor";
+import { TemplatePolicySettingsEditor } from "./TemplatePolicySettingsEditor";
 import { AssignmentsDialog } from "./PolicyBulkAssign";
 import { ScriptRunStatus } from "./RemediationDeviceStatus";
 import { formatRelative, IncompleteBanner, InspectorErrorBoundary } from "./shared";
@@ -490,6 +491,16 @@ export function GraphObjectInspector({
   const portalHref = intunePortalUrlForKind(kind, id, asRecord(detail?.object) ?? null);
   const payloadLabel = detail && hasScript(detail) ? "Scripts" : "Settings";
   const settings = Array.isArray(detail?.settings) ? detail.settings : [];
+  const objectRecord = asRecord(detail?.object);
+  const templateReference =
+    objectRecord && typeof objectRecord.templateReference === "object"
+      ? (objectRecord.templateReference as Record<string, unknown>)
+      : null;
+  const templateBacked = Boolean(
+    templateReference &&
+      typeof templateReference.templateId === "string" &&
+      templateReference.templateId.trim(),
+  );
   const extras = detail?.extras ?? null;
   const rows = useMemo(() => (detail ? overviewRows(detail) : []), [detail]);
   const inspectorTabs: Array<[InspectorTab, string]> = [
@@ -891,12 +902,21 @@ export function GraphObjectInspector({
               {kind === "configurationPolicy" ? (
                 <section className="axis-panel" style={{ padding: "0.85rem" }}>
                   <InspectorErrorBoundary>
-                    <PolicySettingsEditor
-                      policyId={detail.id}
-                      object={detail.object}
-                      settings={settings}
-                      onSaved={() => void reloadDetail()}
-                    />
+                    {templateBacked ? (
+                      <TemplatePolicySettingsEditor
+                        policyId={detail.id}
+                        object={detail.object}
+                        settings={settings}
+                        onSaved={() => void reloadDetail()}
+                      />
+                    ) : (
+                      <PolicySettingsEditor
+                        policyId={detail.id}
+                        object={detail.object}
+                        settings={settings}
+                        onSaved={() => void reloadDetail()}
+                      />
+                    )}
                   </InspectorErrorBoundary>
                 </section>
               ) : settings.length > 0 ? (
