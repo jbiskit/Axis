@@ -653,6 +653,8 @@ export type CatalogSettingOption = {
   displayName: string;
   description?: string | null;
   isDefault?: boolean | null;
+  /** Short Graph type of this option's `optionValue` (e.g. `IntegerSettingValue`). */
+  valueType?: string | null;
   dependedOnBy: CatalogDependentRef[];
 };
 

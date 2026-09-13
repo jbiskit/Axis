@@ -359,7 +359,29 @@ fn template_base_key(row: &ConfigurationPolicyTemplateSummary) -> Option<String>
     Some(base.to_ascii_lowercase())
 }
 
-/// Distinct Intune profile: family + display name (case-insensitive) + platform.
+/// Normalized platform set for a template, so `windows10` and
+/// `windows10,windows11` compare equal while `macOS` and `windows10` do not.
+fn template_platform_key(row: &ConfigurationPolicyTemplateSummary) -> String {
+    let mut parts: Vec<String> = row
+        .platforms
+        .as_deref()
+        .unwrap_or("")
+        .split(',')
+        .map(|part| part.trim().to_ascii_lowercase())
+        .filter(|part| !part.is_empty())
+        .collect();
+    parts.sort();
+    parts.dedup();
+    parts.join(",")
+}
+
+/// Distinct Intune profile: family + platform + display name (case-insensitive).
+///
+/// Platform is part of the key because the same display name can exist for more
+/// than one platform — e.g. "Microsoft Defender Antivirus Exclusions" ships as
+/// both a macOS and a Windows profile. Excluding platform collapsed those into a
+/// single picker row and made one of them unselectable. Platform *strings* are
+/// normalized so casing/ordering variants of the same set still collapse.
 fn template_profile_key(row: &ConfigurationPolicyTemplateSummary) -> String {
     format!(
         "{}\0{}\0{}",
@@ -367,8 +389,8 @@ fn template_profile_key(row: &ConfigurationPolicyTemplateSummary) -> String {
             .as_deref()
             .unwrap_or("")
             .to_ascii_lowercase(),
+        template_platform_key(row),
         row.display_name.to_ascii_lowercase(),
-        row.platforms.as_deref().unwrap_or("").to_ascii_lowercase(),
     )
 }
 
@@ -1224,7 +1246,9 @@ mod tests {
     }
 
     #[test]
-    fn same_name_on_different_platforms_stays_separate() {
+    fn same_name_collapses_across_platform_string_variants() {
+        // Casing/ordering variants of the same platform set are the same profile
+        // and must not surface as duplicate picker rows.
         let rows = vec![
             sample_template(
                 "av-win_2",
@@ -1235,18 +1259,45 @@ mod tests {
                 "windows10",
             ),
             sample_template(
-                "av-mac_1",
+                "av-win_3",
                 "Microsoft Defender Antivirus",
+                Some(3),
+                Some("active"),
+                None,
+                "windows10,windows11",
+            ),
+        ];
+        let templates = prefer_latest_templates(rows);
+        assert_eq!(templates.len(), 1);
+        assert_eq!(templates[0].id, "av-win_3");
+    }
+
+    #[test]
+    fn same_name_kept_per_platform() {
+        // The same display name ships as separate macOS and Windows profiles.
+        // Both must stay selectable — collapsing them hid the Windows one.
+        let rows = vec![
+            sample_template(
+                "excl-mac_1",
+                "Microsoft Defender Antivirus Exclusions",
                 Some(1),
                 Some("active"),
                 None,
                 "macOS",
             ),
+            sample_template(
+                "excl-win_1",
+                "Microsoft Defender Antivirus Exclusions",
+                Some(1),
+                Some("active"),
+                None,
+                "windows10",
+            ),
         ];
         let templates = prefer_latest_templates(rows);
         assert_eq!(templates.len(), 2);
-        assert_eq!(templates[0].platforms.as_deref(), Some("macOS"));
-        assert_eq!(templates[1].platforms.as_deref(), Some("windows10"));
-        assert_eq!(templates[1].id, "av-win_2");
+        let ids: Vec<_> = templates.iter().map(|row| row.id.as_str()).collect();
+        assert!(ids.contains(&"excl-mac_1"));
+        assert!(ids.contains(&"excl-win_1"));
     }
 }

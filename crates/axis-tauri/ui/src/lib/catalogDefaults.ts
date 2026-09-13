@@ -7,6 +7,8 @@ export type GraphDefaultSource = {
 
 export type ConfiguredSettingValue =
   | { kind: "choice"; optionItemId: string }
+  | { kind: "choiceCollection"; optionItemIds: string[] }
+  | { kind: "groupCollection"; rows: Array<{ children: Record<string, unknown> }> }
   | { kind: "simple"; value: string | number | boolean }
   | { kind: "simpleCollection"; values: string[] };
 
@@ -52,6 +54,16 @@ export function configuredValueMatchesGraphDefault(
     const defaultId = graphDefaultOptionId(source);
     return defaultId != null && configured.optionItemId === defaultId;
   }
+  if (configured.kind === "choiceCollection") {
+    const defaultId = graphDefaultOptionId(source);
+    if (defaultId == null) return false;
+    return (
+      configured.optionItemIds.length === 1 && configured.optionItemIds[0] === defaultId
+    );
+  }
+  // A group collection is a list of rows; "default" is not a meaningful
+  // comparison for it, so never claim it matches.
+  if (configured.kind === "groupCollection") return false;
   const defaultString = source.defaultString;
   if (defaultString == null) return false;
   if (configured.kind === "simple") return simpleValuesMatch(configured.value, defaultString);

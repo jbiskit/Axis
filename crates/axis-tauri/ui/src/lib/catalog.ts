@@ -154,9 +154,26 @@ export function categoryBreadcrumb(
 
 export type SettingValueDraft =
   | { kind: "choice"; optionItemId: string; children: Record<string, SettingValueDraft> }
+  | { kind: "choiceCollection"; optionItemIds: string[] }
+  | { kind: "groupCollection"; rows: GroupCollectionRow[] }
   | { kind: "simple"; value: string | number | boolean }
   | { kind: "simpleCollection"; values: string[] }
   | { kind: "unsupported"; reason: string };
+
+/**
+ * One row of a repeating group collection (e.g. a Defender scan exclusion).
+ * `children` holds that row's own settings, keyed by definition id — the row's
+ * `$type` choice plus whichever dependent field that choice requires.
+ */
+export type GroupCollectionRow = {
+  children: Record<string, SettingValueDraft>;
+  /**
+   * Per-row `settingDefinitionId -> settingInstanceTemplateId`. Each row in a
+   * group collection has its own template ids, so a single flat map cannot
+   * represent them.
+   */
+  templateRefs?: Record<string, string>;
+};
 
 const BOOLEAN_TRUE_TOKENS = new Set(["true", "enabled", "enable", "allow", "allowed", "yes", "on"]);
 const BOOLEAN_FALSE_TOKENS = new Set(["false", "disabled", "disable", "block", "blocked", "no", "off"]);
@@ -310,6 +327,29 @@ function isGroupCollection(detail: CatalogSettingDetail): boolean {
   return /settingGroup/i.test(detail.kind) || /SettingGroup/i.test(detail["@odata.type"] ?? "");
 }
 
+/**
+ * A group *collection* holds repeating rows (e.g. scan exclusions), unlike a
+ * plain group which holds one fixed set of children.
+ */
+export function isGroupCollectionDetail(detail: CatalogSettingDetail): boolean {
+  return (
+    /SettingGroupCollection/i.test(detail.kind) ||
+    /SettingGroupCollection/i.test(detail["@odata.type"] ?? "")
+  );
+}
+
+/**
+ * A choice *collection* definition (`...ChoiceSettingCollectionDefinition`) holds
+ * a set of selected options, not one. Graph rejects it when sent as a plain
+ * ChoiceSetting instance, so it needs its own editor and payload shape.
+ */
+export function isChoiceCollection(detail: CatalogSettingDetail): boolean {
+  return (
+    /ChoiceSettingCollection/i.test(detail.kind) ||
+    /ChoiceSettingCollection/i.test(detail["@odata.type"] ?? "")
+  );
+}
+
 function isSimpleCollection(detail: CatalogSettingDetail): boolean {
   return /SimpleSettingCollection/i.test(detail.kind) || /SimpleSettingCollection/i.test(detail["@odata.type"] ?? "");
 }
@@ -356,6 +396,28 @@ export function settingDraftSaveError(
   required = false,
 ): string | null {
   if (draft.kind === "unsupported") return draft.reason;
+  if (draft.kind === "groupCollection") {
+    const min = detail.minimumCount && detail.minimumCount > 0 ? detail.minimumCount : 0;
+    if (draft.rows.length < min) {
+      return `“${settingLabel(detail)}” requires at least ${min} row${min === 1 ? "" : "s"}.`;
+    }
+    for (const row of draft.rows) {
+      for (const [childId, childDraft] of Object.entries(row.children)) {
+        const childDetail = dependents[childId];
+        if (!childDetail || childDraft.kind === "unsupported") continue;
+        const nested = settingDraftSaveError(childDetail, childDraft, dependents, true);
+        if (nested) return nested;
+      }
+    }
+    return null;
+  }
+  if (draft.kind === "choiceCollection") {
+    const min = detail.minimumCount && detail.minimumCount > 0 ? detail.minimumCount : 0;
+    if (draft.optionItemIds.length < min) {
+      return `“${settingLabel(detail)}” requires at least ${min} selected option${min === 1 ? "" : "s"}.`;
+    }
+    return null;
+  }
   if (draft.kind === "simpleCollection") {
     if (!required) return null;
     const min = detail.minimumCount && detail.minimumCount > 0 ? detail.minimumCount : 1;
@@ -439,13 +501,23 @@ export function defaultDraftForSetting(
   const nextVisit = new Set(visiting);
   nextVisit.add(detail.id);
   if (isGroupCollection(detail)) {
-    return {
-      kind: "unsupported",
-      reason: `“${detail.displayName}” is a ${detail.kind || "group collection"} setting — the row is listed like the portal, but this editor is not ported yet.`,
-    };
+    if (!isGroupCollectionDetail(detail)) {
+      return {
+        kind: "unsupported",
+        reason: `“${detail.displayName}” is a ${detail.kind || "group"} setting — the row is listed like the portal, but this editor is not ported yet.`,
+      };
+    }
+    // A group collection starts empty; the portal adds rows on demand.
+    return { kind: "groupCollection", rows: [] };
   }
   const options = detail.options ?? [];
   if (options.length > 0) {
+    if (isChoiceCollection(detail)) {
+      // `defaultOptionId` on a collection is the option the portal pre-checks;
+      // an empty selection is valid when `minimumCount` is 0.
+      const defaultId = graphDefaultOptionId(detail);
+      return { kind: "choiceCollection", optionItemIds: defaultId ? [defaultId] : [] };
+    }
     const preferred =
       graphDefaultOptionId(detail) ||
       options.find((option) => /enabled|allow|yes/i.test(`${option.displayName} ${option.itemId}`))
@@ -493,6 +565,65 @@ export function draftWithChoiceOption(
   return { kind: "choice", optionItemId, children };
 }
 
+/**
+ * The row's `$type` choice inside a group collection — the definition whose
+ * options pick which dependent field the row shows (Path / File extension / …).
+ */
+export function groupCollectionTypeDetail(
+  dependents: Record<string, CatalogSettingDetail>,
+): CatalogSettingDetail | null {
+  for (const child of Object.values(dependents)) {
+    if ((child.options ?? []).length > 0) return child;
+  }
+  return null;
+}
+
+/** A fresh row for a group collection, defaulting its `$type` and dependents. */
+export function newGroupCollectionRow(
+  dependents: Record<string, CatalogSettingDetail>,
+  templateRefs?: Record<string, string>,
+): GroupCollectionRow {
+  const typeDetail = groupCollectionTypeDetail(dependents);
+  if (!typeDetail) return { children: {}, templateRefs };
+  const draft = defaultDraftForSetting(typeDetail, dependents);
+  return { children: { [typeDetail.id]: draft }, templateRefs };
+}
+
+/**
+ * Switch a row's `$type`, keeping any dependent values that still apply and
+ * seeding the newly required ones.
+ */
+export function rowWithTypeOption(
+  row: GroupCollectionRow,
+  dependents: Record<string, CatalogSettingDetail>,
+  optionItemId: string,
+): GroupCollectionRow {
+  const typeDetail = groupCollectionTypeDetail(dependents);
+  if (!typeDetail) return row;
+  const previous = row.children[typeDetail.id];
+  const next = draftWithChoiceOption(typeDetail, dependents, optionItemId, previous);
+  return { ...row, children: { ...row.children, [typeDetail.id]: next } };
+}
+
+/**
+ * Attach each row's own template ids to a group collection draft. Rows read
+ * back from Graph carry none, and the flat ref map cannot represent them
+ * (rows share definition ids), so the template's row at the same index is used.
+ */
+export function withRowTemplateRefs(
+  draft: SettingValueDraft,
+  rowTemplateRefs?: Array<Record<string, string>>,
+): SettingValueDraft {
+  if (draft.kind !== "groupCollection" || !rowTemplateRefs?.length) return draft;
+  return {
+    kind: "groupCollection",
+    rows: draft.rows.map((row, index) => ({
+      ...row,
+      templateRefs: row.templateRefs ?? rowTemplateRefs[index],
+    })),
+  };
+}
+
 function simpleValuePayload(detail: CatalogSettingDetail, value: string | number | boolean) {
   if (typeof value === "boolean" || /Boolean/i.test(detail.valueType ?? "")) {
     return {
@@ -516,8 +647,57 @@ export function buildSettingInstance(
   detail: CatalogSettingDetail,
   draft: SettingValueDraft,
   dependents: Record<string, CatalogSettingDetail> = {},
+  templateRefs: Record<string, string> = {},
+  rowTemplateRefs?: Array<Record<string, string>>,
 ): Record<string, unknown> {
   if (draft.kind === "unsupported") throw new Error(draft.reason);
+  if (draft.kind === "choiceCollection") {
+    return withTemplateRef(
+      {
+        "@odata.type":
+          "#microsoft.graph.deviceManagementConfigurationChoiceSettingCollectionInstance",
+        settingDefinitionId: detail.id,
+        choiceSettingCollectionValue: draft.optionItemIds.map((optionItemId) => ({
+          "@odata.type": "#microsoft.graph.deviceManagementConfigurationChoiceSettingValue",
+          value: optionItemId,
+          children: [],
+        })),
+      },
+      templateRefs[detail.id],
+    );
+  }
+  if (draft.kind === "groupCollection") {
+    const rows = draft.rows
+      .map((row, index) => {
+        const children: Record<string, unknown>[] = [];
+        // Each row has its own template ids. The flat `templateRefs` map only
+        // holds one row's ids (rows share definition ids, so they collide), and
+        // reusing it would stamp the same reference on every row — Graph rejects
+        // that as a duplicate reference. Prefer the row's own ids.
+        const refs = {
+          ...(row.templateRefs ?? {}),
+          ...(rowTemplateRefs?.[index] ?? {}),
+        };
+        for (const [childId, childDraft] of Object.entries(row.children)) {
+          const childDetail = dependents[childId];
+          if (!childDetail || childDraft.kind === "unsupported") continue;
+          const built = buildSettingInstance(childDetail, childDraft, dependents, refs);
+          if (isEffectivelyEmptyInstance(built)) continue;
+          children.push(built);
+        }
+        return children;
+      })
+      .filter((children) => children.length > 0);
+    return withTemplateRef(
+      {
+        "@odata.type":
+          "#microsoft.graph.deviceManagementConfigurationGroupSettingCollectionInstance",
+        settingDefinitionId: detail.id,
+        groupSettingCollectionValue: rows.map((children) => groupSettingValue(children)),
+      },
+      templateRefs[detail.id],
+    );
+  }
   if (draft.kind === "choice") {
     const children: Record<string, unknown>[] = [];
     for (const dep of dependentsForOption(detail, draft.optionItemId, dependents)) {
@@ -534,7 +714,7 @@ export function buildSettingInstance(
       if (dep.required && isEmptyCollectionDraft(childDetail, childDraft)) {
         throw new Error(requiredCollectionMessage(childDetail));
       }
-      const built = buildSettingInstance(childDetail, childDraft, dependents);
+      const built = buildSettingInstance(childDetail, childDraft, dependents, templateRefs);
       // Optional simple-collection dependents (e.g. ASR per-rule exclusions)
       // must be omitted when empty — Graph rejects `simpleSettingCollectionValue: []`.
       // Required collections must have at least one item: do not send `[]` and
@@ -542,28 +722,54 @@ export function buildSettingInstance(
       if (isEffectivelyEmptyInstance(built)) continue;
       children.push(built);
     }
-    return {
-      "@odata.type": "#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance",
-      settingDefinitionId: detail.id,
-      choiceSettingValue: {
-        "@odata.type": "#microsoft.graph.deviceManagementConfigurationChoiceSettingValue",
-        value: draft.optionItemId,
-        children,
+    return withTemplateRef(
+      {
+        "@odata.type": "#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance",
+        settingDefinitionId: detail.id,
+        choiceSettingValue: {
+          "@odata.type": "#microsoft.graph.deviceManagementConfigurationChoiceSettingValue",
+          value: draft.optionItemId,
+          children,
+        },
       },
-    };
+      templateRefs[detail.id],
+    );
   }
   if (draft.kind === "simpleCollection") {
     const filled = draft.values.map((value) => value.trim()).filter(Boolean);
-    return {
-      "@odata.type": "#microsoft.graph.deviceManagementConfigurationSimpleSettingCollectionInstance",
-      settingDefinitionId: detail.id,
-      simpleSettingCollectionValue: filled.map((value) => simpleValuePayload(detail, value)),
-    };
+    return withTemplateRef(
+      {
+        "@odata.type":
+          "#microsoft.graph.deviceManagementConfigurationSimpleSettingCollectionInstance",
+        settingDefinitionId: detail.id,
+        simpleSettingCollectionValue: filled.map((value) => simpleValuePayload(detail, value)),
+      },
+      templateRefs[detail.id],
+    );
   }
+  return withTemplateRef(
+    {
+      "@odata.type": "#microsoft.graph.deviceManagementConfigurationSimpleSettingInstance",
+      settingDefinitionId: detail.id,
+      simpleSettingValue: simpleValuePayload(detail, draft.value),
+    },
+    templateRefs[detail.id],
+  );
+}
+
+/**
+ * Template-backed policies require every instance to carry the template id it
+ * was created from; Graph rejects the write with "TemplateReference not found"
+ * when a nested dependent is sent without one.
+ */
+function withTemplateRef(
+  instance: Record<string, unknown>,
+  templateId?: string,
+): Record<string, unknown> {
+  if (!templateId) return instance;
   return {
-    "@odata.type": "#microsoft.graph.deviceManagementConfigurationSimpleSettingInstance",
-    settingDefinitionId: detail.id,
-    simpleSettingValue: simpleValuePayload(detail, draft.value),
+    ...instance,
+    settingInstanceTemplateReference: { settingInstanceTemplateId: templateId },
   };
 }
 
@@ -608,21 +814,97 @@ export function groupInstanceChildren(instance: Record<string, unknown>): Record
 export function buildGroupCollectionInstance(
   groupDetail: CatalogSettingDetail,
   children: Record<string, unknown>[],
+  templateId?: string,
 ): Record<string, unknown> {
-  return {
-    "@odata.type": "#microsoft.graph.deviceManagementConfigurationGroupSettingCollectionInstance",
-    settingDefinitionId: groupDetail.id,
-    groupSettingCollectionValue: [groupSettingValue(children)],
-  };
+  return withTemplateRef(
+    {
+      "@odata.type":
+        "#microsoft.graph.deviceManagementConfigurationGroupSettingCollectionInstance",
+      settingDefinitionId: groupDetail.id,
+      groupSettingCollectionValue: [groupSettingValue(children)],
+    },
+    templateId,
+  );
 }
 
 function mergeGroupInstances(
   existing: Record<string, unknown>,
   incoming: Record<string, unknown>,
 ): Record<string, unknown> {
+  const definitionId = instanceDefinitionId(incoming) ?? instanceDefinitionId(existing);
+  // Rebuilding the group drops its template reference, which Graph requires on
+  // template-backed policies. Carry it over from whichever side has one.
+  const reference =
+    asRecord(incoming.settingInstanceTemplateReference) ??
+    asRecord(existing.settingInstanceTemplateReference);
+  const templateId =
+    textField(reference?.settingInstanceTemplateId) ?? undefined;
+
+  // A group *collection* holds repeating rows whose children share definition
+  // ids (e.g. `..._item_$type`). Deduping children across the whole collection
+  // would collapse the rows into one, so merge row-by-row: row N of the
+  // incoming instance updates row N of the existing one, extra rows append.
+  if (existing.groupSettingCollectionValue != null || incoming.groupSettingCollectionValue != null) {
+    const rowsOf = (value: unknown): Record<string, unknown>[] =>
+      Array.isArray(value)
+        ? value.filter((entry): entry is Record<string, unknown> => Boolean(asRecord(entry)))
+        : [];
+    const existingRows = rowsOf(existing.groupSettingCollectionValue);
+    const incomingRows = rowsOf(incoming.groupSettingCollectionValue);
+    const rows: Record<string, unknown>[] = [];
+    for (let index = 0; index < Math.max(existingRows.length, incomingRows.length); index += 1) {
+      const base = existingRows[index];
+      const next = incomingRows[index];
+      if (base && next) {
+        rows.push(groupSettingValue(mergeChildrenById(base, next)));
+      } else if (base) {
+        rows.push(groupSettingValue(rowChildren(base)));
+      } else if (next) {
+        rows.push(groupSettingValue(rowChildren(next)));
+      }
+    }
+    return withTemplateRef(
+      {
+        "@odata.type":
+          "#microsoft.graph.deviceManagementConfigurationGroupSettingCollectionInstance",
+        settingDefinitionId: definitionId,
+        groupSettingCollectionValue: rows,
+      },
+      templateId,
+    );
+  }
+
+  return withTemplateRef(
+    {
+      "@odata.type": "#microsoft.graph.deviceManagementConfigurationGroupSettingInstance",
+      settingDefinitionId: definitionId,
+      groupSettingValue: groupSettingValue(mergeChildrenById(existing, incoming)),
+    },
+    templateId,
+  );
+}
+
+/**
+ * Children of a group instance or of a single `groupSettingCollectionValue` row.
+ * A row is `{ children: [...] }`, which `groupInstanceChildren` does not read.
+ */
+function rowChildren(value: Record<string, unknown>): Record<string, unknown>[] {
+  if (Array.isArray(value.children)) {
+    return value.children.filter((child): child is Record<string, unknown> =>
+      Boolean(asRecord(child)),
+    );
+  }
+  return groupInstanceChildren(value);
+}
+
+/** Merge two instances' children by definition id: incoming wins, order preserved. */
+function mergeChildrenById(
+  existing: Record<string, unknown>,
+  incoming: Record<string, unknown>,
+): Record<string, unknown>[] {
   const children: Record<string, unknown>[] = [];
   const seen = new Set<string>();
-  for (const child of [...groupInstanceChildren(existing), ...groupInstanceChildren(incoming)]) {
+  for (const child of [...rowChildren(existing), ...rowChildren(incoming)]) {
     const id = instanceDefinitionId(child) ?? JSON.stringify(child);
     if (seen.has(id)) {
       const index = children.findIndex((row) => instanceDefinitionId(row) === id);
@@ -632,20 +914,7 @@ function mergeGroupInstances(
     seen.add(id);
     children.push(child);
   }
-  const definitionId = instanceDefinitionId(incoming) ?? instanceDefinitionId(existing);
-  if (existing.groupSettingCollectionValue != null || incoming.groupSettingCollectionValue != null) {
-    return {
-      "@odata.type":
-        "#microsoft.graph.deviceManagementConfigurationGroupSettingCollectionInstance",
-      settingDefinitionId: definitionId,
-      groupSettingCollectionValue: [groupSettingValue(children)],
-    };
-  }
-  return {
-    "@odata.type": "#microsoft.graph.deviceManagementConfigurationGroupSettingInstance",
-    settingDefinitionId: definitionId,
-    groupSettingValue: groupSettingValue(children),
-  };
+  return children;
 }
 
 /** Nest a leaf under its Apple/group parent so Graph accepts the policy. */
@@ -655,13 +924,8 @@ export function wrapSettingInstanceForPolicy(
   byId: Record<string, CatalogSettingDetail> = {},
   templateRefs: Record<string, string> = {},
 ): Record<string, unknown> {
-  const leafRef = templateRefs[detail.id];
-  const leaf = leafRef
-    ? {
-        ...instance,
-        settingInstanceTemplateReference: { settingInstanceTemplateId: leafRef },
-      }
-    : instance;
+  // `buildSettingInstance` already stamped the leaf's own template reference.
+  const leaf = instance;
   const parentId = detail.rootDefinitionId?.trim();
   if (!parentId || parentId === detail.id) return leaf;
   if (instanceDefinitionId(leaf) === parentId) return leaf;
@@ -693,10 +957,11 @@ export function wrapSettingInstanceForPolicy(
     }
     return wrapped;
   };
-  const asCollection =
-    synthetic ||
-    /collection/i.test(parent?.kind ?? "") ||
-    /Collection/i.test(parent?.["@odata.type"] ?? "");
+  // Only a group *collection* parent takes `groupSettingCollectionValue`. A plain
+  // `...SettingGroupDefinition` takes `groupSettingValue`; wrapping it as a
+  // collection makes Graph reject the child as ChoiceCollection when the child's
+  // own definition is a plain ChoiceSetting.
+  const asCollection = /collection/i.test(parent?.kind ?? "");
   return group(asCollection);
 }
 
@@ -750,6 +1015,23 @@ export function collectDependentIds(
   const ids = new Set(
     (detail.options ?? []).flatMap((option) => option.dependedOnBy.map((dep) => dep.settingDefinitionId)),
   );
+  // A group (collection) declares its children on the definition itself via
+  // `dependedOnBy` / `childIds` — it has no options to hang them off.
+  const ownDeps = Array.isArray(detail.raw?.dependedOnBy) ? detail.raw.dependedOnBy : [];
+  for (const dep of ownDeps) {
+    if (typeof dep === "string" && dep.trim()) {
+      ids.add(dep.trim());
+      continue;
+    }
+    const rec = asRecord(dep);
+    const id = textField(rec?.dependedOnBy) ?? textField(rec?.settingDefinitionId);
+    if (id) ids.add(id);
+  }
+  const childIds = Array.isArray(detail.raw?.childIds) ? detail.raw.childIds : [];
+  for (const childId of childIds) {
+    const id = textField(childId);
+    if (id) ids.add(id);
+  }
   for (const child of Object.values(byId)) {
     if (child.id === detail.id || ids.has(child.id)) continue;
     for (const option of detail.options ?? []) {
@@ -789,6 +1071,10 @@ export function draftValueSummary(
   _dependents: Record<string, CatalogSettingDetail>,
 ): string {
   if (draft.kind === "unsupported") return "Not configurable";
+  if (draft.kind === "groupCollection") {
+    const count = draft.rows.length;
+    return count === 0 ? "No rows" : `${count} row${count === 1 ? "" : "s"}`;
+  }
   if (draft.kind === "simple") {
     if (typeof draft.value === "boolean") return draft.value ? "True" : "False";
     return String(draft.value).trim() || "No value entered";
@@ -796,6 +1082,15 @@ export function draftValueSummary(
   if (draft.kind === "simpleCollection") {
     const values = draft.values.map((value) => value.trim()).filter(Boolean);
     return values.length ? `${values.length} value(s)` : "No values added";
+  }
+  if (draft.kind === "choiceCollection") {
+    if (draft.optionItemIds.length === 0) return "No options selected";
+    // Option labels on these definitions are full sentences, so joining them
+    // makes the collapsed row unreadable. Name the first option and count the rest.
+    const first = detail.options.find((candidate) => candidate.itemId === draft.optionItemIds[0]);
+    const firstLabel = catalogUiLabel([first?.displayName], draft.optionItemIds[0]!, detail.id);
+    const extra = draft.optionItemIds.length - 1;
+    return extra > 0 ? `${firstLabel} (+${extra} more)` : firstLabel;
   }
   const match = detail.options.find((candidate) => candidate.itemId === draft.optionItemId);
   return catalogUiLabel(
@@ -829,6 +1124,39 @@ function flattenDraftLeaves(
   const unnamed = Boolean(parentPath) && isAdmxPlaceholderName(detail.displayName);
   const title = unnamed ? detail.id : catalogUiLabel([detail.displayName], detail.id);
   const path = parentPath ? `${parentPath} › ${title}` : catalogUiLabel([detail.displayName], detail.id);
+  if (draft.kind === "groupCollection") {
+    const rows: Array<{ path: string; value: string; unnamed: boolean }> = [];
+    draft.rows.forEach((row, index) => {
+      const rowPath = `Row ${index + 1}`;
+      // Summarize each row as "<type> — <field>: <value>" so the diff reads as
+      // an entry, not a path through the `$type` choice.
+      const parts: string[] = [];
+      for (const [childId, childDraft] of Object.entries(row.children)) {
+        const child = dependents[childId];
+        if (!child) continue;
+        if (childDraft.kind === "choice") {
+          parts.push(draftValueSummary(child, childDraft, dependents));
+          for (const [depId, depDraft] of Object.entries(childDraft.children)) {
+            const dep = dependents[depId];
+            if (!dep) continue;
+            const value = draftValueSummary(dep, depDraft, dependents);
+            if (value && value !== "No value entered") {
+              parts.push(`${catalogUiLabel([dep.displayName], dep.id)}: ${value}`);
+            }
+          }
+          continue;
+        }
+        const value = draftValueSummary(child, childDraft, dependents);
+        if (value) parts.push(`${catalogUiLabel([child.displayName], child.id)}: ${value}`);
+      }
+      rows.push({
+        path: rowPath,
+        value: parts.length ? parts.join(" — ") : "Empty row",
+        unnamed: false,
+      });
+    });
+    return rows.length ? rows : [{ path, value: "No rows", unnamed }];
+  }
   if (draft.kind === "choice") {
     const rows = [{ path, value: draftValueSummary(detail, draft, dependents), unnamed }];
     for (const [id, childDraft] of Object.entries(draft.children)) {
@@ -977,6 +1305,9 @@ export function catalogDetailFromGraphDefinition(raw: unknown): CatalogSettingDe
       displayName: textField(rec.displayName) ?? textField(rec.name) ?? itemId,
       description: textField(rec.description),
       isDefault: typeof rec.isDefault === "boolean" ? rec.isDefault : null,
+      valueType: asRecord(rec.optionValue)
+        ? shortOdataType(textField(asRecord(rec.optionValue)?.["@odata.type"]))
+        : null,
       dependedOnBy,
     });
   }
@@ -1101,6 +1432,41 @@ export function draftFromSettingInstance(
   detail: CatalogSettingDetail,
   dependents: Record<string, CatalogSettingDetail> = {},
 ): SettingValueDraft {
+  if (Array.isArray(instance.groupSettingCollectionValue)) {
+    const rows: GroupCollectionRow[] = [];
+    for (const entry of instance.groupSettingCollectionValue) {
+      const rec = asRecord(entry);
+      const rawChildren = Array.isArray(rec?.children) ? rec.children : [];
+      const children: Record<string, SettingValueDraft> = {};
+      for (const child of rawChildren) {
+        const childInstance = childInstanceFromValue(child);
+        const childId = settingDefinitionIdFromInstance(childInstance);
+        if (!childId || !childInstance) continue;
+        const childDetail = dependents[childId];
+        if (!childDetail) {
+          children[childId] = {
+            kind: "unsupported",
+            reason: `Dependent setting “${childId}” definition was not loaded.`,
+          };
+          continue;
+        }
+        children[childId] = draftFromSettingInstance(childInstance, childDetail, dependents);
+      }
+      rows.push({ children });
+    }
+    return { kind: "groupCollection", rows };
+  }
+
+  if (Array.isArray(instance.choiceSettingCollectionValue)) {
+    const optionItemIds: string[] = [];
+    for (const item of instance.choiceSettingCollectionValue) {
+      const rec = asRecord(item);
+      const value = textField(rec?.value);
+      if (value) optionItemIds.push(value);
+    }
+    return { kind: "choiceCollection", optionItemIds };
+  }
+
   const choice = asRecord(instance.choiceSettingValue);
   if (choice && typeof choice.value === "string") {
     const children: Record<string, SettingValueDraft> = {};
@@ -1175,7 +1541,84 @@ export type TemplateSettingNode = {
   instanceTemplate: Record<string, unknown>;
   definitions: Record<string, CatalogSettingDetail>;
   children: TemplateSettingChild[];
+  /**
+   * Every definition id this template setting can write, mapped to its
+   * `settingInstanceTemplateId`. Includes group children *and* choice
+   * dependents, which Graph requires a template reference for on
+   * template-backed policies.
+   */
+  templateRefs: Record<string, string>;
+  /**
+   * For a group collection, one entry per template row, each mapping that row's
+   * definition ids to their own template ids. Rows are independent, so their
+   * refs cannot be flattened into a single map.
+   */
+  rowTemplateRefs: Array<Record<string, string>>;
 };
+
+/**
+ * Collect `settingDefinitionId -> settingInstanceTemplateId` from an instance
+ * template, walking group and choice value templates so dependents are covered.
+ */
+function collectTemplateRefs(
+  instanceTemplate: Record<string, unknown>,
+  into: Record<string, string> = {},
+): Record<string, string> {
+  const definitionId = textField(instanceTemplate.settingDefinitionId);
+  const templateId = textField(instanceTemplate.settingInstanceTemplateId);
+  if (definitionId && templateId) into[definitionId] = templateId;
+
+  const nested: unknown[] = [];
+  const groupCollection = instanceTemplate.groupSettingCollectionValueTemplate;
+  if (Array.isArray(groupCollection)) {
+    for (const entry of groupCollection) {
+      const rec = asRecord(entry);
+      if (rec && Array.isArray(rec.children)) nested.push(...rec.children);
+    }
+  }
+  const group = asRecord(instanceTemplate.groupSettingValueTemplate);
+  if (group && Array.isArray(group.children)) nested.push(...group.children);
+  const choiceCollection = instanceTemplate.choiceSettingCollectionValueTemplate;
+  if (Array.isArray(choiceCollection)) {
+    for (const entry of choiceCollection) {
+      const rec = asRecord(entry);
+      if (rec && Array.isArray(rec.children)) nested.push(...rec.children);
+    }
+  }
+  const choice = asRecord(instanceTemplate.choiceSettingValueTemplate);
+  if (choice && Array.isArray(choice.children)) nested.push(...choice.children);
+
+  for (const child of nested) {
+    const rec = asRecord(child);
+    if (rec) collectTemplateRefs(rec, into);
+  }
+  return into;
+}
+
+/**
+ * Per-row template refs for a group collection. Each entry in
+ * `groupSettingCollectionValueTemplate` is one row, and its children carry that
+ * row's own `settingInstanceTemplateId`s.
+ */
+function collectRowTemplateRefs(
+  instanceTemplate: Record<string, unknown>,
+): Array<Record<string, string>> {
+  const collection = instanceTemplate.groupSettingCollectionValueTemplate;
+  if (!Array.isArray(collection)) return [];
+  const rows: Array<Record<string, string>> = [];
+  for (const entry of collection) {
+    const rec = asRecord(entry);
+    if (!rec) continue;
+    const refs: Record<string, string> = {};
+    const children = Array.isArray(rec.children) ? rec.children : [];
+    for (const child of children) {
+      const childRec = asRecord(child);
+      if (childRec) collectTemplateRefs(childRec, refs);
+    }
+    rows.push(refs);
+  }
+  return rows;
+}
 
 function templateChildrenFrom(
   instanceTemplate: Record<string, unknown>,
@@ -1233,6 +1676,8 @@ export function parseConfigurationPolicyTemplate(raw: unknown): TemplateSettingN
       instanceTemplate,
       definitions,
       children: templateChildrenFrom(instanceTemplate, definitions),
+      templateRefs: collectTemplateRefs(instanceTemplate),
+      rowTemplateRefs: collectRowTemplateRefs(instanceTemplate),
     });
   }
   return nodes;
