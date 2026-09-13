@@ -676,6 +676,17 @@
   font-size: 0.72rem;
 }
 
+.setting-field-error {
+  margin: 0.3rem 0 0;
+  font-size: 0.72rem;
+  color: var(--axis-danger, #d9534f);
+}
+
+.axis-input.is-invalid {
+  border-color: var(--axis-danger, #d9534f);
+  outline-color: var(--axis-danger, #d9534f);
+}
+
 .setting-instance-inline-check {
   display: inline-flex;
   align-items: center;
@@ -825,6 +836,57 @@
   display: flex;
   padding: 0.5rem 0.65rem;
   background: var(--axis-surface-2, rgba(255, 255, 255, 0.03));
+}
+
+.setting-group-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.setting-group-section {
+  border: 1px solid var(--axis-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.setting-group-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.6rem 0.75rem;
+  cursor: pointer;
+  background: var(--axis-surface-2, rgba(255, 255, 255, 0.03));
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--axis-fg);
+  list-style: none;
+}
+
+.setting-group-section-head::-webkit-details-marker {
+  display: none;
+}
+
+.setting-group-section-head::before {
+  content: "▸";
+  flex: 0 0 auto;
+  margin-right: 0.5rem;
+  color: var(--axis-muted);
+  transition: transform 0.12s ease;
+}
+
+.setting-group-section[open] > .setting-group-section-head::before {
+  transform: rotate(90deg);
+}
+
+.setting-group-section-title {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.setting-group-section > .setting-instance-list {
+  padding: 0 0.5rem 0.5rem;
 }
 
 .setting-value-with-cue:has(.setting-group-collection) {

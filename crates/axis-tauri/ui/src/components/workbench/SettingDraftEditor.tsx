@@ -6,9 +6,11 @@ import {
   draftWithChoiceOption,
   groupCollectionTypeDetail,
   isSimpleBooleanDraft,
+  isSingleEntryGroup,
   multilineXmlHint,
   newGroupCollectionRow,
   rowWithTypeOption,
+  scalarValueError,
   settingDraftSaveError,
   simpleBooleanValue,
   usesMultilineTextEditor,
@@ -47,6 +49,34 @@ export function SettingDraftEditor({
   }
   if (draft.kind === "groupCollection") {
     if (dependentsOnly) return null;
+    // A group capped at one entry is a fixed set of fields, not a list — show
+    // its fields directly rather than a table with Add/Remove row controls.
+    if (isSingleEntryGroup(detail)) {
+      const row = draft.rows[0];
+      const children = Object.entries(row?.children ?? {}).flatMap(([childId, childDraft]) => {
+        const child = dependents[childId];
+        return child ? [
+          <label key={childId} className="device-field">
+            {catalogUiLabel([child.displayName], child.id)}
+            <SettingDraftEditor
+              detail={child}
+              draft={childDraft}
+              dependents={dependents}
+              disabled={disabled}
+              compact
+              onChange={(next) =>
+                onChange({
+                  kind: "groupCollection",
+                  rows: [{ children: { ...(row?.children ?? {}), [childId]: next } }],
+                })
+              }
+            />
+          </label>,
+        ] : [];
+      });
+      if (children.length === 0) return <p className="muted">No fields.</p>;
+      return <div className="stack" style={{ gap: "0.5rem" }}>{children}</div>;
+    }
     const typeDetail = groupCollectionTypeDetail(dependents);
     const typeLabel = typeDetail
       ? catalogUiLabel([typeDetail.displayName], typeDetail.id)
@@ -395,10 +425,12 @@ export function SettingDraftEditor({
       </label>
     );
   }
-  const isNumber = typeof draft.value === "number";
-  const multiline = !isNumber && usesMultilineTextEditor(detail);
-  const stringValue = String(draft.value);
-  const xmlHint = multiline && !isNumber ? multilineXmlHint(detail, stringValue) : null;
+  const isNumber = draft.kind === "simple" && /Integer|Number/i.test(detail.valueType ?? "");
+  const multiline = !isNumber && draft.kind === "simple" && usesMultilineTextEditor(detail);
+  const stringValue = draft.kind === "simple" ? String(draft.value) : "";
+  const xmlHint = multiline ? multilineXmlHint(detail, stringValue) : null;
+  const rangeError =
+    draft.kind === "simple" ? scalarValueError(detail, draft.value, true) : null;
   const input = multiline ? (
     <textarea
       className="axis-input axis-input-multiline"
@@ -413,16 +445,22 @@ export function SettingDraftEditor({
     />
   ) : (
     <input
-      className="axis-input"
+      className={`axis-input${rangeError ? " is-invalid" : ""}`}
       type={isNumber ? "number" : "text"}
       value={stringValue}
       disabled={disabled}
       autoFocus={compact}
       aria-label={catalogUiLabel([detail.displayName], detail.id)}
+      aria-invalid={rangeError ? true : undefined}
+      min={isNumber && detail.minValue != null ? detail.minValue : undefined}
+      max={isNumber && detail.maxValue != null ? detail.maxValue : undefined}
+      step={isNumber ? 1 : undefined}
       onChange={(event) =>
         onChange({
           kind: "simple",
-          value: isNumber ? Number(event.target.value) : event.target.value,
+          // Keep the raw text so an out-of-range or partial entry is still
+          // visible and can be corrected, rather than being coerced to NaN.
+          value: isNumber ? (event.target.value === "" ? "" : Number(event.target.value)) : event.target.value,
         })
       }
     />
@@ -433,6 +471,11 @@ export function SettingDraftEditor({
   const body = (
     <>
       {withDefault}
+      {rangeError ? (
+        <p className="setting-field-error" role="alert">
+          {rangeError}
+        </p>
+      ) : null}
       {xmlHint ? <p className="muted setting-multiline-hint">{xmlHint}</p> : null}
     </>
   );

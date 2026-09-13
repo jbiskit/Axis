@@ -49,8 +49,12 @@ fn authority_base() -> String {
     )
 }
 
-pub fn effective_session_mode(_requested: SessionMode) -> SessionMode {
-    SessionMode::Admin
+/**
+ * Honour the requested mode. Read-only sessions must hold read-only tokens, so
+ * the mode now decides which scope set is requested (see `scopes_for_mode`).
+ */
+pub fn effective_session_mode(requested: SessionMode) -> SessionMode {
+    requested
 }
 
 pub fn is_write_or_privileged_scope(scope: &str) -> bool {
@@ -66,6 +70,64 @@ pub fn token_scp_has_write_scopes(scp: Option<&str>) -> bool {
 
 pub fn device_code_scopes() -> Vec<String> {
     scopes_for_mode(SessionMode::Admin)
+}
+
+/** Scopes every session needs regardless of mode (identity, tenant, refresh). */
+fn base_scopes() -> Vec<String> {
+    vec![
+        "openid".to_string(),
+        "profile".to_string(),
+        // v2 requires an explicit `offline_access` to receive refresh tokens.
+        "offline_access".to_string(),
+        "User.Read".to_string(),
+        "Organization.Read.All".to_string(),
+        "Device.Read.All".to_string(),
+        "User.Read.All".to_string(),
+        "GroupMember.Read.All".to_string(),
+        "Group.Read.All".to_string(),
+        "Policy.Read.All".to_string(),
+        "AuditLog.Read.All".to_string(),
+        "BitlockerKey.Read.All".to_string(),
+        "DeviceLocalCredential.Read.All".to_string(),
+        "DeviceManagementConfiguration.Read.All".to_string(),
+        "DeviceManagementApps.Read.All".to_string(),
+        "DeviceManagementServiceConfig.Read.All".to_string(),
+        "DeviceManagementScripts.Read.All".to_string(),
+        "DeviceManagementManagedDevices.Read.All".to_string(),
+    ]
+}
+
+/** Scopes only a write session requests. Never requested in Read mode. */
+fn write_scopes() -> Vec<String> {
+    vec![
+        "DeviceManagementConfiguration.ReadWrite.All".to_string(),
+        "DeviceManagementApps.ReadWrite.All".to_string(),
+        "DeviceManagementServiceConfig.ReadWrite.All".to_string(),
+        "DeviceManagementScripts.ReadWrite.All".to_string(),
+        "DeviceManagementManagedDevices.ReadWrite.All".to_string(),
+        "DeviceManagementManagedDevices.PrivilegedOperations.All".to_string(),
+        "Group.ReadWrite.All".to_string(),
+    ]
+}
+
+/// Delegated scopes for device-code and refresh. Mapped from the Microsoft
+/// Graph permissions-reference Intune (`DeviceManagement*`) rows this app
+/// calls, plus the directory / Conditional Access / recovery reads those
+/// screens need.
+///
+/// Read mode requests the read-only set, so the issued token's `scp` claim
+/// carries no write scope. Note that a public client receives whatever Entra has
+/// already consented for the app, which can exceed the request — callers must
+/// check the returned token with `token_scp_has_write_scopes` rather than
+/// assuming the request was honoured. Never request `.default`.
+pub fn scopes_for_mode(mode: SessionMode) -> Vec<String> {
+    let mut scopes = base_scopes();
+    if mode == SessionMode::Admin {
+        scopes.extend(write_scopes());
+    }
+    scopes.sort();
+    scopes.dedup();
+    scopes
 }
 
 /// Split a Connect-MgGraph-style `-Scopes` string (comma, space, or newline).
@@ -118,47 +180,6 @@ fn scope_parameter(scopes: &[String]) -> String {
 pub fn scopes_for_mode_with_extras(mode: SessionMode, extras: &[String]) -> Vec<String> {
     let mut scopes = scopes_for_mode(mode);
     scopes.extend(extras.iter().cloned());
-    scopes.sort();
-    scopes.dedup();
-    scopes
-}
-
-/// Delegated scopes for device-code and refresh. Mapped from the Microsoft
-/// Graph permissions-reference Intune (`DeviceManagement*`) rows this app
-/// calls, plus the directory / Conditional Access / recovery reads those
-/// screens need. Always requests the write-capable set; Graph returns whatever
-/// Entra has already granted for this public client.
-///
-/// v2 requires an explicit `offline_access` to receive refresh tokens. Never
-/// request `.default`.
-pub fn scopes_for_mode(_mode: SessionMode) -> Vec<String> {
-    let mut scopes = vec![
-        "openid".to_string(),
-        "profile".to_string(),
-        "offline_access".to_string(),
-        "User.Read".to_string(),
-        "Organization.Read.All".to_string(),
-        "Device.Read.All".to_string(),
-        "User.Read.All".to_string(),
-        "GroupMember.Read.All".to_string(),
-        "Group.Read.All".to_string(),
-        "Policy.Read.All".to_string(),
-        "AuditLog.Read.All".to_string(),
-        "BitlockerKey.Read.All".to_string(),
-        "DeviceLocalCredential.Read.All".to_string(),
-        "DeviceManagementConfiguration.Read.All".to_string(),
-        "DeviceManagementApps.Read.All".to_string(),
-        "DeviceManagementServiceConfig.Read.All".to_string(),
-        "DeviceManagementScripts.Read.All".to_string(),
-        "DeviceManagementManagedDevices.Read.All".to_string(),
-        "DeviceManagementConfiguration.ReadWrite.All".to_string(),
-        "DeviceManagementApps.ReadWrite.All".to_string(),
-        "DeviceManagementServiceConfig.ReadWrite.All".to_string(),
-        "DeviceManagementScripts.ReadWrite.All".to_string(),
-        "DeviceManagementManagedDevices.ReadWrite.All".to_string(),
-        "DeviceManagementManagedDevices.PrivilegedOperations.All".to_string(),
-        "Group.ReadWrite.All".to_string(),
-    ];
     scopes.sort();
     scopes.dedup();
     scopes
@@ -222,6 +243,7 @@ struct PendingFlow {
     expires_at: i64,
     client_id: String,
     extra_scopes: Vec<String>,
+    mode: SessionMode,
 }
 
 #[derive(Clone)]
@@ -272,12 +294,35 @@ impl AuthManager {
         )
     }
 
+    ///
+    /// True when the session is read-only but the token Entra issued still
+    /// carries write or privileged scopes.
+    ///
+    /// This happens because Axis is a public client using a well-known app id:
+    /// Entra returns whatever the tenant has already consented for that app, not
+    /// strictly what was requested. Axis still gates its own writes, but the
+    /// caller should surface this so the user knows the grant exceeds the ask.
+    pub async fn read_only_scope_exceeds_request(&self) -> bool {
+        let current = self.session.lock().await;
+        let Some(session) = current.as_ref() else {
+            return false;
+        };
+        if effective_session_mode(session.mode) != SessionMode::Read {
+            return false;
+        }
+        let Some(access_token) = session.access_token.as_deref() else {
+            return false;
+        };
+        let claims = decode_access_token_claims(access_token);
+        token_scp_has_write_scopes(claims.scp.as_deref())
+    }
+
     pub async fn start_device_code_flow(
         &self,
-        _requested: Option<SessionMode>,
+        requested: Option<SessionMode>,
         extra_scopes: Option<&str>,
     ) -> Result<DeviceCodePrompt, AuthError> {
-        let mode = SessionMode::Admin;
+        let mode = effective_session_mode(requested.unwrap_or_default());
         let extra_scopes = parse_extra_scopes(extra_scopes.unwrap_or(""));
         let client_id = device_code_client_id();
         let response = self
@@ -326,6 +371,7 @@ impl AuthManager {
                 expires_at,
                 client_id,
                 extra_scopes,
+                mode,
             },
         );
 
@@ -403,7 +449,7 @@ impl AuthManager {
             access_token_expires_on: Some(expires_on),
             account_name: account_name.clone(),
             tenant_id: tenant_id.clone(),
-            mode: SessionMode::Admin,
+            mode: flow.mode,
             client_id: flow.client_id,
             extra_scopes: flow.extra_scopes,
         })
@@ -764,6 +810,43 @@ mod tests {
         assert!(token_scp_has_write_scopes(Some(
             "DeviceManagementManagedDevices.PrivilegedOperations.All"
         )));
+    }
+
+    #[test]
+    fn read_mode_requests_no_write_scopes() {
+        let scopes = scopes_for_mode(SessionMode::Read);
+        assert!(
+            !scopes.iter().any(|scope| is_write_or_privileged_scope(scope)),
+            "read mode must not request write scopes: {scopes:?}"
+        );
+        // Identity and reads still present.
+        assert!(scopes.iter().any(|scope| scope == "offline_access"));
+        assert!(scopes
+            .iter()
+            .any(|scope| scope == "DeviceManagementConfiguration.Read.All"));
+    }
+
+    #[test]
+    fn admin_mode_requests_write_scopes() {
+        let scopes = scopes_for_mode(SessionMode::Admin);
+        assert!(scopes
+            .iter()
+            .any(|scope| scope == "DeviceManagementConfiguration.ReadWrite.All"));
+        assert!(scopes
+            .iter()
+            .any(|scope| scope == "DeviceManagementManagedDevices.PrivilegedOperations.All"));
+    }
+
+    #[test]
+    fn requested_mode_is_honoured() {
+        assert_eq!(
+            effective_session_mode(SessionMode::Read),
+            SessionMode::Read
+        );
+        assert_eq!(
+            effective_session_mode(SessionMode::Admin),
+            SessionMode::Admin
+        );
     }
 
     #[test]
