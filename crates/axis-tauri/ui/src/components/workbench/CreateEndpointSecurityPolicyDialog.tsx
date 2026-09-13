@@ -8,11 +8,11 @@ import {
   bundleFromCategoryMap,
   defaultDraftForSetting,
   diffSettingDrafts,
-  draftMatchesGraphDefault,
-  draftValueSummary,
   instancesReadyForGraph,
+  isGroupCollectionDetail,
   parseConfigurationPolicyTemplate,
   settingDraftSaveError,
+  withRowTemplateRefs,
   type SettingValueDraft,
   type TemplateSettingNode,
 } from "../../lib/catalog";
@@ -21,10 +21,10 @@ import {
   fetchConfigurationPolicyTemplate,
   listConfigurationPolicyTemplates,
 } from "../../lib/tauri";
-import { SettingValueWithDefaultCue } from "./SettingDefaultCue";
 import { SettingDescription } from "./SettingDescription";
 import { SettingDraftEditor } from "./SettingDraftEditor";
 import { SettingValueDiff } from "./SettingValueDiff";
+import { templateDisplayLabel } from "../../lib/catalogPolicyProfile";
 
 type PendingEdit = {
   detail: CatalogSettingDetail;
@@ -33,12 +33,13 @@ type PendingEdit = {
   original: SettingValueDraft;
 };
 
-function draftsEqual(left: SettingValueDraft, right: SettingValueDraft): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
-}
-
-function editIsDirty(edit: PendingEdit): boolean {
-  return !draftsEqual(edit.draft, edit.original);
+/**
+ * Every edit in this dialog adds a setting to a policy that does not exist yet,
+ * so `original` is only a seeded draft derived from the Graph default. Choosing
+ * a value that equals that default still enforces it, so any edit is a change.
+ */
+function editIsDirty(_edit: PendingEdit): boolean {
+  return true;
 }
 
 function graphEnum(value?: string | null): string | undefined {
@@ -172,14 +173,15 @@ export function CreateEndpointSecurityPolicyDialog({
   const templateRefByDefinition = useMemo(() => {
     const map: Record<string, string> = {};
     for (const node of nodes ?? []) {
-      const nodeRef = node.instanceTemplate.settingInstanceTemplateId;
-      if (typeof nodeRef === "string" && nodeRef.trim()) map[node.definitionId] = nodeRef.trim();
-      for (const child of node.children) {
-        const childRef = child.instanceTemplate.settingInstanceTemplateId;
-        if (typeof childRef === "string" && childRef.trim()) {
-          map[child.definitionId] = childRef.trim();
-        }
-      }
+      Object.assign(map, node.templateRefs);
+    }
+    return map;
+  }, [nodes]);
+
+  const rowTemplateRefsByDefinition = useMemo(() => {
+    const map: Record<string, Array<Record<string, string>>> = {};
+    for (const node of nodes ?? []) {
+      if (node.rowTemplateRefs.length > 0) map[node.definitionId] = node.rowTemplateRefs;
     }
     return map;
   }, [nodes]);
@@ -223,7 +225,15 @@ export function CreateEndpointSecurityPolicyDialog({
       return;
     }
     const dependents = bundled?.dependents ?? {};
-    upsertEdit(definitionId, detail, dependents, defaultDraftForSetting(detail, dependents));
+    upsertEdit(
+      definitionId,
+      detail,
+      dependents,
+      withRowTemplateRefs(
+        defaultDraftForSetting(detail, dependents),
+        rowTemplateRefsByDefinition[definitionId],
+      ),
+    );
   }
 
   const pending = useMemo(
@@ -245,7 +255,13 @@ export function CreateEndpointSecurityPolicyDialog({
     try {
       const instances = instancesReadyForGraph(
         pending.map((edit) => ({
-          instance: buildSettingInstance(edit.detail, edit.draft, edit.dependents),
+          instance: buildSettingInstance(
+            edit.detail,
+            edit.draft,
+            edit.dependents,
+            templateRefByDefinition,
+            rowTemplateRefsByDefinition[edit.detail.id],
+          ),
           detail: edit.detail,
           byId,
         })),
@@ -277,17 +293,10 @@ export function CreateEndpointSecurityPolicyDialog({
   function renderRow(definitionId: string, detail: CatalogSettingDetail | null, isChild: boolean) {
     const rowEdit = edits[definitionId];
     const rowEditing = editingId === definitionId && Boolean(rowEdit);
-    const rowDirty = Boolean(rowEdit && editIsDirty(rowEdit));
+    const rowDirty = Boolean(rowEdit);
     const canEdit = Boolean(detail);
     const displayName = detail?.displayName ?? definitionId;
     const description = detail?.description ?? detail?.helpText ?? undefined;
-    const configuredDraft = rowEdit && !rowEditing && !rowDirty ? rowEdit.original : undefined;
-    const valueSummary = configuredDraft
-      ? draftValueSummary(rowEdit.detail, configuredDraft, rowEdit.dependents)
-      : "Not configured";
-    const showGraphDefault = Boolean(
-      configuredDraft && draftMatchesGraphDefault(rowEdit.detail, configuredDraft),
-    );
     return (
       <li
         key={`${isChild ? "child" : "setting"}:${definitionId}`}
@@ -333,9 +342,7 @@ export function CreateEndpointSecurityPolicyDialog({
                 )}
               />
             ) : (
-              <span className="muted">
-                <SettingValueWithDefaultCue show={showGraphDefault}>{valueSummary}</SettingValueWithDefaultCue>
-              </span>
+              <span className="muted">Not configured</span>
             )}
             {rowEditing && rowDirty && rowEdit ? (
               <SettingValueDiff
@@ -362,7 +369,18 @@ export function CreateEndpointSecurityPolicyDialog({
             )}
           </div>
         </div>
-        {rowEditing && rowEdit && rowEdit.draft.kind === "choice" && Object.keys(rowEdit.draft.children).length > 0 ? (
+        {rowEditing && rowEdit && isGroupCollectionDetail(rowEdit.detail) ? (
+          <div className="policy-setting-inline-editor is-wide">
+            <SettingDraftEditor
+              detail={rowEdit.detail}
+              draft={rowEdit.draft}
+              dependents={rowEdit.dependents}
+              rowTemplateRefs={rowTemplateRefsByDefinition[definitionId]}
+              onChange={(draft) => patchDraft(definitionId, draft)}
+            />
+          </div>
+        ) : null}
+        {rowEditing && rowEdit && !isGroupCollectionDetail(rowEdit.detail) && rowEdit.draft.kind === "choice" && Object.keys(rowEdit.draft.children).length > 0 ? (
           <div className="policy-setting-inline-editor">
             <SettingDraftEditor
               detail={rowEdit.detail}
@@ -412,7 +430,7 @@ export function CreateEndpointSecurityPolicyDialog({
               </option>
               {(profiles ?? []).map((profile) => (
                 <option key={profile.id} value={profile.id}>
-                  {profile.displayName}
+                  {templateDisplayLabel(profile)}
                 </option>
               ))}
             </select>
@@ -448,6 +466,11 @@ export function CreateEndpointSecurityPolicyDialog({
             <ul className="setting-instance-list">
               {nodes.map((node) => {
                 const detail = node.definitions[node.definitionId];
+                // A group *collection* is a repeating list — render it as one
+                // editable row rather than a fixed set of children.
+                if (detail && isGroupCollectionDetail(detail)) {
+                  return renderRow(node.definitionId, detail, false);
+                }
                 const isGroup = node.children.length > 0;
                 if (!isGroup) {
                   return renderRow(node.definitionId, detail, false);

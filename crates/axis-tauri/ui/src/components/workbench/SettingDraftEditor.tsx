@@ -4,8 +4,11 @@ import {
   dependentsForOption,
   draftMatchesGraphDefault,
   draftWithChoiceOption,
+  groupCollectionTypeDetail,
   isSimpleBooleanDraft,
   multilineXmlHint,
+  newGroupCollectionRow,
+  rowWithTypeOption,
   settingDraftSaveError,
   simpleBooleanValue,
   usesMultilineTextEditor,
@@ -27,6 +30,7 @@ export function SettingDraftEditor({
   compact = false,
   dependentsOnly = false,
   disabled = false,
+  rowTemplateRefs,
 }: {
   detail: CatalogSettingDetail;
   draft: SettingValueDraft;
@@ -35,9 +39,211 @@ export function SettingDraftEditor({
   compact?: boolean;
   dependentsOnly?: boolean;
   disabled?: boolean;
+  /** Per-row template ids for a group collection, in template row order. */
+  rowTemplateRefs?: Array<Record<string, string>>;
 }) {
   if (draft.kind === "unsupported") {
     return <p className="axis-alert axis-alert-warning">{draft.reason}</p>;
+  }
+  if (draft.kind === "groupCollection") {
+    if (dependentsOnly) return null;
+    const typeDetail = groupCollectionTypeDetail(dependents);
+    const typeLabel = typeDetail
+      ? catalogUiLabel([typeDetail.displayName], typeDetail.id)
+      : "Type";
+    const table = (
+      <div className="setting-group-collection">
+        {draft.rows.length > 0 ? (
+          <div className="setting-group-collection-head" aria-hidden="true">
+            <span>{typeLabel}</span>
+            <span>Additional settings</span>
+            <span />
+          </div>
+        ) : null}
+        {draft.rows.length === 0 ? (
+          <p className="muted setting-group-collection-empty">
+            No rows yet. Add a row to configure an entry.
+          </p>
+        ) : (
+          draft.rows.map((row, index) => {
+            const typeDraft = typeDetail ? row.children[typeDetail.id] : undefined;
+            const optionItemId =
+              typeDraft?.kind === "choice" ? typeDraft.optionItemId : "";
+            const rowDeps = typeDetail
+              ? dependentsForOption(typeDetail, optionItemId, dependents)
+              : [];
+            return (
+              <div key={index} className="setting-group-collection-row">
+                <div className="setting-group-collection-cell">
+                  {typeDetail ? (
+                    <select
+                      className="axis-input"
+                      value={optionItemId}
+                      disabled={disabled}
+                      aria-label={`${typeLabel} (row ${index + 1})`}
+                      onChange={(event) =>
+                        onChange({
+                          kind: "groupCollection",
+                          rows: draft.rows.map((candidate, i) =>
+                            i === index
+                              ? rowWithTypeOption(candidate, dependents, event.target.value)
+                              : candidate,
+                          ),
+                        })
+                      }
+                    >
+                      {(typeDetail.options ?? []).map((option) => (
+                        <option key={option.itemId} value={option.itemId}>
+                          {catalogUiLabel([option.displayName], option.itemId, typeDetail.id)}
+                        </option>
+                      ))}
+                    </select>
+                  ) : null}
+                </div>
+                <div className="setting-group-collection-cell is-fields">
+                  {rowDeps.map((dep) => {
+                    const child = dependents[dep.settingDefinitionId];
+                    // Dependents of the row's `$type` choice live under that
+                    // choice draft, not directly on the row.
+                    const childDraft =
+                      typeDraft?.kind === "choice"
+                        ? typeDraft.children[dep.settingDefinitionId]
+                        : undefined;
+                    if (!child || !childDraft) return null;
+                    const fieldLabel = catalogUiLabel([child.displayName], child.id);
+                    return (
+                      <label key={dep.settingDefinitionId} className="setting-group-collection-field">
+                        <span className="setting-group-collection-field-label">
+                          {fieldLabel}
+                          {dep.required ? <span className="setting-required-mark"> *</span> : null}
+                        </span>
+                        <SettingDraftEditor
+                          detail={child}
+                          draft={childDraft}
+                          dependents={dependents}
+                          disabled={disabled}
+                          compact
+                          onChange={(next) =>
+                            onChange({
+                              kind: "groupCollection",
+                              rows: draft.rows.map((candidate, i) => {
+                                if (i !== index || !typeDetail) return candidate;
+                                const candidateType = candidate.children[typeDetail.id];
+                                if (candidateType?.kind !== "choice") return candidate;
+                                return {
+                                  ...candidate,
+                                  children: {
+                                    ...candidate.children,
+                                    [typeDetail.id]: {
+                                      ...candidateType,
+                                      children: {
+                                        ...candidateType.children,
+                                        [dep.settingDefinitionId]: next,
+                                      },
+                                    },
+                                  },
+                                };
+                              }),
+                            })
+                          }
+                        />
+                      </label>
+                    );
+                  })}
+                </div>
+                <div className="setting-group-collection-cell is-actions">
+                  <button
+                    type="button"
+                    className="axis-btn"
+                    disabled={disabled}
+                    onClick={() =>
+                      onChange({
+                        kind: "groupCollection",
+                        rows: draft.rows.filter((_, i) => i !== index),
+                      })
+                    }
+                  >
+                    Remove
+                  </button>
+                </div>
+              </div>
+            );
+          })
+        )}
+        <div className="setting-group-collection-foot">
+          <button
+            type="button"
+            className="axis-btn"
+            disabled={disabled}
+            onClick={() =>
+              onChange({
+                kind: "groupCollection",
+                rows: [
+                  ...draft.rows,
+                  newGroupCollectionRow(dependents, rowTemplateRefs?.[draft.rows.length]),
+                ],
+              })
+            }
+          >
+            Add row
+          </button>
+        </div>
+      </div>
+    );
+    // The row table is wide; never squeeze it into the inline value column.
+    if (compact) return table;
+    return table;
+  }
+  if (draft.kind === "choiceCollection") {
+    if (dependentsOnly) return null;
+    const selected = new Set(draft.optionItemIds);
+    const toggle = (itemId: string, next: boolean) => {
+      const optionItemIds = next
+        ? [...draft.optionItemIds, itemId]
+        : draft.optionItemIds.filter((id) => id !== itemId);
+      onChange({ kind: "choiceCollection", optionItemIds });
+    };
+    const list = (
+      <div className="setting-choice-collection">
+        {(detail.options ?? []).map((option) => {
+          const label = catalogUiLabel([option.displayName], option.itemId, detail.id);
+          // Graph often repeats the option's displayName verbatim in description;
+          // rendering both doubles a long sentence for no added information.
+          const description =
+            option.description && option.description.trim() !== label.trim()
+              ? option.description
+              : null;
+          return (
+            <label key={option.itemId} className="setting-choice-collection-option">
+              <input
+                type="checkbox"
+                checked={selected.has(option.itemId)}
+                disabled={disabled}
+                onChange={(event) => toggle(option.itemId, event.target.checked)}
+              />
+              <span className="setting-choice-collection-text">
+                <span className="setting-choice-collection-label">{label}</span>
+                {description ? (
+                  <span className="muted setting-choice-collection-desc">{description}</span>
+                ) : null}
+              </span>
+            </label>
+          );
+        })}
+      </div>
+    );
+    const withDefault = (
+      <SettingValueWithDefaultCue show={draftMatchesGraphDefault(detail, draft)}>
+        {list}
+      </SettingValueWithDefaultCue>
+    );
+    if (compact) return withDefault;
+    return (
+      <label className="device-field">
+        Value
+        {withDefault}
+      </label>
+    );
   }
   if (draft.kind === "choice") {
     const settingLabel = catalogUiLabel([detail.displayName], detail.id);

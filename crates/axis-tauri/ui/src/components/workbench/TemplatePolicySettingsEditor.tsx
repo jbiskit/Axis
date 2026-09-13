@@ -12,9 +12,11 @@ import {
   draftMatchesGraphDefault,
   draftValueSummary,
   groupInstanceChildren,
+  isGroupCollectionDetail,
   instancesReadyForGraph,
   parseConfigurationPolicyTemplate,
   settingDraftSaveError,
+  withRowTemplateRefs,
   type SettingValueDraft,
   type TemplateSettingNode,
 } from "../../lib/catalog";
@@ -59,6 +61,7 @@ export function TemplatePolicySettingsEditor({
 }) {
   const templateId = templateIdFromObject(object);
   const [nodes, setNodes] = useState<TemplateSettingNode[] | null>(null);
+  const [rawTemplates, setRawTemplates] = useState<unknown>(null);
   const [templateError, setTemplateError] = useState<string | null>(null);
   const { edits, setEdits, stagedRemoves, setStagedRemoves, editingId, setEditingId } =
     usePersistedPolicySettingsDraft(policyId);
@@ -89,6 +92,7 @@ export function TemplatePolicySettingsEditor({
           return;
         }
         setNodes(parseConfigurationPolicyTemplate(response.templates));
+        setRawTemplates(response.templates);
       })
       .catch((err: unknown) => {
         if (!cancelled) {
@@ -122,14 +126,15 @@ export function TemplatePolicySettingsEditor({
   const templateRefByDefinition = useMemo(() => {
     const map: Record<string, string> = {};
     for (const node of nodes ?? []) {
-      const nodeRef = node.instanceTemplate.settingInstanceTemplateId;
-      if (typeof nodeRef === "string" && nodeRef.trim()) map[node.definitionId] = nodeRef.trim();
-      for (const child of node.children) {
-        const childRef = child.instanceTemplate.settingInstanceTemplateId;
-        if (typeof childRef === "string" && childRef.trim()) {
-          map[child.definitionId] = childRef.trim();
-        }
-      }
+      Object.assign(map, node.templateRefs);
+    }
+    return map;
+  }, [nodes]);
+
+  const rowTemplateRefsByDefinition = useMemo(() => {
+    const map: Record<string, Array<Record<string, string>>> = {};
+    for (const node of nodes ?? []) {
+      if (node.rowTemplateRefs.length > 0) map[node.definitionId] = node.rowTemplateRefs;
     }
     return map;
   }, [nodes]);
@@ -139,10 +144,11 @@ export function TemplatePolicySettingsEditor({
     detail: CatalogSettingDetail,
     dependents: Record<string, CatalogSettingDetail>,
     draft: SettingValueDraft,
+    added: boolean,
   ) {
     setEdits((current) => {
       if (current[definitionId]) return current;
-      return { ...current, [definitionId]: { detail, dependents, draft, original: draft } };
+      return { ...current, [definitionId]: { detail, dependents, draft, original: draft, added } };
     });
     setEditingId(definitionId);
     setError(null);
@@ -181,13 +187,15 @@ export function TemplatePolicySettingsEditor({
     }
     const dependents = bundled?.dependents ?? {};
     const instance = instancesByDefinition.get(definitionId);
+    const rowRefs = rowTemplateRefsByDefinition[definitionId];
     upsertEdit(
       definitionId,
       detail,
       dependents,
       instance
-        ? draftFromSettingInstance(instance, detail, dependents)
-        : defaultDraftForSetting(detail, dependents),
+        ? withRowTemplateRefs(draftFromSettingInstance(instance, detail, dependents), rowRefs)
+        : withRowTemplateRefs(defaultDraftForSetting(detail, dependents), rowRefs),
+      !instance,
     );
   }
 
@@ -225,7 +233,13 @@ export function TemplatePolicySettingsEditor({
       if (pending.length > 0) {
         const instances = instancesReadyForGraph(
           pending.map((edit) => ({
-            instance: buildSettingInstance(edit.detail, edit.draft, edit.dependents),
+            instance: buildSettingInstance(
+              edit.detail,
+              edit.draft,
+              edit.dependents,
+              templateRefByDefinition,
+              rowTemplateRefsByDefinition[edit.detail.id],
+            ),
             detail: edit.detail,
             byId,
           })),
@@ -259,11 +273,11 @@ export function TemplatePolicySettingsEditor({
         for (const rebuild of groupRebuilds) {
           const groupDetail = byId[rebuild.groupId];
           if (!groupDetail) continue;
-          const instance = buildGroupCollectionInstance(groupDetail, rebuild.children);
-          const groupRef = templateRefByDefinition[rebuild.groupId];
-          if (groupRef) {
-            instance.settingInstanceTemplateReference = { settingInstanceTemplateId: groupRef };
-          }
+          const instance = buildGroupCollectionInstance(
+            groupDetail,
+            rebuild.children,
+            templateRefByDefinition[rebuild.groupId],
+          );
           const response = await addSettingsToPolicy(policyId, [instance]);
           if (response.error) throw new Error(response.error);
         }
@@ -386,11 +400,12 @@ export function TemplatePolicySettingsEditor({
                 removed
                 lines={[{ label: "Value", before: valueSummary, after: "Not configured" }]}
               />
-            ) : rowEditing && rowEdit ? (
+            ) : rowEditing && rowEdit && !isGroupCollectionDetail(rowEdit.detail) ? (
               <SettingDraftEditor
                 detail={rowEdit.detail}
                 draft={rowEdit.draft}
                 dependents={rowEdit.dependents}
+                rowTemplateRefs={rowTemplateRefsByDefinition[definitionId]}
                 onChange={(draft) => patchDraft(definitionId, draft)}
                 compact
               />
@@ -410,7 +425,7 @@ export function TemplatePolicySettingsEditor({
                 <SettingValueWithDefaultCue show={showGraphDefault}>{valueSummary}</SettingValueWithDefaultCue>
               </span>
             )}
-            {rowEditing && rowDirty && rowEdit ? (
+            {rowEditing && rowDirty && rowEdit && !isGroupCollectionDetail(rowEdit.detail) ? (
               <SettingValueDiff
                 added={!configured}
                 lines={diffSettingDrafts(
@@ -445,7 +460,30 @@ export function TemplatePolicySettingsEditor({
             ) : null}
           </div>
         </div>
-        {rowEditing && rowEdit && rowEdit.draft.kind === "choice" && Object.keys(rowEdit.draft.children).length > 0 ? (
+        {rowEditing && rowEdit && isGroupCollectionDetail(rowEdit.detail) ? (
+          <div className="policy-setting-inline-editor is-wide">
+            <SettingDraftEditor
+              detail={rowEdit.detail}
+              draft={rowEdit.draft}
+              dependents={rowEdit.dependents}
+              rowTemplateRefs={rowTemplateRefsByDefinition[definitionId]}
+              onChange={(draft) => patchDraft(definitionId, draft)}
+            />
+            {rowDirty ? (
+              <SettingValueDiff
+                added={!configured}
+                lines={diffSettingDrafts(
+                  rowEdit.detail,
+                  rowEdit.original,
+                  rowEdit.draft,
+                  rowEdit.dependents,
+                  { added: !configured },
+                )}
+              />
+            ) : null}
+          </div>
+        ) : null}
+        {rowEditing && rowEdit && !isGroupCollectionDetail(rowEdit.detail) && rowEdit.draft.kind === "choice" && Object.keys(rowEdit.draft.children).length > 0 ? (
           <div className="policy-setting-inline-editor">
             <SettingDraftEditor
               detail={rowEdit.detail}
@@ -489,10 +527,29 @@ export function TemplatePolicySettingsEditor({
         <summary>Raw settings ({settings.length})</summary>
         <pre className="inspector-code">{JSON.stringify(settings, null, 2)}</pre>
       </details>
+      <details className="template-settings-diagnostic">
+        <summary>Template references ({Object.keys(templateRefByDefinition).length})</summary>
+        <pre className="inspector-code">{JSON.stringify(templateRefByDefinition, null, 2)}</pre>
+      </details>
+      <details className="template-settings-diagnostic">
+        <summary>Raw template payload</summary>
+        <pre className="inspector-code">{JSON.stringify(rawTemplates, null, 2)}</pre>
+      </details>
       {nodes != null && nodes.length > 0 && anyVisible ? (
         <ul className="setting-instance-list">
           {nodes.map((node) => {
             const detail = node.definitions[node.definitionId];
+            // A group *collection* is a repeating list, not a fixed set of
+            // children — render it as one editable row so the user can add and
+            // remove entries the way the portal does.
+            if (detail && isGroupCollectionDetail(detail)) {
+              return renderRow(
+                node.definitionId,
+                detail,
+                instancesByDefinition.get(node.definitionId),
+                false,
+              );
+            }
             const isGroup = node.children.length > 0;
             if (!isGroup) {
               if (!showUnconfigured && !instancesByDefinition.has(node.definitionId)) return null;

@@ -139,6 +139,11 @@ pub struct CatalogSettingOption {
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_default: Option<bool>,
+    /// Short Graph type of this option's `optionValue` (e.g. `IntegerSettingValue`).
+    /// Lets the editor tell a multi-select checkbox list from a single-value
+    /// dropdown when the definition is a choice collection.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value_type: Option<String>,
     pub depended_on_by: Vec<CatalogDependentRef>,
 }
 
@@ -543,6 +548,10 @@ fn map_setting_detail(raw: &Value) -> Option<CatalogSettingDetail> {
                     .unwrap_or(item_id),
                 description: string_field(rec, "description"),
                 is_default: rec.get("isDefault").and_then(Value::as_bool),
+                value_type: rec
+                    .get("optionValue")
+                    .and_then(as_object)
+                    .map(|value| short_odata_type(value.get("@odata.type").and_then(Value::as_str))),
                 depended_on_by,
             });
         }
@@ -988,11 +997,84 @@ fn merge_setting_instances(existing: Option<Value>, incoming: Value) -> Value {
         return incoming;
     }
 
+    let definition_id = setting_definition_id(&incoming)
+        .or_else(|| setting_definition_id(&existing))
+        .unwrap_or_default();
+    let reference = incoming
+        .get("settingInstanceTemplateReference")
+        .cloned()
+        .or_else(|| existing.get("settingInstanceTemplateReference").cloned());
+
+    // A group *collection* holds repeating rows whose children share definition
+    // ids (e.g. `..._item_$type`). Deduping children across the whole collection
+    // would collapse the rows into one, so merge row-by-row instead: row N of
+    // the incoming instance updates row N of the existing one, and extra rows
+    // are appended. Children *within* a row still merge by definition id.
+    if existing.get("groupSettingCollectionValue").is_some()
+        || incoming.get("groupSettingCollectionValue").is_some()
+    {
+        let rows_of = |value: &Value| -> Vec<Value> {
+            value
+                .get("groupSettingCollectionValue")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+        };
+        let existing_rows = rows_of(&existing);
+        let incoming_rows = rows_of(&incoming);
+        let mut rows: Vec<Value> = Vec::new();
+        for index in 0..existing_rows.len().max(incoming_rows.len()) {
+            match (existing_rows.get(index), incoming_rows.get(index)) {
+                (Some(base), Some(next)) => {
+                    let children = merge_children_by_id(base, next);
+                    rows.push(group_setting_value(children));
+                }
+                (Some(base), None) => {
+                    let children = row_children(base);
+                    rows.push(group_setting_value(children));
+                }
+                (None, Some(next)) => {
+                    let children = row_children(next);
+                    rows.push(group_setting_value(children));
+                }
+                (None, None) => {}
+            }
+        }
+        let mut merged = json!({
+            "@odata.type": "#microsoft.graph.deviceManagementConfigurationGroupSettingCollectionInstance",
+            "settingDefinitionId": definition_id,
+            "groupSettingCollectionValue": rows,
+        });
+        if let Some(reference) = reference {
+            if !reference.is_null() {
+                merged["settingInstanceTemplateReference"] = reference;
+            }
+        }
+        return merged;
+    }
+
+    let children = merge_children_by_id(&existing, &incoming);
+    let mut merged = json!({
+        "@odata.type": "#microsoft.graph.deviceManagementConfigurationGroupSettingInstance",
+        "settingDefinitionId": definition_id,
+        "groupSettingValue": group_setting_value(children),
+    });
+    if let Some(reference) = reference {
+        if !reference.is_null() {
+            merged["settingInstanceTemplateReference"] = reference;
+        }
+    }
+    merged
+}
+
+/// Merge two instances' children by definition id: incoming wins, existing order
+/// is preserved, and new children are appended.
+fn merge_children_by_id(existing: &Value, incoming: &Value) -> Vec<Value> {
     let mut by_id: HashMap<String, Value> = HashMap::new();
     let mut order = Vec::new();
-    for child in group_instance_children(&existing)
+    for child in row_children(existing)
         .into_iter()
-        .chain(group_instance_children(&incoming))
+        .chain(row_children(incoming))
     {
         let Some(id) = setting_definition_id(&child) else {
             continue;
@@ -1002,38 +1084,23 @@ fn merge_setting_instances(existing: Option<Value>, incoming: Value) -> Value {
         }
         by_id.insert(id, child);
     }
-    let children: Vec<Value> = order
+    order
         .into_iter()
         .filter_map(|id| by_id.remove(&id))
-        .collect();
-    let definition_id = setting_definition_id(&incoming)
-        .or_else(|| setting_definition_id(&existing))
-        .unwrap_or_default();
-    let reference = incoming
-        .get("settingInstanceTemplateReference")
-        .cloned()
-        .or_else(|| existing.get("settingInstanceTemplateReference").cloned());
-    let mut merged = if existing.get("groupSettingCollectionValue").is_some()
-        || incoming.get("groupSettingCollectionValue").is_some()
-    {
-        json!({
-            "@odata.type": "#microsoft.graph.deviceManagementConfigurationGroupSettingCollectionInstance",
-            "settingDefinitionId": definition_id,
-            "groupSettingCollectionValue": [group_setting_value(children)],
-        })
+        .collect()
+}
+
+/// Children of a group instance or of a single `groupSettingCollectionValue` row,
+/// unwrapped from Graph's `settingInstance` envelope.
+fn row_children(value: &Value) -> Vec<Value> {
+    let raw = if let Some(children) = value.get("children").and_then(Value::as_array) {
+        children.clone()
     } else {
-        json!({
-            "@odata.type": "#microsoft.graph.deviceManagementConfigurationGroupSettingInstance",
-            "settingDefinitionId": definition_id,
-            "groupSettingValue": group_setting_value(children),
-        })
+        group_instance_children(value)
     };
-    if let Some(reference) = reference {
-        if !reference.is_null() {
-            merged["settingInstanceTemplateReference"] = reference;
-        }
-    }
-    merged
+    raw.iter()
+        .map(|child| child.get("settingInstance").cloned().unwrap_or(child.clone()))
+        .collect()
 }
 
 fn setting_definition_id(instance: &Value) -> Option<String> {
@@ -1483,6 +1550,55 @@ mod tests {
             .find(|child| setting_definition_id(child) == Some("rule-b".to_string()))
             .expect("rule-b");
         assert_eq!(b["choiceSettingValue"]["value"], "b-edited");
+    }
+
+    #[test]
+    fn group_collection_keeps_distinct_rows() {
+        // Rows in a group collection share child definition ids (here `$type`).
+        // Merging must keep both rows, not collapse them into one.
+        let existing = json!({
+            "@odata.type": "#microsoft.graph.deviceManagementConfigurationGroupSettingCollectionInstance",
+            "settingDefinitionId": "exclusions",
+            "groupSettingCollectionValue": [{
+                "children": [{
+                    "settingDefinitionId": "exclusions_item_$type",
+                    "choiceSettingValue": { "value": "path" }
+                }]
+            }],
+        });
+        let incoming = json!({
+            "@odata.type": "#microsoft.graph.deviceManagementConfigurationGroupSettingCollectionInstance",
+            "settingDefinitionId": "exclusions",
+            "groupSettingCollectionValue": [
+                {
+                    "children": [{
+                        "settingDefinitionId": "exclusions_item_$type",
+                        "choiceSettingValue": { "value": "path" }
+                    }]
+                },
+                {
+                    "children": [{
+                        "settingDefinitionId": "exclusions_item_$type",
+                        "choiceSettingValue": { "value": "extension" }
+                    }]
+                }
+            ],
+        });
+        let merged = merge_setting_instances(Some(existing), incoming);
+        let rows = merged["groupSettingCollectionValue"]
+            .as_array()
+            .expect("rows");
+        assert_eq!(rows.len(), 2, "both rows must survive the merge");
+        let values: Vec<String> = rows
+            .iter()
+            .map(|row| {
+                row["children"][0]["choiceSettingValue"]["value"]
+                    .as_str()
+                    .unwrap_or("<missing>")
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(values, vec!["path".to_string(), "extension".to_string()]);
     }
 
     fn windows_root(id: &str, name: &str, children: Vec<&str>) -> CatalogCategory {

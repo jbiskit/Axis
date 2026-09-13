@@ -4,6 +4,47 @@ import type {
 } from "../types/inventory";
 import { humanizeSettingToken } from "./catalogSettingDisplay";
 
+/**
+ * Human label for a template's comma-separated `platforms` value
+ * (`windows10,windows11` → `Windows`, `macOS` → `macOS`).
+ *
+ * The same display name can exist for more than one platform, so callers that
+ * list templates need this to tell otherwise-identical entries apart.
+ */
+export function templatePlatformLabel(platforms?: string | null): string | null {
+  const parts = (platforms ?? "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length === 0) return null;
+  const seen = new Set<string>();
+  const labels: string[] = [];
+  for (const part of parts) {
+    const lower = part.toLowerCase();
+    const label = lower.startsWith("windows")
+      ? "Windows"
+      : lower === "macos" || lower === "mac"
+        ? "macOS"
+        : lower === "ios"
+          ? "iOS"
+          : lower === "android"
+            ? "Android"
+            : part;
+    if (seen.has(label)) continue;
+    seen.add(label);
+    labels.push(label);
+  }
+  return labels.join(", ");
+}
+
+/** `Display name (Platform)` — platform omitted when Graph returns none. */
+export function templateDisplayLabel(
+  template: Pick<ConfigurationPolicyTemplateSummary, "displayName" | "platforms">,
+): string {
+  const platform = templatePlatformLabel(template.platforms);
+  return platform ? `${template.displayName} (${platform})` : template.displayName;
+}
+
 function normalizeTemplateId(id: string): string {
   return id.trim().toLowerCase();
 }
@@ -55,7 +96,14 @@ export function catalogPolicyProfileName(
   templates?: readonly ConfigurationPolicyTemplateSummary[] | null,
 ): string {
   const matched = matchConfigurationPolicyTemplate(policy.templateId, templates ?? []);
-  const graphName = matched?.displayName?.trim() || policy.templateDisplayName?.trim();
+  // The same profile name exists per platform, so include it when Graph gives us
+  // one — otherwise two policies look identical in the list.
+  if (matched) {
+    const platform = templatePlatformLabel(matched.platforms);
+    const name = matched.displayName?.trim();
+    if (name) return platform ? `${name} (${platform})` : name;
+  }
+  const graphName = policy.templateDisplayName?.trim();
   if (graphName) return graphName;
   const family = policy.templateFamily?.trim();
   if (family && family.toLowerCase() !== "none") {

@@ -699,6 +699,139 @@
   color: var(--axis-fg);
 }
 
+.setting-choice-collection {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+.setting-choice-collection-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  cursor: pointer;
+}
+
+.setting-choice-collection-option input[type="checkbox"] {
+  margin: 0.15rem 0 0;
+  flex: 0 0 auto;
+}
+
+.setting-choice-collection-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.setting-choice-collection-label {
+  font-size: 0.8125rem;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--axis-fg);
+}
+
+.setting-choice-collection-desc {
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.setting-value-with-cue:has(.setting-choice-collection) {
+  display: block;
+  width: 100%;
+}
+
+.setting-group-collection {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  border: 1px solid var(--axis-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.setting-group-collection-head {
+  display: grid;
+  grid-template-columns: 12rem minmax(0, 1fr) 6rem;
+  gap: 0.75rem;
+  padding: 0.4rem 0.65rem;
+  background: var(--axis-surface-2, rgba(255, 255, 255, 0.03));
+  border-bottom: 1px solid var(--axis-border);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--axis-muted);
+}
+
+.setting-group-collection-row {
+  display: grid;
+  grid-template-columns: 12rem minmax(0, 1fr) 6rem;
+  align-items: start;
+  gap: 0.75rem;
+  padding: 0.6rem 0.65rem;
+  border-bottom: 1px solid var(--axis-border);
+}
+
+.setting-group-collection-row:last-of-type {
+  border-bottom: none;
+}
+
+.setting-group-collection-cell {
+  min-width: 0;
+}
+
+.setting-group-collection-cell.is-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.setting-group-collection-cell.is-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.setting-group-collection-cell .axis-input {
+  width: 100%;
+  max-width: none;
+}
+
+.setting-group-collection-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.setting-group-collection-field-label {
+  font-size: 0.7rem;
+  color: var(--axis-muted);
+}
+
+.setting-required-mark {
+  color: var(--axis-danger, #d9534f);
+}
+
+.setting-group-collection-empty {
+  margin: 0;
+  padding: 0.6rem 0.65rem;
+  font-size: 0.75rem;
+}
+
+.setting-group-collection-foot {
+  display: flex;
+  padding: 0.5rem 0.65rem;
+  background: var(--axis-surface-2, rgba(255, 255, 255, 0.03));
+}
+
+.setting-value-with-cue:has(.setting-group-collection) {
+  display: block;
+  width: 100%;
+}
+
 .setting-instance-note {
   margin: 0.35rem 0 0;
   font-size: 0.6875rem;
@@ -957,6 +1090,16 @@
   margin-top: 0.65rem;
   padding-top: 0.65rem;
   border-top: 1px solid var(--axis-border);
+}
+
+/* Row tables need the full row width, not the inline value column. */
+.policy-setting-inline-editor.is-wide {
+  display: block;
+  width: 100%;
+}
+
+.setting-instance-row.is-editing:has(.policy-setting-inline-editor.is-wide) {
+  display: block;
 }
 
 .policy-setting-inline-editor .policy-setting-editor-desc {

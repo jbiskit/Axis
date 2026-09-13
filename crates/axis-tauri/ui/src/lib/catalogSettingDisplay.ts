@@ -475,14 +475,17 @@ function summarizeInstance(
       const record = asRecord(groupValue);
       const rawChildren = Array.isArray(record?.children) ? record.children : [];
       const nested = summarizeChildren(rawChildren, definitions);
+      // Name each row by its content (e.g. "Path: /tmp/foo") rather than an
+      // anonymous "Group N", which tells the reader nothing about the entry.
+      const parts = nested.map((item) => `${item.label}: ${item.value}`);
       return {
-        label: `Group ${index + 1}`,
+        label: parts[0] ?? `Row ${index + 1}`,
         value:
-          nested.length > 0
-            ? nested.map((item) => `${item.label}: ${item.value}`).join("; ")
+          parts.length > 1
+            ? parts.slice(1).join("; ")
             : rawChildren.length
               ? `${rawChildren.length} nested setting${rawChildren.length === 1 ? "" : "s"}`
-              : "Empty group",
+              : "Empty row",
         children: nested.length ? nested : undefined,
       };
     });
@@ -492,10 +495,10 @@ function summarizeInstance(
       description,
       valueSummary:
         groups.length === 0
-          ? "No groups"
-          : `${groups.length} group${groups.length === 1 ? "" : "s"}`,
+          ? "No rows"
+          : `${groups.length} row${groups.length === 1 ? "" : "s"}`,
       instanceKind,
-      unsupportedEditor: true,
+      unsupportedEditor: false,
       children,
     };
   }

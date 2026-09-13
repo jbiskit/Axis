@@ -184,10 +184,11 @@ export function PolicySettingsEditor({
     detail: CatalogSettingDetail,
     dependents: Record<string, CatalogSettingDetail>,
     draft: SettingValueDraft,
+    added: boolean,
   ) {
     setEdits((current) => {
       if (current[definitionId]) return current;
-      return { ...current, [definitionId]: { detail, dependents, draft, original: draft } };
+      return { ...current, [definitionId]: { detail, dependents, draft, original: draft, added } };
     });
     setEditingId(definitionId);
     setError(null);
@@ -227,7 +228,13 @@ export function PolicySettingsEditor({
     const dependents = bundled?.dependents ?? {};
     setAdding(false);
     setAddFromSearch(false);
-    upsertEdit(definitionId, detail, dependents, draftFromSettingInstance(instance, detail, dependents));
+    upsertEdit(
+      definitionId,
+      detail,
+      dependents,
+      draftFromSettingInstance(instance, detail, dependents),
+      false,
+    );
   }
 
   function addUnconfigured(definitionId: string) {
@@ -240,7 +247,7 @@ export function PolicySettingsEditor({
     const dependents = bundled?.dependents ?? {};
     setAdding(false);
     setAddFromSearch(false);
-    upsertEdit(definitionId, detail, dependents, defaultDraftForSetting(detail, dependents));
+    upsertEdit(definitionId, detail, dependents, defaultDraftForSetting(detail, dependents), true);
   }
 
   async function openCatalogSetting(summary: CatalogSettingSummary) {
@@ -271,6 +278,7 @@ export function PolicySettingsEditor({
         existingInstance
           ? draftFromSettingInstance(existingInstance, detail, dependents)
           : defaultDraftForSetting(detail, dependents),
+        !existingInstance,
       );
       setQuery("");
       setResults([]);

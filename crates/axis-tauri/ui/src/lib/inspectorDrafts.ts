@@ -7,6 +7,13 @@ export type PendingSettingEdit = {
   dependents: Record<string, CatalogSettingDetail>;
   draft: SettingValueDraft;
   original: SettingValueDraft;
+  /**
+   * True when the setting is not yet on the policy, so `original` is only a
+   * seeded draft derived from the Graph default rather than a stored value.
+   * Choosing a value that equals that default still moves the setting from
+   * "not configured" to enforced, so it must count as a change.
+   */
+  added: boolean;
 };
 
 export type StagedSettingRemove = {
@@ -34,6 +41,10 @@ function draftsEqual(left: SettingValueDraft, right: SettingValueDraft): boolean
 }
 
 export function settingEditIsDirty(edit: PendingSettingEdit): boolean {
+  // A setting that is not yet on the policy has no stored baseline to compare
+  // against. Even when the chosen value equals the Graph default, writing it is
+  // a real change: it turns "not configured" into an enforced value.
+  if (edit.added) return true;
   return !draftsEqual(edit.draft, edit.original);
 }
 
