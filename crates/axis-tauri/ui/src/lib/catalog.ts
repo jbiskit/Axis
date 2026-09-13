@@ -330,12 +330,23 @@ function isGroupCollection(detail: CatalogSettingDetail): boolean {
 /**
  * A group *collection* holds repeating rows (e.g. scan exclusions), unlike a
  * plain group which holds one fixed set of children.
+ *
+ * Graph marks both as `SettingGroupCollectionDefinition`; the difference is
+ * `maximumCount`. A collection capped at one entry (e.g. `dailyConfiguration`,
+ * `maximumCount: 1`) is a fixed group of fields, not a list — rendering it as a
+ * row table would wrongly ask the user to "add rows".
  */
 export function isGroupCollectionDetail(detail: CatalogSettingDetail): boolean {
-  return (
+  const isCollection =
     /SettingGroupCollection/i.test(detail.kind) ||
-    /SettingGroupCollection/i.test(detail["@odata.type"] ?? "")
-  );
+    /SettingGroupCollection/i.test(detail["@odata.type"] ?? "");
+  if (!isCollection) return false;
+  return !isSingleEntryGroup(detail);
+}
+
+/** A group collection that can hold at most one entry — a fixed group. */
+export function isSingleEntryGroup(detail: CatalogSettingDetail): boolean {
+  return detail.maximumCount === 1;
 }
 
 /**
@@ -389,6 +400,52 @@ function isEmptyCollectionDraft(detail: CatalogSettingDetail, draft: SettingValu
   return isSimpleCollection(detail) && draft.kind === "simpleCollection" && collectionDraftFilledCount(draft) === 0;
 }
 
+/**
+ * Range/length problem with a single scalar value, or null when it is fine.
+ * Mirrors the bounds Graph enforces from `valueDefinition`, so a bad entry is
+ * caught before the write instead of surfacing as an opaque HTTP 400.
+ */
+export function scalarValueError(
+  detail: CatalogSettingDetail,
+  value: string | number | boolean,
+  // Values that are not filled in yet are the caller's problem, not a range miss.
+  allowEmpty = false,
+): string | null {
+  const label = settingLabel(detail);
+  const isInteger = /Integer|Number/i.test(detail.valueType ?? "");
+  if (isInteger) {
+    if (typeof value === "boolean") return null;
+    const text = String(value).trim();
+    if (!text) return allowEmpty ? null : `“${label}” requires a number.`;
+    const parsed = Number(text);
+    if (!Number.isFinite(parsed)) return `“${label}” must be a number.`;
+    if (!Number.isInteger(parsed)) return `“${label}” must be a whole number.`;
+    const { minValue, maxValue } = detail;
+    if (minValue != null && parsed < minValue) {
+      return maxValue != null
+        ? `“${label}” must be between ${minValue} and ${maxValue}.`
+        : `“${label}” must be at least ${minValue}.`;
+    }
+    if (maxValue != null && parsed > maxValue) {
+      return minValue != null
+        ? `“${label}” must be between ${minValue} and ${maxValue}.`
+        : `“${label}” must be at most ${maxValue}.`;
+    }
+    return null;
+  }
+  if (typeof value === "boolean") return null;
+  const text = String(value);
+  if (!text.trim()) return null;
+  const { minimumLength, maximumLength } = detail;
+  if (minimumLength != null && text.length < minimumLength) {
+    return `“${label}” must be at least ${minimumLength} character${minimumLength === 1 ? "" : "s"}.`;
+  }
+  if (maximumLength != null && text.length > maximumLength) {
+    return `“${label}” must be at most ${maximumLength} character${maximumLength === 1 ? "" : "s"}.`;
+  }
+  return null;
+}
+
 export function settingDraftSaveError(
   detail: CatalogSettingDetail,
   draft: SettingValueDraft,
@@ -425,6 +482,9 @@ export function settingDraftSaveError(
       return requiredCollectionMessage(detail);
     }
     return null;
+  }
+  if (draft.kind === "simple") {
+    return scalarValueError(detail, draft.value, !required);
   }
   if (draft.kind === "choice") {
     for (const dep of dependentsForOption(detail, draft.optionItemId, dependents)) {
@@ -490,6 +550,21 @@ function childRequiredForOption(child: CatalogSettingDetail, optionItemId: strin
   return matched ? required : null;
 }
 
+/** Default drafts for every child a group declares (`childIds` / `dependedOnBy`). */
+function defaultGroupChildren(
+  detail: CatalogSettingDetail,
+  dependents: Record<string, CatalogSettingDetail>,
+  visiting: Set<string>,
+): Record<string, SettingValueDraft> {
+  const children: Record<string, SettingValueDraft> = {};
+  for (const childId of collectDependentIds(detail, dependents)) {
+    const child = dependents[childId];
+    if (!child) continue;
+    children[childId] = defaultDraftForSetting(child, dependents, visiting);
+  }
+  return children;
+}
+
 export function defaultDraftForSetting(
   detail: CatalogSettingDetail,
   dependents: Record<string, CatalogSettingDetail> = {},
@@ -501,6 +576,15 @@ export function defaultDraftForSetting(
   const nextVisit = new Set(visiting);
   nextVisit.add(detail.id);
   if (isGroupCollection(detail)) {
+    if (isSingleEntryGroup(detail)) {
+      // `maximumCount: 1` — a fixed group of fields, not a list. Model it as a
+      // single row so the payload matches, and let the editor render its
+      // children directly instead of a row table.
+      return {
+        kind: "groupCollection",
+        rows: [{ children: defaultGroupChildren(detail, dependents, nextVisit) }],
+      };
+    }
     if (!isGroupCollectionDetail(detail)) {
       return {
         kind: "unsupported",
@@ -1215,6 +1299,28 @@ function usableCatalogText(value?: string | null): string | null {
   return trimmed;
 }
 
+/**
+ * Group heading for a template setting, taken from Graph `keywords`.
+ *
+ * Graph lists keywords most-general first, e.g.
+ * `["Microsoft Defender - Antivirus engine", "Antivirus engine"]`. The portal
+ * uses that first entry as the collapsible section a setting sits under, which
+ * is what makes a long flat list navigable.
+ *
+ * Returns null when Graph gives no usable keyword, so callers can fall back to
+ * an ungrouped list rather than inventing a heading.
+ */
+export function catalogSettingGroup(setting: { keywords?: string[] }): string | null {
+  for (const keyword of setting.keywords ?? []) {
+    const trimmed = keyword?.trim();
+    if (!trimmed) continue;
+    // Skip `l_*` localization keys — they are not display copy.
+    if (/^l[_/]/i.test(trimmed) || /^l[A-Z]/.test(trimmed)) continue;
+    return trimmed;
+  }
+  return null;
+}
+
 export function catalogSettingSourceLabel(setting: {
   id: string;
   keywords?: string[];
@@ -1455,6 +1561,28 @@ export function draftFromSettingInstance(
       rows.push({ children });
     }
     return { kind: "groupCollection", rows };
+  }
+
+  // A group may come back as either a collection or a plain group value — Graph
+  // uses `groupSettingValue` when the definition has no collection semantics.
+  const groupValue = asRecord(instance.groupSettingValue);
+  if (groupValue && Array.isArray(groupValue.children)) {
+    const children: Record<string, SettingValueDraft> = {};
+    for (const child of groupValue.children) {
+      const childInstance = childInstanceFromValue(child);
+      const childId = settingDefinitionIdFromInstance(childInstance);
+      if (!childId || !childInstance) continue;
+      const childDetail = dependents[childId];
+      if (!childDetail) {
+        children[childId] = {
+          kind: "unsupported",
+          reason: `Dependent setting “${childId}” definition was not loaded.`,
+        };
+        continue;
+      }
+      children[childId] = draftFromSettingInstance(childInstance, childDetail, dependents);
+    }
+    return { kind: "groupCollection", rows: [{ children }] };
   }
 
   if (Array.isArray(instance.choiceSettingCollectionValue)) {

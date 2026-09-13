@@ -4,6 +4,7 @@ import {
   buildGroupCollectionInstance,
   buildSettingInstance,
   bundleFromCategoryMap,
+  catalogSettingGroup,
   collectConfiguredSettingIds,
   collectInstancesByDefinition,
   defaultDraftForSetting,
@@ -70,6 +71,7 @@ export function TemplatePolicySettingsEditor({
   const [message, setMessage] = useState<string | null>(null);
   const [confirmSave, setConfirmSave] = useState(false);
   const [showUnconfigured, setShowUnconfigured] = useState(false);
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     setError(null);
@@ -315,6 +317,42 @@ export function TemplatePolicySettingsEditor({
     return node.children.filter((child) => existingIds.has(child.definitionId)).length;
   };
 
+  /**
+   * Template settings grouped by their Graph keyword heading, the way the
+   * Intune portal sections them ("Antivirus engine", "Network protection", …).
+   * Settings with no usable keyword fall into a trailing "Other settings".
+   */
+  const groupedNodes = useMemo(() => {
+    const sections: Array<{
+      group: string | null;
+      nodes: TemplateSettingNode[];
+      totalCount: number;
+      visibleCount: number;
+    }> = [];
+    const byGroup = new Map<string, (typeof sections)[number]>();
+    for (const node of nodes ?? []) {
+      const detail = node.definitions[node.definitionId];
+      const group = detail ? catalogSettingGroup(detail) : null;
+      const key = group ?? "\u0000ungrouped";
+      let section = byGroup.get(key);
+      if (!section) {
+        section = { group, nodes: [], totalCount: 0, visibleCount: 0 };
+        byGroup.set(key, section);
+        sections.push(section);
+      }
+      section.nodes.push(node);
+      const total = node.children.length > 0 ? node.children.length : 1;
+      section.totalCount += total;
+      section.visibleCount += configuredCount(node);
+    }
+    // Ungrouped settings last; the rest keep Graph's ordering.
+    return sections.sort((left, right) => {
+      if (left.group == null) return 1;
+      if (right.group == null) return -1;
+      return 0;
+    });
+  }, [existingIds, nodes]);
+
   const notConfiguredCount = useMemo(() => {
     let count = 0;
     for (const node of nodes ?? []) {
@@ -483,7 +521,7 @@ export function TemplatePolicySettingsEditor({
             ) : null}
           </div>
         ) : null}
-        {rowEditing && rowEdit && !isGroupCollectionDetail(rowEdit.detail) && rowEdit.draft.kind === "choice" && Object.keys(rowEdit.draft.children).length > 0 ? (
+        {rowEditing && rowEdit && !isGroupCollectionDetail(rowEdit.detail) && (rowEdit.draft.kind === "choice" || rowEdit.draft.kind === "groupCollection") && Object.keys(rowEdit.draft.kind === "choice" ? rowEdit.draft.children : (rowEdit.draft.rows[0]?.children ?? {})).length > 0 ? (
           <div className="policy-setting-inline-editor">
             <SettingDraftEditor
               detail={rowEdit.detail}
@@ -494,6 +532,51 @@ export function TemplatePolicySettingsEditor({
             />
           </div>
         ) : null}
+      </li>
+    );
+  }
+
+  function renderNode(node: TemplateSettingNode) {
+    const detail = node.definitions[node.definitionId];
+    // A group *collection* is a repeating list, not a fixed set of children —
+    // render it as one editable row so the user can add and remove entries the
+    // way the portal does.
+    if (detail && isGroupCollectionDetail(detail)) {
+      return renderRow(node.definitionId, detail, instancesByDefinition.get(node.definitionId), false);
+    }
+    const isGroup = node.children.length > 0;
+    if (!isGroup) {
+      if (!showUnconfigured && !instancesByDefinition.has(node.definitionId)) return null;
+      return renderRow(node.definitionId, detail, instancesByDefinition.get(node.definitionId), false);
+    }
+    const count = configuredCount(node);
+    if (!showUnconfigured && count === 0) return null;
+    const visibleChildren = node.children.filter(
+      (child) => showUnconfigured || instancesByDefinition.has(child.definitionId),
+    );
+    return (
+      <li key={`group:${node.definitionId}`} className="setting-instance-row is-group">
+        <div className="setting-instance-head">
+          <div className="setting-instance-title-block">
+            <p className="setting-instance-name">
+              {detail?.displayName ?? node.definitionId}
+              <span className="axis-pill">
+                {count} of {node.children.length} configured
+              </span>
+            </p>
+            {detail?.description ? <SettingDescription text={detail.description} /> : null}
+          </div>
+        </div>
+        <ul className="setting-instance-children">
+          {visibleChildren.map((child) =>
+            renderRow(
+              child.definitionId,
+              child.definition,
+              instancesByDefinition.get(child.definitionId),
+              true,
+            ),
+          )}
+        </ul>
       </li>
     );
   }
@@ -536,57 +619,34 @@ export function TemplatePolicySettingsEditor({
         <pre className="inspector-code">{JSON.stringify(rawTemplates, null, 2)}</pre>
       </details>
       {nodes != null && nodes.length > 0 && anyVisible ? (
-        <ul className="setting-instance-list">
-          {nodes.map((node) => {
-            const detail = node.definitions[node.definitionId];
-            // A group *collection* is a repeating list, not a fixed set of
-            // children — render it as one editable row so the user can add and
-            // remove entries the way the portal does.
-            if (detail && isGroupCollectionDetail(detail)) {
-              return renderRow(
-                node.definitionId,
-                detail,
-                instancesByDefinition.get(node.definitionId),
-                false,
-              );
-            }
-            const isGroup = node.children.length > 0;
-            if (!isGroup) {
-              if (!showUnconfigured && !instancesByDefinition.has(node.definitionId)) return null;
-              return renderRow(node.definitionId, detail, instancesByDefinition.get(node.definitionId), false);
-            }
-            const count = configuredCount(node);
-            if (!showUnconfigured && count === 0) return null;
-            const visibleChildren = node.children.filter(
-              (child) => showUnconfigured || instancesByDefinition.has(child.definitionId),
-            );
-            return (
-              <li key={`group:${node.definitionId}`} className="setting-instance-row is-group">
-                <div className="setting-instance-head">
-                  <div className="setting-instance-title-block">
-                    <p className="setting-instance-name">
-                      {detail?.displayName ?? node.definitionId}
-                      <span className="axis-pill">
-                        {count} of {node.children.length} configured
-                      </span>
-                    </p>
-                    {detail?.description ? <SettingDescription text={detail.description} /> : null}
-                  </div>
-                </div>
-                <ul className="setting-instance-children">
-                  {visibleChildren.map((child) =>
-                    renderRow(
-                      child.definitionId,
-                      child.definition,
-                      instancesByDefinition.get(child.definitionId),
-                      true,
-                    ),
-                  )}
-                </ul>
-              </li>
-            );
-          })}
-        </ul>
+        <div className="setting-group-sections">
+          {groupedNodes.map((section) => (
+            <details
+              key={section.group ?? "__ungrouped"}
+              className="setting-group-section"
+              open={openGroups[section.group ?? "__ungrouped"] ?? true}
+              onToggle={(event) => {
+                const key = section.group ?? "__ungrouped";
+                const next = event.currentTarget.open;
+                setOpenGroups((current) =>
+                  current[key] === next ? current : { ...current, [key]: next },
+                );
+              }}
+            >
+              <summary className="setting-group-section-head">
+                <span className="setting-group-section-title">
+                  {section.group ?? "Other settings"}
+                </span>
+                <span className="axis-pill">
+                  {section.visibleCount} of {section.totalCount}
+                </span>
+              </summary>
+              <ul className="setting-instance-list">
+                {section.nodes.map((node) => renderNode(node))}
+              </ul>
+            </details>
+          ))}
+        </div>
       ) : nodes != null && nodes.length > 0 ? (
         <p className="muted">
           No settings are configured on this policy yet. Show not configured settings to add from the
