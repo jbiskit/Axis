@@ -5,6 +5,7 @@ import type {
   GlanceResponse,
   IntuneAuditLogResponse,
   PollResult,
+  SessionMode,
   SessionStatus,
 } from "../types/glance";
 import type { UpdateCheck } from "../types/updater";
@@ -61,9 +62,12 @@ import type {
   WindowsUpdatePolicy,
 } from "../types/inventory";
 
-export async function deviceLoginStart(extraScopes?: string): Promise<DeviceCodePrompt> {
+export async function deviceLoginStart(
+  mode: SessionMode = "read",
+  extraScopes?: string,
+): Promise<DeviceCodePrompt> {
   return invoke<DeviceCodePrompt>("device_login_start", {
-    mode: "admin",
+    mode,
     extraScopes: extraScopes?.trim() ? extraScopes : null,
   });
 }

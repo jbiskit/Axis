@@ -102,6 +102,8 @@ export type DeviceCodePrompt = {
   expiresInSeconds: number;
 };
 
+export type SessionMode = "admin" | "read";
+
 export type PollResult =
   | { status: "pending" }
   | { status: "failed"; error: string }
@@ -111,13 +113,15 @@ export type PollResult =
       expiresOn: number;
       accountName?: string | null;
       tenantId?: string | null;
-      mode?: "admin";
+      mode?: SessionMode;
     };
 
 export type SessionStatus = {
   signedIn: boolean;
   accountName: string | null;
-  mode: "admin";
+  mode: SessionMode;
+  readOnlyScopeExceedsRequest: boolean;
+  exceededWriteScopes?: string[];
 };
 
 export type GlanceResponse = {

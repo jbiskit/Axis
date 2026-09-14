@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { DeviceCodePrompt, GlanceResponse, TenantGlance } from "../types/glance";
+import type { DeviceCodePrompt, GlanceResponse, SessionMode, TenantGlance } from "../types/glance";
 import {
   deviceLoginCancel,
   deviceLoginPoll,
@@ -10,7 +10,12 @@ import {
   refreshGlance,
   signOut,
 } from "../lib/tauri";
-import { loadLastExtraScopes, saveLastExtraScopes } from "../lib/loginPrefs";
+import {
+  loadLastExtraScopes,
+  saveLastExtraScopes,
+  loadLastSessionMode,
+  saveLastSessionMode,
+} from "../lib/loginPrefs";
 import { isPopoutRoute } from "../lib/popout";
 import { parseHash } from "../lib/route";
 
@@ -26,6 +31,9 @@ export function useSession() {
   const [signedIn, setSignedIn] = useState(false);
   const [restoring, setRestoring] = useState(true);
   const [accountName, setAccountName] = useState<string | null>(null);
+  const [mode, setMode] = useState<SessionMode>(() => loadLastSessionMode());
+  const [readOnlyScopeExceedsRequest, setReadOnlyScopeExceedsRequest] = useState(false);
+  const [exceededWriteScopes, setExceededWriteScopes] = useState<string[]>([]);
   const [deviceCode, setDeviceCode] = useState<DeviceCodePrompt | null>(null);
   const [glance, setGlance] = useState<TenantGlance | null>(null);
   const [glanceLoading, setGlanceLoading] = useState(false);
@@ -65,6 +73,11 @@ export function useSession() {
         const status = await deviceSessionStatus();
         setSignedIn(status.signedIn);
         setAccountName(status.accountName);
+        if (status.mode) {
+          setMode(status.mode);
+        }
+        setReadOnlyScopeExceedsRequest(Boolean(status.readOnlyScopeExceedsRequest));
+        setExceededWriteScopes(status.exceededWriteScopes ?? []);
         if (status.signedIn && !currentIsPopout()) {
           await loadGlance();
         }
@@ -86,13 +99,17 @@ export function useSession() {
   }, [deviceCode]);
 
   const login = useCallback(
-    async (extraScopes?: string) => {
+    async (requestedMode?: SessionMode, extraScopes?: string) => {
       const generation = ++loginGeneration.current;
+      const targetMode = requestedMode ?? loadLastSessionMode();
+      saveLastSessionMode(targetMode);
+      setMode(targetMode);
+
       const extras = extraScopes ?? loadLastExtraScopes();
       if (extraScopes !== undefined) {
         saveLastExtraScopes(extraScopes);
       }
-      const start = await deviceLoginStart(extras);
+      const start = await deviceLoginStart(targetMode, extras);
       if (generation !== loginGeneration.current) return;
       setDeviceCode(start);
       await openExternalUrl(start.verificationUri);
@@ -108,6 +125,17 @@ export function useSession() {
           if (result.status === "signedIn") {
             setSignedIn(true);
             setAccountName(result.accountName ?? null);
+            if (result.mode) {
+              setMode(result.mode);
+            }
+            try {
+              const status = await deviceSessionStatus();
+              setMode(status.mode);
+              setReadOnlyScopeExceedsRequest(Boolean(status.readOnlyScopeExceedsRequest));
+              setExceededWriteScopes(status.exceededWriteScopes ?? []);
+            } catch {
+              /* browser-only preview */
+            }
             await loadGlance();
             return;
           }
@@ -133,6 +161,8 @@ export function useSession() {
     setAccountName(null);
     setGlance(null);
     setGlanceError(null);
+    setReadOnlyScopeExceedsRequest(false);
+    setExceededWriteScopes([]);
   }, []);
 
   return useMemo(
@@ -140,6 +170,10 @@ export function useSession() {
       signedIn,
       restoring,
       accountName,
+      mode,
+      isReadOnly: mode === "read",
+      readOnlyScopeExceedsRequest,
+      exceededWriteScopes,
       deviceCode,
       glance,
       glanceLoading,
@@ -153,11 +187,14 @@ export function useSession() {
       accountName,
       cancelLogin,
       deviceCode,
+      exceededWriteScopes,
       glance,
       glanceError,
       glanceLoading,
       login,
       logout,
+      mode,
+      readOnlyScopeExceedsRequest,
       reloadGlance,
       restoring,
       signedIn,

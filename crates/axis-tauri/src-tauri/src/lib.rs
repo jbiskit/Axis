@@ -27,6 +27,8 @@ struct SessionStatus {
     signed_in: bool,
     account_name: Option<String>,
     mode: SessionMode,
+    read_only_scope_exceeds_request: bool,
+    exceeded_write_scopes: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -86,10 +88,19 @@ async fn device_login_poll(
 async fn device_session_status(state: State<'_, AppState>) -> Result<SessionStatus, String> {
     let (signed_in, account_name) = state.auth.restore_session().await;
     *state.account_name.lock().await = account_name.clone();
+    let mode = state.auth.session_mode().await;
+    let (read_only_scope_exceeds_request, exceeded_write_scopes) = if mode == SessionMode::Read {
+        let scopes = state.auth.token_write_scopes().await;
+        (!scopes.is_empty(), scopes)
+    } else {
+        (false, Vec::new())
+    };
     Ok(SessionStatus {
         signed_in,
         account_name,
-        mode: state.auth.session_mode().await,
+        mode,
+        read_only_scope_exceeds_request,
+        exceeded_write_scopes,
     })
 }
 

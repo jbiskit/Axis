@@ -193,6 +193,68 @@
   color: var(--axis-muted);
 }
 
+.shell-session-badge {
+  display: inline-block;
+  margin-top: 0.25rem;
+  padding: 0.12rem 0.4rem;
+  border-radius: var(--axis-radius-sm);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.shell-session-badge.is-readonly {
+  background: rgba(234, 179, 8, 0.15);
+  color: #eab308;
+  border: 1px solid rgba(234, 179, 8, 0.3);
+}
+
+.shell-session-badge.is-admin {
+  background: rgba(34, 197, 94, 0.12);
+  color: #22c55e;
+  border: 1px solid rgba(34, 197, 94, 0.25);
+}
+
+.shell-scope-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  padding: 0.65rem 1rem;
+  font-size: var(--axis-text-xs);
+  line-height: 1.45;
+  border-bottom: 1px solid var(--axis-border);
+}
+
+.shell-scope-banner-warning {
+  background: rgba(234, 179, 8, 0.08);
+  border-bottom-color: rgba(234, 179, 8, 0.35);
+  color: var(--axis-fg);
+}
+
+.shell-scope-banner-warning .shell-scope-banner-icon {
+  color: #eab308;
+  flex-shrink: 0;
+  margin-top: 0.1rem;
+}
+
+.shell-scope-banner-info {
+  background: rgba(59, 130, 246, 0.08);
+  border-bottom-color: rgba(59, 130, 246, 0.3);
+  color: var(--axis-fg);
+}
+
+.shell-scope-banner-info .shell-scope-banner-icon {
+  color: #3b82f6;
+  flex-shrink: 0;
+  margin-top: 0.1rem;
+}
+
+.shell-scope-banner-text {
+  flex: 1;
+  min-width: 0;
+}
+
 .app-update-controls {
   display: flex;
   flex-direction: column;
