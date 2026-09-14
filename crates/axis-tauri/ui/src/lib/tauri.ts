@@ -271,6 +271,97 @@ export async function pickLocalPackFolder(title?: string): Promise<string | null
   });
 }
 
+export async function clientContainerStatus(): Promise<
+  import("../types/clientContainer").ClientContainerStatus
+> {
+  return invoke("client_container_status_cmd");
+}
+
+export async function clientContainerPickOpen(): Promise<
+  import("../types/clientContainer").ClientContainerStatus | null
+> {
+  return invoke("client_container_pick_open_cmd");
+}
+
+export async function clientContainerPickCreate(): Promise<string | null> {
+  return invoke("client_container_pick_create_cmd");
+}
+
+export async function clientContainerCreate(input: {
+  path: string;
+  name: string;
+  primaryDomain?: string;
+}): Promise<import("../types/clientContainer").ClientContainerStatus> {
+  return invoke("client_container_create_cmd", {
+    path: input.path,
+    name: input.name,
+    primaryDomain: input.primaryDomain?.trim() ? input.primaryDomain.trim() : null,
+  });
+}
+
+export async function clientContainerClear(): Promise<
+  import("../types/clientContainer").ClientContainerStatus
+> {
+  return invoke("client_container_clear_cmd");
+}
+
+export async function clientContainerSnoozeStale(
+  days: number,
+): Promise<import("../types/clientContainer").ClientContainerStatus> {
+  return invoke("client_container_snooze_stale_cmd", { days });
+}
+
+export async function clientContainerListSnapshots(): Promise<
+  import("../types/clientContainer").ClientSnapshotSummary[]
+> {
+  return invoke("client_container_list_snapshots_cmd");
+}
+
+export async function clientContainerExportSnapshot(packName?: string): Promise<
+  import("../types/clientContainer").ClientSnapshotExportResult
+> {
+  return invoke("client_container_export_snapshot_cmd", {
+    packName: packName?.trim() ? packName.trim() : null,
+  });
+}
+
+export async function clientContainerDiff(
+  left: string,
+  right: string,
+): Promise<import("../types/clientContainer").PackDiffReport> {
+  return invoke("client_container_diff_cmd", { left, right });
+}
+
+export async function clientContainerRestoreCandidates(
+  snapshotId: string,
+): Promise<import("../types/clientContainer").RestoreCandidate[]> {
+  return invoke("client_container_restore_candidates_cmd", { snapshotId });
+}
+
+export async function clientContainerRestorePlan(input: {
+  snapshotId: string;
+  mode: import("../types/clientContainer").RestoreMode;
+  keys: string[];
+}): Promise<import("../types/clientContainer").RestorePlan> {
+  return invoke("client_container_restore_plan_cmd", {
+    snapshotId: input.snapshotId,
+    mode: input.mode,
+    keys: input.keys,
+  });
+}
+
+export async function clientContainerRestoreApply(input: {
+  snapshotId: string;
+  mode: import("../types/clientContainer").RestoreMode;
+  keys: string[];
+}): Promise<import("../types/clientContainer").RestoreApplyResult> {
+  return invoke("client_container_restore_apply_cmd", {
+    snapshotId: input.snapshotId,
+    mode: input.mode,
+    keys: input.keys,
+  });
+}
+
 export async function pickJsonFiles(title?: string): Promise<PickedJsonFile[] | null> {
   return invoke<PickedJsonFile[] | null>("pick_json_files_cmd", {
     title: title?.trim() ? title : null,

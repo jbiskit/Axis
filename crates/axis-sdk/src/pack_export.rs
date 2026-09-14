@@ -6,6 +6,7 @@ use crate::inventory::{
 };
 use crate::object_detail::{fetch_graph_object_detail, GraphObjectDetail};
 use chrono::Utc;
+use futures::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::collections::HashSet;
@@ -16,6 +17,9 @@ use urlencoding::encode;
 
 const AXIS_EXPORT_SCHEMA: &str = "axis.pack.artifact/v1";
 const SETTINGS_PAGE_MAX: usize = 1000;
+/// Parallel Graph detail fetches during pack export / live compare.
+const DEFAULT_EXPORT_CONCURRENCY: usize = 12;
+const MAX_EXPORT_CONCURRENCY: usize = 32;
 
 #[derive(Debug, Error)]
 pub enum PackExportError {
@@ -127,6 +131,179 @@ impl ExportWriter {
             self.catalog_includes.push(rel.to_string());
         }
     }
+
+    fn write_prepared(&mut self, file: PreparedExportFile) -> Result<(), PackExportError> {
+        let rel = self.unique_rel(&file.dir, &file.stem, &file.ext);
+        self.write_bytes(&rel, &file.bytes)?;
+        self.add_include(&rel, file.catalog);
+        Ok(())
+    }
+}
+
+struct PreparedExportFile {
+    dir: String,
+    stem: String,
+    ext: String,
+    bytes: Vec<u8>,
+    catalog: bool,
+}
+
+enum PreparedExport {
+    Files {
+        label: String,
+        files: Vec<PreparedExportFile>,
+    },
+    Warning {
+        label: String,
+        message: String,
+    },
+    Skipped {
+        label: String,
+        message: String,
+    },
+}
+
+/// Parallel Graph detail fetches during pack export, live compare, and environment reports.
+/// Override with `AXIS_EXPORT_CONCURRENCY` (1–32). Default 12.
+pub fn graph_fetch_concurrency() -> usize {
+    std::env::var("AXIS_EXPORT_CONCURRENCY")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_EXPORT_CONCURRENCY)
+        .clamp(1, MAX_EXPORT_CONCURRENCY)
+}
+
+fn export_concurrency() -> usize {
+    graph_fetch_concurrency()
+}
+
+fn json_bytes(value: &Value) -> Result<Vec<u8>, PackExportError> {
+    let mut text = serde_json::to_string_pretty(value)?;
+    text.push('\n');
+    Ok(text.into_bytes())
+}
+
+enum ExportJob {
+    Catalog(CatalogPolicySummary),
+    Script(TenantScriptSummary),
+    Compliance(CatalogPolicySummary),
+    EndpointSecurity(CatalogPolicySummary),
+    WindowsUpdate(WindowsUpdatePolicy),
+    Autopilot(CatalogPolicySummary),
+    GroupPolicy(CatalogPolicySummary),
+}
+
+enum PrepareNamed {
+    Files(Vec<PreparedExportFile>),
+    Skipped(String),
+}
+
+async fn run_export_job(token: &str, job: ExportJob, exported_at: &str) -> PreparedExport {
+    match job {
+        ExportJob::Catalog(policy) => {
+            let label = policy.name.clone();
+            match prepare_catalog_policy(token, &policy, exported_at).await {
+                Ok(files) => PreparedExport::Files { label, files },
+                Err(error) => PreparedExport::Warning {
+                    label,
+                    message: error.to_string(),
+                },
+            }
+        }
+        ExportJob::Script(script) => {
+            let label = script.display_name.clone();
+            match prepare_script(token, &script, exported_at).await {
+                Ok(files) => PreparedExport::Files { label, files },
+                Err(error) => PreparedExport::Warning {
+                    label,
+                    message: error.to_string(),
+                },
+            }
+        }
+        ExportJob::Compliance(policy) => {
+            let label = policy.name.clone();
+            match prepare_named_graph(
+                token,
+                "compliancePolicy",
+                &policy,
+                pack_platform_from_graph(policy.platforms.as_deref(), policy.odata_type.as_deref()),
+                "compliance",
+                "compliancePolicy",
+                exported_at,
+            )
+            .await
+            {
+                Ok(PrepareNamed::Files(files)) => PreparedExport::Files { label, files },
+                Ok(PrepareNamed::Skipped(message)) => PreparedExport::Skipped { label, message },
+                Err(error) => PreparedExport::Warning {
+                    label,
+                    message: error.to_string(),
+                },
+            }
+        }
+        ExportJob::EndpointSecurity(policy) => {
+            let label = policy.name.clone();
+            match prepare_endpoint_security(token, &policy, exported_at).await {
+                Ok(files) => PreparedExport::Files { label, files },
+                Err(error) => PreparedExport::Warning {
+                    label,
+                    message: error.to_string(),
+                },
+            }
+        }
+        ExportJob::WindowsUpdate(policy) => {
+            let label = policy.name.clone();
+            match prepare_windows_update(token, &policy, exported_at).await {
+                Ok(files) => PreparedExport::Files { label, files },
+                Err(error) => PreparedExport::Warning {
+                    label,
+                    message: error.to_string(),
+                },
+            }
+        }
+        ExportJob::Autopilot(policy) => {
+            let label = policy.name.clone();
+            match prepare_named_graph(
+                token,
+                "autopilotProfile",
+                &policy,
+                Some("windows"),
+                "enrollment/autopilot",
+                "enrollment-autopilot",
+                exported_at,
+            )
+            .await
+            {
+                Ok(PrepareNamed::Files(files)) => PreparedExport::Files { label, files },
+                Ok(PrepareNamed::Skipped(message)) => PreparedExport::Skipped { label, message },
+                Err(error) => PreparedExport::Warning {
+                    label,
+                    message: error.to_string(),
+                },
+            }
+        }
+        ExportJob::GroupPolicy(policy) => {
+            let label = policy.name.clone();
+            match prepare_named_graph(
+                token,
+                "groupPolicyConfiguration",
+                &policy,
+                Some("windows"),
+                "group-policy",
+                "group-policy",
+                exported_at,
+            )
+            .await
+            {
+                Ok(PrepareNamed::Files(files)) => PreparedExport::Files { label, files },
+                Ok(PrepareNamed::Skipped(message)) => PreparedExport::Skipped { label, message },
+                Err(error) => PreparedExport::Warning {
+                    label,
+                    message: error.to_string(),
+                },
+            }
+        }
+    }
 }
 
 pub async fn export_tenant_pack<F>(
@@ -169,44 +346,40 @@ where
     let mut warnings = Vec::new();
     let mut skipped = Vec::new();
     let mut writer = ExportWriter::new(dest.to_path_buf());
+    let concurrency = export_concurrency();
 
-    on_progress(progress("listing", 0, 0, "Listing tenant objects…"));
+    on_progress(progress(
+        "listing",
+        0,
+        0,
+        &format!("Listing tenant objects (then up to {concurrency} parallel fetches)…"),
+    ));
 
-    let catalog = list_or_warn(
-        "Settings Catalog",
-        fetch_configuration_policies(access_token).await,
-        &mut warnings,
+    let (
+        catalog_result,
+        scripts_result,
+        compliance_result,
+        intents_result,
+        windows_update_result,
+        autopilot_result,
+        group_policy_result,
+    ) = tokio::join!(
+        fetch_configuration_policies(access_token),
+        fetch_tenant_scripts(access_token),
+        fetch_compliance_policies(access_token),
+        fetch_endpoint_security_intents(access_token),
+        fetch_windows_update_policies(access_token),
+        fetch_autopilot_profiles(access_token),
+        fetch_group_policy_configurations(access_token),
     );
-    let scripts = list_or_warn(
-        "Scripts",
-        fetch_tenant_scripts(access_token).await,
-        &mut warnings,
-    );
-    let compliance = list_or_warn(
-        "Compliance policies",
-        fetch_compliance_policies(access_token).await,
-        &mut warnings,
-    );
-    let intents = list_or_warn(
-        "Endpoint Security",
-        fetch_endpoint_security_intents(access_token).await,
-        &mut warnings,
-    );
-    let windows_update = list_or_warn(
-        "Windows Update",
-        fetch_windows_update_policies(access_token).await,
-        &mut warnings,
-    );
-    let autopilot = list_or_warn(
-        "Autopilot profiles",
-        fetch_autopilot_profiles(access_token).await,
-        &mut warnings,
-    );
-    let group_policy = list_or_warn(
-        "Group Policy",
-        fetch_group_policy_configurations(access_token).await,
-        &mut warnings,
-    );
+
+    let catalog = list_or_warn("Settings Catalog", catalog_result, &mut warnings);
+    let scripts = list_or_warn("Scripts", scripts_result, &mut warnings);
+    let compliance = list_or_warn("Compliance policies", compliance_result, &mut warnings);
+    let intents = list_or_warn("Endpoint Security", intents_result, &mut warnings);
+    let windows_update = list_or_warn("Windows Update", windows_update_result, &mut warnings);
+    let autopilot = list_or_warn("Autopilot profiles", autopilot_result, &mut warnings);
+    let group_policy = list_or_warn("Group Policy", group_policy_result, &mut warnings);
 
     let total = (catalog.len()
         + scripts.len()
@@ -215,158 +388,81 @@ where
         + windows_update.len()
         + autopilot.len()
         + group_policy.len()) as u32;
-    let mut current = 0u32;
 
-    for policy in &catalog {
-        current += 1;
-        on_progress(progress(
-            "catalog",
-            current,
-            total,
-            &format!("Catalog: {}", policy.name),
-        ));
-        match export_catalog_policy(access_token, policy, &exported_at, &mut writer).await {
-            Ok(()) => {}
-            Err(error) => warnings.push(format!("{}: {error}", policy.name)),
-        }
-    }
+    let token = access_token.to_string();
+    let exported_at_owned = exported_at.clone();
 
-    for script in &scripts {
-        current += 1;
-        on_progress(progress(
-            "scripts",
-            current,
-            total,
-            &format!("Script: {}", script.display_name),
-        ));
-        match export_script(access_token, script, &exported_at, &mut writer).await {
-            Ok(()) => {}
-            Err(error) => warnings.push(format!("{}: {error}", script.display_name)),
-        }
-    }
-
-    for policy in &compliance {
-        current += 1;
-        on_progress(progress(
-            "compliance",
-            current,
-            total,
-            &format!("Compliance: {}", policy.name),
-        ));
-        match export_named_graph(
-            access_token,
-            "compliancePolicy",
-            policy,
-            pack_platform_from_graph(policy.platforms.as_deref(), policy.odata_type.as_deref()),
-            "compliance",
-            "compliancePolicy",
-            &exported_at,
-            &mut writer,
-            &mut skipped,
-        )
-        .await
-        {
-            Ok(()) => {}
-            Err(error) => warnings.push(format!("{}: {error}", policy.name)),
-        }
-    }
-
-    for policy in &intents {
-        current += 1;
-        on_progress(progress(
-            "endpoint-security",
-            current,
-            total,
-            &format!("Endpoint Security: {}", policy.name),
-        ));
-        match export_endpoint_security(access_token, policy, &exported_at, &mut writer).await {
-            Ok(()) => {}
-            Err(error) => warnings.push(format!("{}: {error}", policy.name)),
-        }
-    }
-
-    for policy in &windows_update {
-        current += 1;
-        on_progress(progress(
-            "windows-update",
-            current,
-            total,
-            &format!("Windows Update: {}", policy.name),
-        ));
-        match export_windows_update(access_token, policy, &exported_at, &mut writer).await {
-            Ok(()) => {}
-            Err(error) => warnings.push(format!("{}: {error}", policy.name)),
-        }
-    }
-
-    for profile in &autopilot {
-        current += 1;
-        on_progress(progress(
-            "autopilot",
-            current,
-            total,
-            &format!("Autopilot: {}", profile.display_name),
-        ));
-        let summary = CatalogPolicySummary {
-            id: profile.id.clone(),
-            name: profile.display_name.clone(),
-            description: profile.description.clone(),
+    let mut jobs = Vec::with_capacity(total as usize);
+    jobs.extend(catalog.into_iter().map(ExportJob::Catalog));
+    jobs.extend(scripts.into_iter().map(ExportJob::Script));
+    jobs.extend(compliance.into_iter().map(ExportJob::Compliance));
+    jobs.extend(intents.into_iter().map(ExportJob::EndpointSecurity));
+    jobs.extend(windows_update.into_iter().map(ExportJob::WindowsUpdate));
+    for profile in autopilot {
+        jobs.push(ExportJob::Autopilot(CatalogPolicySummary {
+            id: profile.id,
+            name: profile.display_name,
+            description: profile.description,
             platforms: Some("windows".into()),
             technologies: None,
             setting_count: None,
-            created_date_time: profile.created_date_time.clone(),
-            last_modified_date_time: profile.last_modified_date_time.clone(),
+            created_date_time: profile.created_date_time,
+            last_modified_date_time: profile.last_modified_date_time,
             is_assigned: None,
             template_family: None,
             template_id: None,
             template_display_name: None,
-            odata_type: profile.odata_type.clone(),
-        };
-        match export_named_graph(
-            access_token,
-            "autopilotProfile",
-            &summary,
-            Some("windows"),
-            "enrollment/autopilot",
-            "enrollment-autopilot",
-            &exported_at,
-            &mut writer,
-            &mut skipped,
-        )
-        .await
-        {
-            Ok(()) => {}
-            Err(error) => warnings.push(format!("{}: {error}", profile.display_name)),
+            odata_type: profile.odata_type,
+        }));
+    }
+    jobs.extend(group_policy.into_iter().map(ExportJob::GroupPolicy));
+
+    on_progress(progress(
+        "export",
+        0,
+        total.max(1),
+        &format!("Fetching {total} objects (concurrency {concurrency})…"),
+    ));
+
+    let mut completed = 0u32;
+    let prepared: Vec<PreparedExport> = stream::iter(jobs)
+        .map(|job| {
+            let token = token.clone();
+            let exported_at = exported_at_owned.clone();
+            async move { run_export_job(&token, job, &exported_at).await }
+        })
+        .buffer_unordered(concurrency)
+        .inspect(|result| {
+            completed += 1;
+            let label = match result {
+                PreparedExport::Files { label, .. }
+                | PreparedExport::Warning { label, .. }
+                | PreparedExport::Skipped { label, .. } => label.as_str(),
+            };
+            on_progress(progress("export", completed, total.max(1), label));
+        })
+        .collect()
+        .await;
+
+    for item in prepared {
+        match item {
+            PreparedExport::Files { files, .. } => {
+                for file in files {
+                    writer.write_prepared(file)?;
+                }
+            }
+            PreparedExport::Warning { label, message } => {
+                warnings.push(format!("{label}: {message}"));
+            }
+            PreparedExport::Skipped { label, message } => {
+                skipped.push(format!("{label} ({message})"));
+            }
         }
     }
 
-    for policy in &group_policy {
-        current += 1;
-        on_progress(progress(
-            "group-policy",
-            current,
-            total,
-            &format!("Group Policy: {}", policy.name),
-        ));
-        match export_named_graph(
-            access_token,
-            "groupPolicyConfiguration",
-            policy,
-            Some("windows"),
-            "group-policy",
-            "group-policy",
-            &exported_at,
-            &mut writer,
-            &mut skipped,
-        )
-        .await
-        {
-            Ok(()) => {}
-            Err(error) => warnings.push(format!("{}: {error}", policy.name)),
-        }
-    }
-
-    writer.includes.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    writer
+        .includes
+        .sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
     writer
         .catalog_includes
         .sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
@@ -456,12 +552,11 @@ fn list_or_warn<T>(
     }
 }
 
-async fn export_catalog_policy(
+async fn prepare_catalog_policy(
     access_token: &str,
     policy: &CatalogPolicySummary,
     exported_at: &str,
-    writer: &mut ExportWriter,
-) -> Result<(), PackExportError> {
+) -> Result<Vec<PreparedExportFile>, PackExportError> {
     let Some(platform) = pack_platform_from_graph(policy.platforms.as_deref(), None) else {
         return Err(PackExportError::Message(format!(
             "skipped unsupported platform ({})",
@@ -491,18 +586,20 @@ async fn export_catalog_policy(
                 .insert("templateReference".into(), reference.clone());
         }
     }
-    let rel = writer.unique_rel(&format!("{platform}/policies"), &policy.name, "json");
-    writer.write_json(&rel, &document)?;
-    writer.add_include(&rel, true);
-    Ok(())
+    Ok(vec![PreparedExportFile {
+        dir: format!("{platform}/policies"),
+        stem: policy.name.clone(),
+        ext: "json".into(),
+        bytes: json_bytes(&document)?,
+        catalog: true,
+    }])
 }
 
-async fn export_script(
+async fn prepare_script(
     access_token: &str,
     script: &TenantScriptSummary,
     exported_at: &str,
-    writer: &mut ExportWriter,
-) -> Result<(), PackExportError> {
+) -> Result<Vec<PreparedExportFile>, PackExportError> {
     let kind = format!("script:{}", script.kind);
     let detail = fetch_graph_object_detail(access_token, &kind, &script.id).await?;
     let platform = script_pack_platform(&script.kind);
@@ -529,17 +626,21 @@ async fn export_script(
         if detection.trim().is_empty() && remediation.trim().is_empty() {
             return Err(PackExportError::Message("empty remediation scripts".into()));
         }
+        let mut files = Vec::new();
         if !detection.trim().is_empty() {
-            let rel = writer.unique_rel(&dir, &format!("{}-detect", script.display_name), ext);
             let body = script_file_with_header(
                 &script_meta(&detail, script, "script:remediation-detect", exported_at, "detect.ps1"),
                 detection,
             );
-            writer.write_bytes(&rel, body.as_bytes())?;
-            writer.add_include(&rel, false);
+            files.push(PreparedExportFile {
+                dir: dir.clone(),
+                stem: format!("{}-detect", script.display_name),
+                ext: ext.into(),
+                bytes: body.into_bytes(),
+                catalog: false,
+            });
         }
         if !remediation.trim().is_empty() {
-            let rel = writer.unique_rel(&dir, &format!("{}-remediate", script.display_name), ext);
             let body = script_file_with_header(
                 &script_meta(
                     &detail,
@@ -550,10 +651,15 @@ async fn export_script(
                 ),
                 remediation,
             );
-            writer.write_bytes(&rel, body.as_bytes())?;
-            writer.add_include(&rel, false);
+            files.push(PreparedExportFile {
+                dir,
+                stem: format!("{}-remediate", script.display_name),
+                ext: ext.into(),
+                bytes: body.into_bytes(),
+                catalog: false,
+            });
         }
-        return Ok(());
+        return Ok(files);
     }
 
     let text = if script.kind == "compliance" {
@@ -573,17 +679,20 @@ async fn export_script(
         .as_deref()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or(if ext == "sh" { "script.sh" } else { "script.ps1" });
-    let rel = writer.unique_rel(&dir, &script.display_name, ext);
     let body = script_file_with_header(
         &script_meta(&detail, script, &kind, exported_at, file_name),
         text,
     );
-    writer.write_bytes(&rel, body.as_bytes())?;
-    writer.add_include(&rel, false);
-    Ok(())
+    Ok(vec![PreparedExportFile {
+        dir,
+        stem: script.display_name.clone(),
+        ext: ext.into(),
+        bytes: body.into_bytes(),
+        catalog: false,
+    }])
 }
 
-async fn export_named_graph(
+async fn prepare_named_graph(
     access_token: &str,
     graph_kind: &str,
     policy: &CatalogPolicySummary,
@@ -591,31 +700,31 @@ async fn export_named_graph(
     folder: &str,
     axis_kind: &str,
     exported_at: &str,
-    writer: &mut ExportWriter,
-    skipped: &mut Vec<String>,
-) -> Result<(), PackExportError> {
+) -> Result<PrepareNamed, PackExportError> {
     let Some(platform) = platform else {
-        skipped.push(format!(
-            "{} ({})",
-            policy.name,
-            policy.odata_type.as_deref().unwrap_or("unsupported platform")
+        return Ok(PrepareNamed::Skipped(
+            policy
+                .odata_type
+                .clone()
+                .unwrap_or_else(|| "unsupported platform".into()),
         ));
-        return Ok(());
     };
     let detail = fetch_graph_object_detail(access_token, graph_kind, &policy.id).await?;
     let document = graph_object_document(&detail, axis_kind, exported_at);
-    let rel = writer.unique_rel(&format!("{platform}/{folder}"), &policy.name, "json");
-    writer.write_json(&rel, &document)?;
-    writer.add_include(&rel, false);
-    Ok(())
+    Ok(PrepareNamed::Files(vec![PreparedExportFile {
+        dir: format!("{platform}/{folder}"),
+        stem: policy.name.clone(),
+        ext: "json".into(),
+        bytes: json_bytes(&document)?,
+        catalog: false,
+    }]))
 }
 
-async fn export_endpoint_security(
+async fn prepare_endpoint_security(
     access_token: &str,
     policy: &CatalogPolicySummary,
     exported_at: &str,
-    writer: &mut ExportWriter,
-) -> Result<(), PackExportError> {
+) -> Result<Vec<PreparedExportFile>, PackExportError> {
     let client = GraphClient::new();
     let enc = encode(&policy.id);
     let mut object: Value = client
@@ -625,20 +734,14 @@ async fn export_endpoint_security(
             "beta",
         )
         .await?;
-    let settings = match client
+    let settings = client
         .fetch_all_pages::<Value>(
             access_token,
             &format!("/deviceManagement/intents/{enc}/settings"),
             "beta",
             SETTINGS_PAGE_MAX,
         )
-        .await
-    {
-        Ok(rows) => rows,
-        Err(error) => {
-            return Err(PackExportError::Graph(error));
-        }
-    };
+        .await?;
     strip_graph_noise(object.as_object_mut());
     let id = policy.id.clone();
     let document = json!({
@@ -649,25 +752,31 @@ async fn export_endpoint_security(
         "intent": object,
         "settings": settings,
     });
-    let rel = writer.unique_rel("windows/endpoint-security", &policy.name, "json");
-    writer.write_json(&rel, &document)?;
-    writer.add_include(&rel, false);
-    Ok(())
+    Ok(vec![PreparedExportFile {
+        dir: "windows/endpoint-security".into(),
+        stem: policy.name.clone(),
+        ext: "json".into(),
+        bytes: json_bytes(&document)?,
+        catalog: false,
+    }])
 }
 
-async fn export_windows_update(
+async fn prepare_windows_update(
     access_token: &str,
     policy: &WindowsUpdatePolicy,
     exported_at: &str,
-    writer: &mut ExportWriter,
-) -> Result<(), PackExportError> {
+) -> Result<Vec<PreparedExportFile>, PackExportError> {
     let graph_kind = format!("windowsUpdate:{}", policy.family);
     let detail = fetch_graph_object_detail(access_token, &graph_kind, &policy.id).await?;
-    let document = graph_object_document(&detail, &format!("windowsUpdate:{}", policy.family), exported_at);
-    let rel = writer.unique_rel("windows/windows-update", &policy.name, "json");
-    writer.write_json(&rel, &document)?;
-    writer.add_include(&rel, false);
-    Ok(())
+    let document =
+        graph_object_document(&detail, &format!("windowsUpdate:{}", policy.family), exported_at);
+    Ok(vec![PreparedExportFile {
+        dir: "windows/windows-update".into(),
+        stem: policy.name.clone(),
+        ext: "json".into(),
+        bytes: json_bytes(&document)?,
+        catalog: false,
+    }])
 }
 
 fn envelope(kind: &str, source_id: &str, exported_at: &str) -> Value {

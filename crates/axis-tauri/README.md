@@ -1,13 +1,15 @@
 # Axis Desktop (Tauri)
 
-Native Windows shell for **Axis**. Graph calls run in Rust (`axis-sdk` crate). Access Axis by running the **`.exe`** or `cargo tauri dev` — not a localhost website.
+Tauri desktop shell for **Axis**. Graph calls run in Rust (`axis-sdk` crate). Access Axis by running the built binary or `cargo tauri dev` — not a localhost website. Windows is the primary release target; Linux dev builds are supported via `./scripts/dev.sh` (see repo-root README).
 
 ## Prerequisites
 
-- **Rust** 1.77.2+ (`rust-version` in `src-tauri/Cargo.toml`) and **cargo**
-- **Node.js** 24.x and **npm** (enforced by the UI package and release tooling)
-- **WebView2** — included on Windows 11; on Windows 10 install the [Evergreen WebView2 runtime](https://developer.microsoft.com/microsoft-edge/webview2/)
+- **Rust** 1.77.2+ (`rust-version` in `src-tauri/Cargo.toml`) and **cargo** — install via [rustup](https://rustup.rs/) and run `rustup default stable`
+- **Node.js** 24.x and **npm** (see repo-root `.nvmrc`)
 - **Tauri CLI 2** — `cargo install tauri-cli --version "^2"` (matches `tauri` 2 in this crate)
+- **WebView2** — included on Windows 11; on Windows 10 install the [Evergreen WebView2 runtime](https://developer.microsoft.com/microsoft-edge/webview2/)
+
+Full setup (rustup, Tauri CLI, `npm install`): run `./scripts/setup.sh` from the repo root, or see **Setup** in the [repo-root README](../../README.md).
 
 ## Project layout
 
@@ -25,7 +27,9 @@ Packs: **Baselines → Manage sources**, or **Export tenant pack** to write this
 
 ## Install (UI)
 
-```powershell
+If you have not run `./scripts/setup.sh`, install UI dependencies manually:
+
+```bash
 cd crates/axis-tauri/ui
 npm install
 ```
@@ -36,10 +40,12 @@ That path is `crates/axis-tauri/ui` relative to the repo root. `cargo tauri` doe
 
 Run **`cargo tauri` from this crate folder (`crates\axis-tauri`)**. Do **not** `cd` into `src-tauri`. Do **not** run from the repo root.
 
-```powershell
+```bash
 cd crates/axis-tauri
 cargo tauri dev
 ```
+
+On Linux, use `./scripts/dev.sh` from the repo root. The shell includes `tauri-plugin-wayland-nvidia-quirk` for Wayland + NVIDIA; see repo-root README for fallbacks.
 
 `tauri.conf.json` lives under **`src-tauri/`**. Tauri 2 finds it from this folder: it looks for `tauri.conf.json` in the current directory, then in **`src-tauri/`**. You invoke the CLI here; internally it uses `src-tauri` as the Rust app directory.
 

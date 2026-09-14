@@ -23,6 +23,7 @@ import {
   updateObjectMetadata,
 } from "../../lib/tauri";
 import type { AssignmentDraft } from "../../types/inventory";
+import { READ_ONLY_WRITE_HINT, useReadOnly } from "../../lib/readOnly";
 import {
   ContextMenu,
   ContextMenuToast,
@@ -55,6 +56,7 @@ export function ObjectDeleteButton({
   onDeleted?: (target: ObjectListTarget) => void;
 }) {
   const openDelete = useContext(ObjectDeleteContext);
+  const readOnly = useReadOnly();
   const [localOpen, setLocalOpen] = useState(false);
   if (!canDeleteGraphKind(target.kind)) return null;
 
@@ -64,7 +66,8 @@ export function ObjectDeleteButton({
         type="button"
         className="axis-btn axis-btn-icon object-delete-icon"
         aria-label={`Delete ${target.title}`}
-        title={`Delete ${target.title}`}
+        title={readOnly ? READ_ONLY_WRITE_HINT : `Delete ${target.title}`}
+        disabled={readOnly}
         onClick={(event) => {
           event.preventDefault();
           event.stopPropagation();
@@ -90,6 +93,7 @@ type PaneState = { mode: PaneMode; target: ObjectListTarget } | null;
 
 export type ObjectListActionContext = {
   busy: boolean;
+  readOnly: boolean;
   openDelete: (target: ObjectListTarget) => void;
   openDuplicate: (target: ObjectListTarget) => void;
   openMetadata: (target: ObjectListTarget) => void;
@@ -111,14 +115,14 @@ export const OBJECT_LIST_ACTIONS: ObjectListActionDef[] = [
     id: "edit-metadata",
     label: "Edit details…",
     available: (target) => canEditGraphMetadata(target.kind),
-    disabled: (_target, ctx) => ctx.busy,
+    disabled: (_target, ctx) => ctx.busy || ctx.readOnly,
     run: (target, ctx) => ctx.openMetadata(target),
   },
   {
     id: "duplicate",
     label: "Duplicate…",
     available: (target) => canDuplicateGraphKind(target.kind),
-    disabled: (_target, ctx) => ctx.busy,
+    disabled: (_target, ctx) => ctx.busy || ctx.readOnly,
     run: (target, ctx) => ctx.openDuplicate(target),
   },
   {
@@ -127,7 +131,7 @@ export const OBJECT_LIST_ACTIONS: ObjectListActionDef[] = [
     danger: true,
     separatorBefore: true,
     available: (target) => canDeleteGraphKind(target.kind),
-    disabled: (_target, ctx) => ctx.busy,
+    disabled: (_target, ctx) => ctx.busy || ctx.readOnly,
     run: (target, ctx) => ctx.openDelete(target),
   },
 ];
@@ -566,7 +570,9 @@ export function BulkDeleteAction({
   targets: ObjectListTarget[];
   onDeleted: (deleted: ObjectListTarget[]) => void;
 }) {
+  const readOnly = useReadOnly();
   const deletableTargets = targets.filter((target) => canDeleteGraphKind(target.kind));
+  if (readOnly) return null;
   const [open, setOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -699,6 +705,7 @@ export function ObjectListMenuHost({
   ) => void;
   onDeleted?: (target: ObjectListTarget) => void;
 }) {
+  const readOnly = useReadOnly();
   const [menu, setMenu] = useState<ContextMenuState>(null);
   const [pane, setPane] = useState<PaneState>(null);
   const [deleteTarget, setDeleteTarget] = useState<ObjectListTarget | null>(null);
@@ -720,11 +727,12 @@ export function ObjectListMenuHost({
   const ctx = useMemo<ObjectListActionContext>(
     () => ({
       busy,
+      readOnly,
       openDelete: (target) => setDeleteTarget(target),
       openDuplicate: (target) => setPane({ mode: "duplicate", target }),
       openMetadata: (target) => setPane({ mode: "metadata", target }),
     }),
-    [busy],
+    [busy, readOnly],
   );
 
   function onContextMenu(event: MouseEvent<HTMLDivElement>) {

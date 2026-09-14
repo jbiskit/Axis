@@ -10,6 +10,7 @@ use tauri_plugin_opener::OpenerExt;
 use tokio::sync::Mutex;
 
 mod catalog_index;
+mod client_container;
 mod commands;
 mod script_lint;
 mod updater;
@@ -18,6 +19,7 @@ pub(crate) struct AppState {
     pub auth: Arc<AuthManager>,
     pub account_name: Mutex<Option<String>>,
     pub catalog_index: Arc<catalog_index::CatalogIndexRuntime>,
+    pub client_container: Arc<client_container::ClientContainerRuntime>,
     pub updater: updater::UpdaterRuntime,
 }
 
@@ -29,6 +31,7 @@ struct SessionStatus {
     mode: SessionMode,
     read_only_scope_exceeds_request: bool,
     exceeded_write_scopes: Vec<String>,
+    tenant_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -101,6 +104,7 @@ async fn device_session_status(state: State<'_, AppState>) -> Result<SessionStat
         mode,
         read_only_scope_exceeds_request,
         exceeded_write_scopes,
+        tenant_id: state.auth.session_tenant_id().await,
     })
 }
 
@@ -220,9 +224,17 @@ async fn open_external_url(app: tauri::AppHandle, url: String) -> Result<(), Str
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_wayland_nvidia_quirk::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
+            #[cfg(all(debug_assertions, target_os = "linux"))]
+            {
+                eprintln!(
+                    "axis wayland-nvidia-quirk: {:?}",
+                    tauri_plugin_wayland_nvidia_quirk::status()
+                );
+            }
             updater::cleanup_previous_install();
             let app_data = app
                 .path()
@@ -233,6 +245,9 @@ pub fn run() {
                 auth: Arc::new(AuthManager::new()),
                 account_name: Mutex::new(None),
                 catalog_index: Arc::new(catalog_index::CatalogIndexRuntime::new(cache_dir)),
+                client_container: Arc::new(client_container::ClientContainerRuntime::new(
+                    &app_data,
+                )),
                 updater: updater::UpdaterRuntime::new(),
             });
             Ok(())
@@ -271,6 +286,18 @@ pub fn run() {
             commands::fetch_baseline_reference_sources_cmd,
             commands::fetch_baseline_export_cmd,
             commands::pick_local_pack_folder_cmd,
+            commands::client_container_status_cmd,
+            commands::client_container_pick_open_cmd,
+            commands::client_container_pick_create_cmd,
+            commands::client_container_create_cmd,
+            commands::client_container_clear_cmd,
+            commands::client_container_snooze_stale_cmd,
+            commands::client_container_list_snapshots_cmd,
+            commands::client_container_export_snapshot_cmd,
+            commands::client_container_diff_cmd,
+            commands::client_container_restore_candidates_cmd,
+            commands::client_container_restore_plan_cmd,
+            commands::client_container_restore_apply_cmd,
             commands::pick_json_files_cmd,
             commands::pick_script_files_cmd,
             commands::save_text_file_cmd,

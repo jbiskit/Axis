@@ -32,6 +32,7 @@ import {
   type CatalogPolicySortKey,
 } from "../lib/listSelection";
 import { hrefWithParam, navigate, type AppRoute } from "../lib/route";
+import { useWriteGate, WriteActionButton } from "../lib/readOnly";
 import {
   homogeneousBulkAssignKind,
   inspectorKindForTenantScript,
@@ -96,6 +97,7 @@ import {
   type PolicyExportResolved,
 } from "./workbench/PolicyExportInspect";
 import { BaselineMergeDialog } from "./workbench/BaselineMergeDialog";
+import { ClientContainerDiffView } from "./ClientContainerDiffView";
 import { DevicesList } from "./DevicesList";
 import { DeviceDetailView, type DeviceDetailCacheEntry } from "./DeviceDetailView";
 import { SettingsSearchView } from "./SettingsSearchView";
@@ -160,6 +162,8 @@ export function IntuneWorkspace({
   devicesFetchedAt,
   onRefreshGlance,
   onRefreshDevices,
+  clientContainer = null,
+  onRefreshClientContainer,
 }: {
   route: AppRoute;
   glance: TenantGlance | null;
@@ -174,6 +178,8 @@ export function IntuneWorkspace({
   devicesFetchedAt: string | null;
   onRefreshGlance: () => void;
   onRefreshDevices: () => void;
+  clientContainer?: import("../types/clientContainer").ClientContainerStatus | null;
+  onRefreshClientContainer?: () => void;
 }) {
   const { pathname, search } = route;
   const platform = platformFromSearchParam(search.get("platform"));
@@ -269,6 +275,15 @@ export function IntuneWorkspace({
 
   if (pathname === "/intune/activity") {
     return <WriteActivityView pathname={pathname} search={search} />;
+  }
+
+  if (pathname === "/intune/client" || pathname === "/intune/client/restore") {
+    return (
+      <ClientContainerDiffView
+        container={clientContainer}
+        onRefreshContainer={onRefreshClientContainer}
+      />
+    );
   }
 
   if (pathname === "/intune/reports") {
@@ -1116,9 +1131,13 @@ function PoliciesHub({
     window.setTimeout(() => onRefresh(), 0);
   }, platform === "macos" ? "macos" : "windows");
   const importButton = (
-    <button type="button" className="axis-btn" onClick={() => void catalogImport.openPicker()}>
+    <WriteActionButton
+      type="button"
+      className="axis-btn"
+      onClick={() => void catalogImport.openPicker()}
+    >
       Import
-    </button>
+    </WriteActionButton>
   );
   return (
     <>
@@ -1446,13 +1465,17 @@ function NamedPolicyList({
   );
   const canCreate = objectKind === "compliancePolicy";
   const createButton = canCreate ? (
-    <button type="button" className="axis-btn axis-btn-primary" onClick={() => setCreating(true)}>
+    <WriteActionButton
+      type="button"
+      className="axis-btn axis-btn-primary"
+      onClick={() => setCreating(true)}
+    >
       New
-    </button>
+    </WriteActionButton>
   ) : onCreate ? (
-    <button type="button" className="axis-btn axis-btn-primary" onClick={onCreate}>
+    <WriteActionButton type="button" className="axis-btn axis-btn-primary" onClick={onCreate}>
       Create
-    </button>
+    </WriteActionButton>
   ) : null;
   const listed = useMemo(() => withTransientItem(items, overlay), [items, overlay]);
   const selected = listed.find((item) => item.id === selectedId);
@@ -2070,9 +2093,13 @@ function ScriptsWorkbench({
     />
   );
   const createButton = (
-    <button type="button" className="axis-btn axis-btn-primary" onClick={() => setCreating(true)}>
+    <WriteActionButton
+      type="button"
+      className="axis-btn axis-btn-primary"
+      onClick={() => setCreating(true)}
+    >
       New
-    </button>
+    </WriteActionButton>
   );
   const scriptImport = useScriptFileImport(family, (created) => {
     const first = created[0];
@@ -2080,9 +2107,13 @@ function ScriptsWorkbench({
     window.setTimeout(() => onRefresh(), 0);
   });
   const importButton = (
-    <button type="button" className="axis-btn" onClick={() => void scriptImport.openPicker()}>
+    <WriteActionButton
+      type="button"
+      className="axis-btn"
+      onClick={() => void scriptImport.openPicker()}
+    >
       Import
-    </button>
+    </WriteActionButton>
   );
   const searchPlaceholder =
     scope === "remediation"
@@ -2577,6 +2608,7 @@ function BaselinesWorkbench({
   signedIn: boolean;
   organizationName: string | null;
 }) {
+  const { writeDisabled } = useWriteGate();
   const templates = surface === "templates";
   const [sourceEntries, setSourceEntries] = useState<BaselineReferenceSourceInput[]>([
     DEFAULT_E8_SOURCE,
@@ -2943,7 +2975,7 @@ function BaselinesWorkbench({
               actions={
                 <div className="baseline-actions">
                   {templates ? (
-                    <button
+                    <WriteActionButton
                       type="button"
                       className="axis-btn axis-btn-primary"
                       onClick={() => void runTenantExport()}
@@ -2951,7 +2983,7 @@ function BaselinesWorkbench({
                       title={signedIn ? undefined : "Sign in to export this tenant"}
                     >
                       {exportBusy ? "Exporting…" : "Export tenant pack"}
-                    </button>
+                    </WriteActionButton>
                   ) : (
                     <button type="button" className="axis-btn" onClick={() => navigate("/intune/templates")}>
                       Templates
@@ -2959,20 +2991,16 @@ function BaselinesWorkbench({
                   )}
                   {templates ? (
                     <>
-                      <button
-                        type="button"
-                        className="axis-btn"
-                        onClick={addGitHubSource}
-                      >
+                      <WriteActionButton type="button" className="axis-btn" onClick={addGitHubSource}>
                         Add GitHub pack
-                      </button>
-                      <button
+                      </WriteActionButton>
+                      <WriteActionButton
                         type="button"
                         className="axis-btn"
                         onClick={() => void addLocalFolderSource()}
                       >
                         Add local folder
-                      </button>
+                      </WriteActionButton>
                       <button
                         type="button"
                         className={`axis-btn${sourceEditorOpen ? " is-active" : ""}`}
@@ -3111,12 +3139,16 @@ function BaselinesWorkbench({
                   <p className="muted baseline-source-empty">No template stores yet.</p>
                 ) : null}
                 <div className="baseline-sources-foot">
-                  <button type="button" className="axis-btn" onClick={addGitHubSource}>
+                  <WriteActionButton type="button" className="axis-btn" onClick={addGitHubSource}>
                     Add GitHub pack
-                  </button>
-                  <button type="button" className="axis-btn" onClick={() => void addLocalFolderSource()}>
+                  </WriteActionButton>
+                  <WriteActionButton
+                    type="button"
+                    className="axis-btn"
+                    onClick={() => void addLocalFolderSource()}
+                  >
                     Add local folder
-                  </button>
+                  </WriteActionButton>
                   <button type="button" className="axis-btn axis-btn-ghost" onClick={() => void loadReferences()} disabled={e8Loading}>
                     Reload stores
                   </button>
@@ -3136,7 +3168,7 @@ function BaselinesWorkbench({
                     ? "Create Settings Catalog policies from the selected exports"
                     : "Sign in to import policies"
                 }
-                editDisabled={!signedIn}
+                editDisabled={!signedIn || writeDisabled}
                 onEdit={() => {
                   setBulkImportTargets(checkedCatalog);
                   setBulkImportOpen(true);
@@ -3342,13 +3374,13 @@ function BaselinesWorkbench({
               actions={
                 <div className="device-actions">
                   {isCatalogPackArtifact(selectedReference.artifactKind) ? (
-                    <button
+                    <WriteActionButton
                       type="button"
                       className="axis-btn axis-btn-primary"
                       onClick={() => setImportOpen(true)}
                     >
                       Import to Intune
-                    </button>
+                    </WriteActionButton>
                   ) : null}
                   <button type="button" className="axis-btn" onClick={() => onSelect("")}>
                     Close
@@ -3755,6 +3787,7 @@ function BaselineImportDialog({
   kicker: string;
   onClose: () => void;
 }) {
+  const { writeDisabled, writeHint } = useWriteGate();
   const [name, setName] = useState(reference.name);
   const [description, setDescription] = useState("");
   const [platform, setPlatform] = useState<"windows" | "macos">("windows");
@@ -3884,7 +3917,8 @@ function BaselineImportDialog({
             <button
               type="button"
               className="axis-btn axis-btn-primary"
-              disabled={loading || saving || !name.trim() || settings.length === 0}
+              disabled={writeDisabled || loading || saving || !name.trim() || settings.length === 0}
+              title={writeDisabled ? writeHint : undefined}
               onClick={() => void importPolicy()}
             >
               {saving ? "Importing…" : "Import policy"}
@@ -3957,6 +3991,7 @@ function BaselineBulkImportDialog({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const { writeDisabled, writeHint } = useWriteGate();
   const referenceKey = references.map((reference) => `${reference.sourceId}:${reference.id}`).join("\0");
   const [rows, setRows] = useState<BulkImportRow[]>(() =>
     references.map((reference) => ({
@@ -4202,7 +4237,8 @@ function BaselineBulkImportDialog({
             <button
               type="button"
               className="axis-btn axis-btn-primary"
-              disabled={saving || stillLoading || ready.length === 0}
+              disabled={writeDisabled || saving || stillLoading || ready.length === 0}
+              title={writeDisabled ? writeHint : undefined}
               onClick={() => void importPolicies()}
             >
               {saving

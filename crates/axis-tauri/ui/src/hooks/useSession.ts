@@ -16,6 +16,7 @@ import {
   loadLastSessionMode,
   saveLastSessionMode,
 } from "../lib/loginPrefs";
+import { clearShellBannerDismissals } from "../lib/readOnly";
 import { isPopoutRoute } from "../lib/popout";
 import { parseHash } from "../lib/route";
 
@@ -35,6 +36,7 @@ export function useSession() {
   const [readOnlyScopeExceedsRequest, setReadOnlyScopeExceedsRequest] = useState(false);
   const [exceededWriteScopes, setExceededWriteScopes] = useState<string[]>([]);
   const [deviceCode, setDeviceCode] = useState<DeviceCodePrompt | null>(null);
+  const [contextSwapTarget, setContextSwapTarget] = useState<SessionMode | null>(null);
   const [glance, setGlance] = useState<TenantGlance | null>(null);
   const [glanceLoading, setGlanceLoading] = useState(false);
   const [glanceError, setGlanceError] = useState<string | null>(null);
@@ -93,17 +95,27 @@ export function useSession() {
     loginGeneration.current += 1;
     const flowId = deviceCode?.flowId;
     setDeviceCode(null);
+    setContextSwapTarget(null);
     if (flowId) {
       await deviceLoginCancel(flowId).catch(() => undefined);
     }
   }, [deviceCode]);
 
   const login = useCallback(
-    async (requestedMode?: SessionMode, extraScopes?: string) => {
+    async (
+      requestedMode?: SessionMode,
+      extraScopes?: string,
+      options?: { deferModeUntilSignedIn?: boolean },
+    ) => {
       const generation = ++loginGeneration.current;
       const targetMode = requestedMode ?? loadLastSessionMode();
       saveLastSessionMode(targetMode);
-      setMode(targetMode);
+      if (options?.deferModeUntilSignedIn) {
+        setContextSwapTarget(targetMode);
+      } else {
+        setContextSwapTarget(null);
+        setMode(targetMode);
+      }
 
       const extras = extraScopes ?? loadLastExtraScopes();
       if (extraScopes !== undefined) {
@@ -133,6 +145,9 @@ export function useSession() {
               setMode(status.mode);
               setReadOnlyScopeExceedsRequest(Boolean(status.readOnlyScopeExceedsRequest));
               setExceededWriteScopes(status.exceededWriteScopes ?? []);
+              if (status.mode === "admin") {
+                clearShellBannerDismissals();
+              }
             } catch {
               /* browser-only preview */
             }
@@ -147,6 +162,7 @@ export function useSession() {
       } finally {
         if (generation === loginGeneration.current) {
           setDeviceCode(null);
+          setContextSwapTarget(null);
         }
       }
     },
@@ -165,6 +181,13 @@ export function useSession() {
     setExceededWriteScopes([]);
   }, []);
 
+  const swapContext = useCallback(async () => {
+    const targetMode: SessionMode = mode === "read" ? "admin" : "read";
+    await login(targetMode, undefined, { deferModeUntilSignedIn: true });
+  }, [login, mode]);
+
+  const contextSwapActive = signedIn && deviceCode != null && contextSwapTarget != null;
+
   return useMemo(
     () => ({
       signedIn,
@@ -175,17 +198,22 @@ export function useSession() {
       readOnlyScopeExceedsRequest,
       exceededWriteScopes,
       deviceCode,
+      contextSwapActive,
+      contextSwapTargetMode: contextSwapTarget,
       glance,
       glanceLoading,
       glanceError,
       login,
       logout,
       cancelLogin,
+      swapContext,
       reloadGlance,
     }),
     [
       accountName,
       cancelLogin,
+      contextSwapActive,
+      contextSwapTarget,
       deviceCode,
       exceededWriteScopes,
       glance,
@@ -198,6 +226,7 @@ export function useSession() {
       reloadGlance,
       restoring,
       signedIn,
+      swapContext,
     ],
   );
 }

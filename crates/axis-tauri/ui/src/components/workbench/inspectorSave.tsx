@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { READ_ONLY_WRITE_HINT, useReadOnly } from "../../lib/readOnly";
 
 export type InspectorSaveAction = {
   onSave: () => void;
@@ -27,6 +28,7 @@ export function InspectorSaveProvider({
 
 export function useInspectorSaveAction(action: InspectorSaveAction | null) {
   const setAction = useContext(SetActionContext);
+  const readOnly = useReadOnly();
   const onSaveRef = useRef(action?.onSave);
   onSaveRef.current = action?.onSave;
   const present = Boolean(action?.onSave);
@@ -40,23 +42,31 @@ export function useInspectorSaveAction(action: InspectorSaveAction | null) {
     }
     setAction({
       onSave: () => onSaveRef.current?.(),
-      disabled: Boolean(disabled),
+      disabled: Boolean(disabled) || readOnly,
       busy: Boolean(busy),
       label,
     });
     return () => setAction(null);
-  }, [busy, disabled, label, present, setAction]);
+  }, [busy, disabled, label, present, readOnly, setAction]);
 }
 
 export function InspectorSaveButton() {
   const action = useContext(ActionContext);
+  const readOnly = useReadOnly();
   if (!action) return null;
+  const disabled = action.disabled || action.busy || readOnly;
   return (
     <button
       type="button"
       className="axis-btn axis-btn-primary"
-      disabled={action.disabled || action.busy}
-      title={action.disabled && !action.busy ? "No unsaved changes" : "Save changes to Graph"}
+      disabled={disabled}
+      title={
+        readOnly
+          ? READ_ONLY_WRITE_HINT
+          : action.disabled && !action.busy
+            ? "No unsaved changes"
+            : "Save changes to Graph"
+      }
       onClick={() => action.onSave()}
     >
       {action.busy ? "Saving…" : action.label ?? "Save to Graph"}

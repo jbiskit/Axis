@@ -17,6 +17,7 @@ import {
   writeCachedObjectDetail,
 } from "../../lib/inspectorCache";
 import { requestLeave, useInspectorDirty } from "../../lib/inspectorDrafts";
+import { READ_ONLY_WRITE_HINT, useReadOnly } from "../../lib/readOnly";
 import { parseScriptInspectorKind } from "../../lib/scriptKinds";
 import type { AssignmentDraft, GraphObjectDetail } from "../../types/inventory";
 import { OpenInIntune } from "../intune/OpenInIntune";
@@ -349,6 +350,7 @@ export function GraphObjectInspector({
   onClose: () => void;
   popout?: boolean;
 }) {
+  const readOnly = useReadOnly();
   const cached = readCachedObjectDetail(kind, id);
   const [detail, setDetail] = useState<GraphObjectDetail | null>(cached);
   const [loading, setLoading] = useState(!cached);
@@ -646,7 +648,7 @@ export function GraphObjectInspector({
         actions={
           <div className="device-actions">
             <InspectorSaveButton />
-            {canAssign && detail ? (
+            {canAssign && detail && !readOnly ? (
               <button
                 type="button"
                 className="axis-btn"
@@ -748,10 +750,11 @@ export function GraphObjectInspector({
                     ? "No assignments on this object."
                     : `${assignments.length} assignment${assignments.length === 1 ? "" : "s"}.`}
                 </p>
-                {canAssign ? (
+                {canAssign && !readOnly ? (
                   <button
                     type="button"
                     className="axis-btn axis-btn-primary"
+                    title={readOnly ? READ_ONLY_WRITE_HINT : undefined}
                     onClick={() => setAssignOpen(true)}
                   >
                     Update assignments
@@ -788,7 +791,7 @@ export function GraphObjectInspector({
                           <input
                             className="axis-input"
                             value={scriptMeta.name}
-                            disabled={saveBusy}
+                            disabled={saveBusy || readOnly}
                             onChange={(event) =>
                               setScriptMeta((current) => ({ ...current, name: event.target.value }))
                             }
@@ -799,7 +802,7 @@ export function GraphObjectInspector({
                           <input
                             className="axis-input"
                             value={scriptMeta.description}
-                            disabled={saveBusy}
+                            disabled={saveBusy || readOnly}
                             onChange={(event) =>
                               setScriptMeta((current) => ({
                                 ...current,
@@ -814,7 +817,7 @@ export function GraphObjectInspector({
                             className="axis-input"
                             value={scriptMeta.publisher}
                             placeholder="No Publisher"
-                            disabled={saveBusy}
+                            disabled={saveBusy || readOnly}
                             onChange={(event) =>
                               setScriptMeta((current) => ({
                                 ...current,
@@ -859,7 +862,7 @@ export function GraphObjectInspector({
                           }
                           showSignature={Boolean(scriptInfo?.supportsSignature)}
                           show64Bit={Boolean(scriptInfo?.supports32Bit)}
-                          disabled={saveBusy}
+                          disabled={saveBusy || readOnly}
                         />
                       </div>
                     </div>
@@ -875,6 +878,7 @@ export function GraphObjectInspector({
                     language={language}
                     ariaLabel="Script body"
                     lintRole="platform"
+                    readOnly={readOnly}
                   />
                 </section>
               ) : null}
@@ -887,6 +891,7 @@ export function GraphObjectInspector({
                     language={language}
                     ariaLabel="Detection script"
                     lintRole="detection"
+                    readOnly={readOnly}
                   />
                 </section>
               ) : null}
@@ -899,6 +904,7 @@ export function GraphObjectInspector({
                     language={language}
                     ariaLabel="Remediation script"
                     lintRole="remediation"
+                    readOnly={readOnly}
                   />
                 </section>
               ) : null}

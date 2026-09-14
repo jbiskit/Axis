@@ -16,6 +16,11 @@ use axis_sdk::{
     fetch_tenant_scripts, fetch_win32_apps, fetch_windows_update_policies,
     dest_dir_from_save_as, export_selected_graph_objects, export_tenant_pack, PackExportObject,
     PackExportOptions, PackExportProgress, PackExportResult, SelectedExportResult,
+    finalize_snapshot, list_snapshots, prepare_snapshot_export, snapshot_label, snapshot_pack_dir,
+    ClientContainerStatus, ClientSnapshotSummary, SnapshotManifest, SNAPSHOT_REPORT_DIR,
+    diff_pack_roots, PackDiffReport,
+    apply_restore, list_restore_candidates, plan_restore, RestoreApplyResult, RestoreCandidate,
+    RestoreMode, RestorePlan,
     generate_environment_report, EnvironmentReport, EnvironmentReportProgress,
     EnvironmentReportSelection,
     decode_access_token_claims,
@@ -163,6 +168,459 @@ pub async fn pick_local_pack_folder_cmd(title: Option<String>) -> Result<Option<
             .pick_folder()
             .map(|path| path.to_string_lossy().into_owned())
     })
+    .await
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn client_container_status_cmd(
+    state: State<'_, AppState>,
+) -> Result<ClientContainerStatus, String> {
+    let tenant_id = state.auth.session_tenant_id().await;
+    state
+        .client_container
+        .status(tenant_id.as_deref())
+}
+
+#[tauri::command]
+pub async fn client_container_pick_open_cmd(
+    state: State<'_, AppState>,
+) -> Result<Option<ClientContainerStatus>, String> {
+    let path = tokio::task::spawn_blocking(|| {
+        rfd::FileDialog::new()
+            .set_title("Open client container")
+            .pick_folder()
+            .map(|path| path.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    state
+        .client_container
+        .set_active(std::path::PathBuf::from(&path))?;
+    let tenant_id = state.auth.session_tenant_id().await;
+    Ok(Some(
+        state
+            .client_container
+            .status(tenant_id.as_deref())?,
+    ))
+}
+
+#[tauri::command]
+pub async fn client_container_pick_create_cmd() -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(|| {
+        rfd::FileDialog::new()
+            .set_title("Choose a folder for the new client container")
+            .pick_folder()
+            .map(|path| path.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn client_container_create_cmd(
+    state: State<'_, AppState>,
+    path: String,
+    name: String,
+    primary_domain: Option<String>,
+) -> Result<ClientContainerStatus, String> {
+    let tenant_id = state
+        .auth
+        .session_tenant_id()
+        .await
+        .ok_or_else(|| {
+            "Sign in so Axis can bind this container to your Entra tenant.".to_string()
+        })?;
+    let domain = primary_domain
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    state.client_container.create_and_activate(
+        std::path::PathBuf::from(path.trim()),
+        name.trim(),
+        &tenant_id,
+        domain,
+    )?;
+    state.client_container.status(Some(&tenant_id))
+}
+
+#[tauri::command]
+pub async fn client_container_clear_cmd(
+    state: State<'_, AppState>,
+) -> Result<ClientContainerStatus, String> {
+    state.client_container.clear();
+    let tenant_id = state.auth.session_tenant_id().await;
+    state.client_container.status(tenant_id.as_deref())
+}
+
+#[tauri::command]
+pub async fn client_container_snooze_stale_cmd(
+    state: State<'_, AppState>,
+    days: u32,
+) -> Result<ClientContainerStatus, String> {
+    state.client_container.snooze(days)?;
+    let tenant_id = state.auth.session_tenant_id().await;
+    state.client_container.status(tenant_id.as_deref())
+}
+
+#[tauri::command]
+pub async fn client_container_list_snapshots_cmd(
+    state: State<'_, AppState>,
+) -> Result<Vec<ClientSnapshotSummary>, String> {
+    let path = state
+        .client_container
+        .active_path()
+        .ok_or_else(|| "No client container is open.".to_string())?;
+    list_snapshots(&path).map_err(|error| error.to_string())
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientSnapshotExportResult {
+    pub snapshot: SnapshotManifest,
+    pub pack: PackExportResult,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub report: Option<EnvironmentReport>,
+    pub status: ClientContainerStatus,
+}
+
+#[tauri::command]
+pub async fn client_container_export_snapshot_cmd(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    pack_name: Option<String>,
+) -> Result<ClientSnapshotExportResult, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Err("Sign in to export a snapshot.".into());
+    };
+    let root = state
+        .client_container
+        .active_path()
+        .ok_or_else(|| "Open a client container before exporting a snapshot.".to_string())?;
+    let status = {
+        let tenant_id = state.auth.session_tenant_id().await;
+        state.client_container.status(tenant_id.as_deref())?
+    };
+    if status.tenant_mismatch {
+        return Err(
+            "Signed-in tenant does not match this client container. Swap session or open another container."
+                .into(),
+        );
+    }
+    let tenant_id = status
+        .manifest
+        .as_ref()
+        .map(|m| m.tenant_id.clone())
+        .or(status.session_tenant_id.clone())
+        .ok_or_else(|| "Missing tenant id for snapshot.".to_string())?;
+
+    let (snap_root, pack_root, report_root, exported_at) =
+        prepare_snapshot_export(&root).map_err(|error| error.to_string())?;
+
+    let suggested = pack_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            status
+                .manifest
+                .as_ref()
+                .map(|m| format!("{} Intune export", m.name))
+        })
+        .unwrap_or_else(|| "Tenant Intune export".into());
+
+    let options = PackExportOptions {
+        pack_id: status.manifest.as_ref().map(|m| m.id.clone()),
+        pack_name: Some(suggested.clone()),
+    };
+
+    let pack = match export_tenant_pack(
+        &token,
+        &pack_root,
+        options,
+        |progress: PackExportProgress| {
+            let _ = app.emit(PACK_EXPORT_PROGRESS_EVENT, &progress);
+        },
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(&snap_root);
+            return Err(error.to_string());
+        }
+    };
+
+    let axis_version = app.package_info().version.to_string();
+    let claims = decode_access_token_claims(&token);
+    let token_scopes = claims
+        .scp
+        .unwrap_or_default()
+        .split_whitespace()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let prepared_for = status.manifest.as_ref().map(|m| m.name.clone());
+    let report = match generate_environment_report(
+        &token,
+        &axis_version,
+        prepared_for.as_deref(),
+        None,
+        &token_scopes,
+        &EnvironmentReportSelection::default(),
+        |progress: EnvironmentReportProgress| {
+            let _ = app.emit(ENVIRONMENT_REPORT_PROGRESS_EVENT, &progress);
+        },
+    )
+    .await
+    {
+        Ok(report) => {
+            let html_name = report.suggested_name.clone();
+            let md_name = report.suggested_markdown_name.clone();
+            if let Err(error) = std::fs::write(report_root.join(&html_name), report.html.as_bytes())
+            {
+                let _ = std::fs::remove_dir_all(&snap_root);
+                return Err(format!("Failed to write environment report HTML: {error}"));
+            }
+            if let Err(error) =
+                std::fs::write(report_root.join(&md_name), report.markdown.as_bytes())
+            {
+                let _ = std::fs::remove_dir_all(&snap_root);
+                return Err(format!("Failed to write environment report Markdown: {error}"));
+            }
+            Some(report)
+        }
+        Err(error) => {
+            // Pack already written — keep snapshot, surface report failure as warning via None
+            // and a soft error string is worse UX than failing the whole snapshot. Fail the
+            // snapshot so callers know the export is incomplete.
+            let _ = std::fs::remove_dir_all(&snap_root);
+            return Err(format!("Environment report failed: {error}"));
+        }
+    };
+
+    let report_html = report
+        .as_ref()
+        .map(|r| format!("{}/{}", SNAPSHOT_REPORT_DIR, r.suggested_name));
+    let report_markdown = report
+        .as_ref()
+        .map(|r| format!("{}/{}", SNAPSHOT_REPORT_DIR, r.suggested_markdown_name));
+    let report_object_count = report.as_ref().map(|r| r.object_count);
+
+    let snapshot = finalize_snapshot(
+        &root,
+        &snap_root,
+        &exported_at,
+        &tenant_id,
+        Some(&suggested),
+        pack.files_written,
+        pack.catalog_count,
+        pack.include_count,
+        report_html.as_deref(),
+        report_markdown.as_deref(),
+        report_object_count,
+        Some(&axis_version),
+    )
+    .map_err(|error| error.to_string())?;
+
+    let tenant_id = state.auth.session_tenant_id().await;
+    let status = state.client_container.status(tenant_id.as_deref())?;
+    Ok(ClientSnapshotExportResult {
+        snapshot,
+        pack,
+        report,
+        status,
+    })
+}
+
+async fn resolve_diff_side(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    root: &std::path::Path,
+    side: &str,
+    pack_name: &str,
+) -> Result<(std::path::PathBuf, String, Option<std::path::PathBuf>), String> {
+    let trimmed = side.trim();
+    if trimmed.eq_ignore_ascii_case("live") {
+        let Some(token) = session_token(state).await? else {
+            return Err("Sign in to compare against the live tenant.".into());
+        };
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let temp = std::env::temp_dir().join(format!("axis-live-diff-{nanos}"));
+        std::fs::create_dir_all(&temp).map_err(|error| error.to_string())?;
+        let options = PackExportOptions {
+            pack_id: Some("live-diff".into()),
+            pack_name: Some(pack_name.to_string()),
+        };
+        match export_tenant_pack(
+            &token,
+            &temp,
+            options,
+            |progress: PackExportProgress| {
+                let _ = app.emit(PACK_EXPORT_PROGRESS_EVENT, &progress);
+            },
+        )
+        .await
+        {
+            Ok(_) => Ok((temp.clone(), "Live tenant".into(), Some(temp))),
+            Err(error) => {
+                let _ = std::fs::remove_dir_all(&temp);
+                Err(error.to_string())
+            }
+        }
+    } else {
+        let pack = snapshot_pack_dir(root, trimmed).map_err(|error| error.to_string())?;
+        let label = snapshot_label(root, trimmed);
+        Ok((pack, label, None))
+    }
+}
+
+#[tauri::command]
+pub async fn client_container_diff_cmd(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    left: String,
+    right: String,
+) -> Result<PackDiffReport, String> {
+    let root = state
+        .client_container
+        .active_path()
+        .ok_or_else(|| "Open a client container before comparing snapshots.".to_string())?;
+    let status = {
+        let tenant_id = state.auth.session_tenant_id().await;
+        state.client_container.status(tenant_id.as_deref())?
+    };
+    if status.tenant_mismatch
+        && (left.trim().eq_ignore_ascii_case("live") || right.trim().eq_ignore_ascii_case("live"))
+    {
+        return Err(
+            "Signed-in tenant does not match this client container. Live compare is blocked."
+                .into(),
+        );
+    }
+    if left.trim().eq_ignore_ascii_case(&right) {
+        return Err("Pick two different sides to compare.".into());
+    }
+
+    let pack_name = status
+        .manifest
+        .as_ref()
+        .map(|m| format!("{} Intune export", m.name))
+        .unwrap_or_else(|| "Tenant Intune export".into());
+
+    let (left_pack, left_label, left_cleanup) =
+        resolve_diff_side(&app, &state, &root, &left, &pack_name).await?;
+    let (right_pack, right_label, right_cleanup) =
+        match resolve_diff_side(&app, &state, &root, &right, &pack_name).await {
+            Ok(value) => value,
+            Err(error) => {
+                if let Some(path) = left_cleanup {
+                    let _ = std::fs::remove_dir_all(path);
+                }
+                return Err(error);
+            }
+        };
+
+    let report = diff_pack_roots(&left_pack, &right_pack, &left_label, &right_label);
+    if let Some(path) = left_cleanup {
+        let _ = std::fs::remove_dir_all(path);
+    }
+    if let Some(path) = right_cleanup {
+        let _ = std::fs::remove_dir_all(path);
+    }
+    report.map_err(|error| error.to_string())
+}
+
+const RESTORE_PROGRESS_EVENT: &str = "axis-client-restore-progress";
+
+#[tauri::command]
+pub async fn client_container_restore_candidates_cmd(
+    state: State<'_, AppState>,
+    snapshot_id: String,
+) -> Result<Vec<RestoreCandidate>, String> {
+    let root = state
+        .client_container
+        .active_path()
+        .ok_or_else(|| "Open a client container before restoring.".to_string())?;
+    let pack = snapshot_pack_dir(&root, &snapshot_id).map_err(|error| error.to_string())?;
+    list_restore_candidates(&pack).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn client_container_restore_plan_cmd(
+    state: State<'_, AppState>,
+    snapshot_id: String,
+    mode: String,
+    keys: Vec<String>,
+) -> Result<RestorePlan, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Err("Sign in to plan a restore.".into());
+    };
+    let root = state
+        .client_container
+        .active_path()
+        .ok_or_else(|| "Open a client container before restoring.".to_string())?;
+    let status = {
+        let tenant_id = state.auth.session_tenant_id().await;
+        state.client_container.status(tenant_id.as_deref())?
+    };
+    if status.tenant_mismatch {
+        return Err(
+            "Signed-in tenant does not match this client container. Restore is blocked.".into(),
+        );
+    }
+    let mode = RestoreMode::parse(&mode).map_err(|error| error.to_string())?;
+    let pack = snapshot_pack_dir(&root, &snapshot_id).map_err(|error| error.to_string())?;
+    plan_restore(&token, &pack, snapshot_id.trim(), mode, &keys)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn client_container_restore_apply_cmd(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    snapshot_id: String,
+    mode: String,
+    keys: Vec<String>,
+) -> Result<RestoreApplyResult, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Err("Sign in to restore from a snapshot.".into());
+    };
+    let root = state
+        .client_container
+        .active_path()
+        .ok_or_else(|| "Open a client container before restoring.".to_string())?;
+    let status = {
+        let tenant_id = state.auth.session_tenant_id().await;
+        state.client_container.status(tenant_id.as_deref())?
+    };
+    if status.tenant_mismatch {
+        return Err(
+            "Signed-in tenant does not match this client container. Restore is blocked.".into(),
+        );
+    }
+    if keys.is_empty() {
+        return Err("Select at least one object to restore.".into());
+    }
+    let mode = RestoreMode::parse(&mode).map_err(|error| error.to_string())?;
+    let pack = snapshot_pack_dir(&root, &snapshot_id).map_err(|error| error.to_string())?;
+    apply_restore(
+        &token,
+        &pack,
+        snapshot_id.trim(),
+        mode,
+        &keys,
+        |message| {
+            let _ = app.emit(RESTORE_PROGRESS_EVENT, &message);
+        },
+    )
     .await
     .map_err(|error| error.to_string())
 }
