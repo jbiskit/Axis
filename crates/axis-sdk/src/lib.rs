@@ -1,6 +1,7 @@
 mod assignments;
 mod auth;
 mod catalog_index;
+mod client_container;
 mod compliance_docs;
 mod compliance_policy;
 mod compliance_status;
@@ -18,7 +19,9 @@ mod inventory;
 mod object_detail;
 mod object_metadata;
 mod object_duplicate;
+mod pack_diff;
 mod pack_export;
+mod pack_restore;
 mod policy_health;
 mod script_status;
 mod session_store;
@@ -42,6 +45,13 @@ pub use auth::{
     DeviceCodePrompt, DeviceCodeTokens, PollResult, TokenClaims,
 };
 pub use catalog_index::*;
+pub use client_container::{
+    build_status as build_client_container_status, create_container, finalize_snapshot,
+    list_snapshots, open_container, prepare_snapshot_export, snapshot_label, snapshot_pack_dir,
+    snooze_stale_prompt, ClientContainerError, ClientContainerManifest, ClientContainerStatus,
+    ClientSnapshotSummary, SnapshotManifest, CLIENT_MANIFEST_FILE, DEFAULT_STALE_DAYS,
+    SNAPSHOT_REPORT_DIR,
+};
 pub use compliance_docs::{
     fetch_compliance_property_docs, CompliancePropertyDoc, CompliancePropertyOption,
 };
@@ -98,10 +108,18 @@ pub use object_duplicate::{
     can_duplicate_kind, duplicate_graph_object, copy_display_name, strip_keys,
     strip_setting_definitions, DuplicatedObject,
 };
+pub use pack_diff::{
+    diff_pack_roots, PackDiffChangeKind, PackDiffError, PackDiffReport, PackDiffSummary,
+    PackFieldChange, PackObjectDiff,
+};
 pub use pack_export::{
-    dest_dir_from_save_as, export_selected_graph_objects, export_tenant_pack, pretty_json,
-    PackExportError, PackExportObject, PackExportOptions, PackExportProgress, PackExportResult,
-    SelectedExportResult,
+    dest_dir_from_save_as, export_selected_graph_objects, export_tenant_pack, graph_fetch_concurrency,
+    pretty_json, PackExportError, PackExportObject, PackExportOptions, PackExportProgress,
+    PackExportResult, SelectedExportResult,
+};
+pub use pack_restore::{
+    apply_restore, list_restore_candidates, plan_restore, PackRestoreError, RestoreApplyResult,
+    RestoreCandidate, RestoreMode, RestorePlan, RestorePlanItem, RestoreItemStatus,
 };
 pub use policy_health::{
     fetch_app_install_health, fetch_configuration_policy_health, index_app_install,

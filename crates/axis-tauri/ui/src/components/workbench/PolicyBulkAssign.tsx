@@ -5,6 +5,7 @@ import {
   pruneSelectionIds,
   toggleSelectionId,
 } from "../../lib/listSelection";
+import { READ_ONLY_WRITE_HINT, useReadOnly } from "../../lib/readOnly";
 import { fetchGraphObjectDetail } from "../../lib/tauri";
 import type { CatalogPolicySummary } from "../../types/inventory";
 import { AssignmentsEditor } from "./AssignmentsEditor";
@@ -131,7 +132,9 @@ export function BulkAssignBar({
   /** Primary action label (defaults to assignment bulk-edit). */
   editLabel?: string;
 }) {
+  const readOnly = useReadOnly();
   if (count === 0) return null;
+  const primaryDisabled = readOnly || editDisabled;
   return (
     <div className="bulk-assign-bar">
       <p className="bulk-assign-count">
@@ -142,8 +145,8 @@ export function BulkAssignBar({
         <button
           type="button"
           className="axis-btn axis-btn-primary"
-          disabled={editDisabled}
-          title={editHint}
+          disabled={primaryDisabled}
+          title={readOnly ? READ_ONLY_WRITE_HINT : editHint}
           onClick={onEdit}
         >
           {editLabel}

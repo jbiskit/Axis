@@ -122,6 +122,7 @@ export type SessionStatus = {
   mode: SessionMode;
   readOnlyScopeExceedsRequest: boolean;
   exceededWriteScopes?: string[];
+  tenantId?: string | null;
 };
 
 export type GlanceResponse = {

@@ -21,6 +21,7 @@ import {
   rootCatalogCategories,
   type SettingValueDraft,
 } from "../lib/catalog";
+import { useWriteGate, WriteActionButton } from "../lib/readOnly";
 import {
   addSettingsToPolicy,
   catalogIndexStatus,
@@ -160,6 +161,7 @@ export function BrowseCatalogPanel({
   onPolicyCreated: (id: string, name: string) => void;
   onSettingsAdded: (id: string) => void;
 }) {
+  const { writeDisabled, writeHint } = useWriteGate();
   const platformLabel = INTUNE_PLATFORM_LABELS[platform];
   const [categories, setCategories] = useState<CatalogCategory[]>([]);
   const [treeStatus, setTreeStatus] = useState<"loading" | "ready" | "error">("loading");
@@ -643,9 +645,13 @@ export function BrowseCatalogPanel({
                     });
                   }}
                 />
-                <button type="button" className="axis-btn axis-btn-primary" onClick={addActiveToCart}>
+                <WriteActionButton
+                  type="button"
+                  className="axis-btn axis-btn-primary"
+                  onClick={addActiveToCart}
+                >
                   {cart.some((item) => item.detail.id === detail.id) ? "Update selected" : "Add to policy"}
-                </button>
+                </WriteActionButton>
               </>
             ) : (
               <p className="muted" style={{ margin: 0 }}>
@@ -708,7 +714,12 @@ export function BrowseCatalogPanel({
         {targetMode === "new" ? (
           <label className="device-field catalog-footer-field">
             Policy name
-            <input className="axis-input" value={newName} onChange={(event) => setNewName(event.target.value)} />
+            <input
+              className="axis-input"
+              value={newName}
+              disabled={writeDisabled}
+              onChange={(event) => setNewName(event.target.value)}
+            />
           </label>
         ) : (
           <label className="device-field catalog-footer-field">
@@ -716,6 +727,7 @@ export function BrowseCatalogPanel({
             <select
               className="axis-input"
               value={targetPolicyId}
+              disabled={writeDisabled}
               onChange={(event) => setTargetPolicyId(event.target.value)}
             >
               <option value="">Select a policy</option>
@@ -728,14 +740,15 @@ export function BrowseCatalogPanel({
           </label>
         )}
         <div className="catalog-footer-actions">
-          <button
+          <WriteActionButton
             type="button"
             className="axis-btn axis-btn-primary"
             disabled={busy || cart.length === 0}
+            title={writeDisabled ? writeHint : undefined}
             onClick={() => void applyCart()}
           >
             {busy ? "Saving…" : targetMode === "new" ? "Create policy" : "Add to policy"}
-          </button>
+          </WriteActionButton>
           <p className="muted" style={{ margin: 0, fontSize: "0.6875rem" }}>
             {cart.length} setting{cart.length === 1 ? "" : "s"} queued
           </p>

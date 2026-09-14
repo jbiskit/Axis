@@ -640,6 +640,14 @@ impl AuthManager {
         self.session.lock().await.is_some()
     }
 
+    pub async fn session_tenant_id(&self) -> Option<String> {
+        self.session
+            .lock()
+            .await
+            .as_ref()
+            .and_then(|session| session.tenant_id.clone())
+    }
+
     async fn commit_session(&self, session: DeviceSession) {
         persist_session(&session);
         *self.session.lock().await = Some(session);

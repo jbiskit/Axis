@@ -27,6 +27,7 @@ import {
   loadAssignmentWorkspace,
   searchDirectoryGroups,
 } from "../../lib/tauri";
+import { READ_ONLY_WRITE_HINT, useReadOnly } from "../../lib/readOnly";
 import { CreateEntraGroupPanel } from "./CreateEntraGroupPanel";
 import { IncludeExcludeToggle } from "./IncludeExcludeToggle";
 
@@ -175,6 +176,7 @@ export function AssignmentsEditor({
   draftHint?: string;
   onDraftChange?: (drafts: AssignmentDraft[], writable: boolean) => void;
 }) {
+  const readOnly = useReadOnly();
   const resolvedTargets = useMemo<AssignmentEditorTarget[]>(() => {
     if (targets && targets.length > 0) return targets;
     if (id) return [{ id, title }];
@@ -528,10 +530,12 @@ export function AssignmentsEditor({
     }
   }
 
-  const saveBlockedReason = !writable
+  const saveBlockedReason = readOnly
+    ? READ_ONLY_WRITE_HINT
+    : !writable
       ? "Assignment writes for this object type are not wired yet."
       : undefined;
-  const canSave = writable && !saveBusy && (dirty || isBulk);
+  const canSave = !readOnly && writable && !saveBusy && (dirty || isBulk);
   const saveClassName = !(dirty || isBulk)
     ? "axis-btn"
     : rows.length > 0
@@ -661,7 +665,9 @@ export function AssignmentsEditor({
         </ul>
       ) : null}
 
-      <CreateEntraGroupPanel        namePlaceholder="e.g. Contoso — Policy pilots"
+      <CreateEntraGroupPanel
+        disabled={readOnly}
+        namePlaceholder="e.g. Contoso — Policy pilots"
         successHint={
           groupPickerMode === "exclude"
             ? "and added as an exclusion. Save assignments to apply."

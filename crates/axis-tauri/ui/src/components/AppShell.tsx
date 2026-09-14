@@ -1,9 +1,102 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { NavIconId, NavItem } from "../types/inventory";
 import type { SessionMode } from "../types/glance";
+import type { ClientContainerStatus } from "../types/clientContainer";
 import { INTUNE_NAV, matchingNavItems } from "../lib/nav";
 import { navigate, type AppRoute } from "../lib/route";
+import { SHELL_BANNER_DISMISS_KEYS } from "../lib/readOnly";
 import { AppUpdateControls } from "./AppUpdateControls";
+import { openExternalUrl } from "../lib/tauri";
+
+const SNOOZE_DAY_OPTIONS = [7, 14, 30] as const;
+
+function SnoozeControl({
+  busy,
+  defaultDays,
+  onSnooze,
+}: {
+  busy: boolean;
+  defaultDays: number;
+  onSnooze: (days: number) => void;
+}) {
+  const initial = SNOOZE_DAY_OPTIONS.includes(defaultDays as (typeof SNOOZE_DAY_OPTIONS)[number])
+    ? defaultDays
+    : 14;
+  const [days, setDays] = useState(initial);
+  return (
+    <label className="shell-stale-snooze">
+      <span className="muted">Don&apos;t remind for</span>
+      <select
+        className="axis-input"
+        disabled={busy}
+        value={days}
+        onChange={(event) => setDays(Number(event.target.value))}
+      >
+        {SNOOZE_DAY_OPTIONS.map((option) => (
+          <option key={option} value={option}>
+            {option} days
+          </option>
+        ))}
+      </select>
+      <button
+        type="button"
+        className="axis-btn"
+        disabled={busy}
+        onClick={() => onSnooze(days)}
+      >
+        Snooze
+      </button>
+    </label>
+  );
+}
+
+function ScopeBanner({
+  variant,
+  dismissKey,
+  children,
+}: {
+  variant: "warning" | "info";
+  dismissKey: string;
+  children: ReactNode;
+}) {
+  const [dismissed, setDismissed] = useState(
+    () => sessionStorage.getItem(dismissKey) === "1",
+  );
+  if (dismissed) return null;
+  return (
+    <div
+      className={`shell-scope-banner is-${variant}`}
+      role={variant === "warning" ? "alert" : "status"}
+    >
+      <div className="shell-scope-banner-icon" aria-hidden="true">
+        {variant === "warning" ? (
+          <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+            <line x1="12" y1="9" x2="12" y2="13" />
+            <line x1="12" y1="17" x2="12.01" y2="17" />
+          </svg>
+        ) : (
+          <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" y1="16" x2="12" y2="12" />
+            <line x1="12" y1="8" x2="12.01" y2="8" />
+          </svg>
+        )}
+      </div>
+      <div className="shell-scope-banner-text">{children}</div>
+      <button
+        type="button"
+        className="shell-scope-banner-dismiss axis-btn axis-btn-ghost"
+        onClick={() => {
+          sessionStorage.setItem(dismissKey, "1");
+          setDismissed(true);
+        }}
+      >
+        Dismiss
+      </button>
+    </div>
+  );
+}
 
 function NavIcon({ name }: { name: NavIconId | "chevron" }) {
   const common = {
@@ -192,7 +285,17 @@ export function AppShell({
   updateStatus,
   onAutoCheckChange,
   onCheckForUpdate,
+  onSwapContext,
+  contextSwapBusy = false,
   onSignOut,
+  clientContainer,
+  clientContainerBusy = false,
+  onOpenClientContainer,
+  onCreateClientContainer,
+  onCloseClientContainer,
+  onExportClientSnapshot,
+  onSnoozeClientStale,
+  onCompareClientSnapshots,
 }: {
   children: ReactNode;
   route: AppRoute;
@@ -207,7 +310,17 @@ export function AppShell({
   updateStatus: string | null;
   onAutoCheckChange: (value: boolean) => void;
   onCheckForUpdate: () => void;
+  onSwapContext: () => void;
+  contextSwapBusy?: boolean;
   onSignOut: () => void;
+  clientContainer?: ClientContainerStatus | null;
+  clientContainerBusy?: boolean;
+  onOpenClientContainer?: () => void;
+  onCreateClientContainer?: () => void;
+  onCloseClientContainer?: () => void;
+  onExportClientSnapshot?: () => void;
+  onSnoozeClientStale?: (days: number) => void;
+  onCompareClientSnapshots?: () => void;
 }) {
   const { pathname, search } = route;
   const current = matchingNavItems(pathname, search, INTUNE_NAV)[0];
@@ -217,6 +330,27 @@ export function AppShell({
     if (last && last.section === item.section) last.items.push(item);
     else groups.push({ section: item.section, items: [item] });
   }
+
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const clientName = clientContainer?.manifest?.name ?? null;
+  const clientActive = Boolean(clientContainer?.active && clientName);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onPointer = (event: MouseEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMenuOpen(false);
+    };
+    window.addEventListener("mousedown", onPointer);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onPointer);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [menuOpen]);
 
   return (
     <div className="shell">
@@ -275,12 +409,143 @@ export function AppShell({
           ))}
         </nav>
         <div className="shell-rail-footer">
+          <div className="shell-client" ref={menuRef}>
+            <button
+              type="button"
+              className={`shell-client-switch${clientActive ? " is-active" : ""}${
+                clientContainer?.tenantMismatch ? " is-mismatch" : ""
+              }`}
+              disabled={clientContainerBusy}
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+              title={
+                clientActive
+                  ? `${clientName}${clientContainer?.root ? `\n${clientContainer.root}` : ""}`
+                  : "Open or create a client container"
+              }
+              onClick={() => setMenuOpen((open) => !open)}
+            >
+              <span className="shell-client-label">{clientActive ? clientName : "No client"}</span>
+              <span className="shell-client-chevron" aria-hidden="true">
+                ▾
+              </span>
+            </button>
+            {menuOpen ? (
+              <div className="shell-client-menu" role="menu">
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={clientContainerBusy}
+                  onClick={() => {
+                    setMenuOpen(false);
+                    onOpenClientContainer?.();
+                  }}
+                >
+                  Open container…
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={clientContainerBusy}
+                  onClick={() => {
+                    setMenuOpen(false);
+                    onCreateClientContainer?.();
+                  }}
+                >
+                  Create container…
+                </button>
+                {clientActive ? (
+                  <>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      disabled={clientContainerBusy || clientContainer?.tenantMismatch}
+                      title={
+                        clientContainer?.tenantMismatch
+                          ? "Signed-in tenant does not match this container"
+                          : undefined
+                      }
+                      onClick={() => {
+                        setMenuOpen(false);
+                        onExportClientSnapshot?.();
+                      }}
+                    >
+                      Export snapshot
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setMenuOpen(false);
+                        onCompareClientSnapshots?.();
+                      }}
+                    >
+                      Compare & restore…
+                    </button>
+                    {clientContainer?.root ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setMenuOpen(false);
+                          void openExternalUrl(clientContainer.root!);
+                        }}
+                      >
+                        Open folder
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      role="menuitem"
+                      disabled={clientContainerBusy}
+                      onClick={() => {
+                        setMenuOpen(false);
+                        onCloseClientContainer?.();
+                      }}
+                    >
+                      Close container
+                    </button>
+                  </>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
           <div className="shell-session">
             <span className="shell-session-org">{organizationName ?? "Signed in"}</span>
             {accountName ? <span className="shell-session-user">{accountName}</span> : null}
-            <span className={`shell-session-badge ${mode === "read" ? "is-readonly" : "is-admin"}`}>
-              {mode === "read" ? "Read-only" : "Read & Write"}
-            </span>
+            <div className="shell-session-access">
+              <span className={`shell-session-badge ${mode === "read" ? "is-readonly" : "is-admin"}`}>
+                {mode === "read" ? "Read-only" : "Read & Write"}
+              </span>
+              <button
+                type="button"
+                className="shell-context-swap"
+                disabled={contextSwapBusy}
+                aria-label="Swap context"
+                title={
+                  mode === "read"
+                    ? "Swap context — sign in again for Read & Write permissions"
+                    : "Swap context — sign in again for read-only permissions"
+                }
+                onClick={onSwapContext}
+              >
+                <svg
+                  width={14}
+                  height={14}
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M9 8 5 12l4 4" />
+                  <path d="M15 8l4 4-4 4" />
+                  <path d="M5 12h14" />
+                </svg>
+              </button>
+            </div>
           </div>
           <AppUpdateControls
             appVersion={appVersion}
@@ -301,8 +566,25 @@ export function AppShell({
           <h1>{current?.label ?? "Overview"}</h1>
         </header>
         {mode === "read" && readOnlyScopeExceedsRequest ? (
-          <div className="shell-scope-banner shell-scope-banner-warning" role="alert">
-            <div className="shell-scope-banner-icon">
+          <ScopeBanner
+            variant="warning"
+            dismissKey={SHELL_BANNER_DISMISS_KEYS.scopeWarning}
+          >
+            <strong>Tenant scopes exceed requested read-only permissions.</strong> Axis requested
+            only read permissions, but your Entra tenant has pre-consented write scopes for
+            Microsoft Graph Command Line Tools
+            {exceededWriteScopes.length ? <> ({exceededWriteScopes.join(", ")})</> : null}. The UI
+            stays locked down so no write actions can run.
+          </ScopeBanner>
+        ) : mode === "read" ? (
+          <ScopeBanner variant="info" dismissKey={SHELL_BANNER_DISMISS_KEYS.readonlyInfo}>
+            <strong>Read-only mode.</strong> Creating, modifying, deleting, and device management
+            actions are disabled for this session.
+          </ScopeBanner>
+        ) : null}
+        {clientContainer?.tenantMismatch ? (
+          <div className="shell-scope-banner is-warning" role="alert">
+            <div className="shell-scope-banner-icon" aria-hidden="true">
               <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
                 <line x1="12" y1="9" x2="12" y2="13" />
@@ -310,16 +592,16 @@ export function AppShell({
               </svg>
             </div>
             <div className="shell-scope-banner-text">
-              <strong>Tenant scopes exceed requested read-only permissions:</strong> Axis requested only read permissions, but your Entra tenant has pre-consented write scopes for Microsoft Graph Command Line Tools
-              {exceededWriteScopes.length ? (
-                <> ({exceededWriteScopes.join(", ")})</>
-              ) : null}
-              . Axis has locked down the UI to prevent any write or modifying actions.
+              <strong>Tenant mismatch.</strong> Client container{" "}
+              <em>{clientContainer.manifest?.name}</em> is bound to a different Entra tenant than
+              this session. Snapshot export is blocked until you swap sign-in or open another
+              container.
             </div>
           </div>
-        ) : mode === "read" ? (
-          <div className="shell-scope-banner shell-scope-banner-info">
-            <div className="shell-scope-banner-icon">
+        ) : null}
+        {clientContainer?.stalePrompt && !clientContainer.tenantMismatch ? (
+          <div className="shell-scope-banner is-info" role="status">
+            <div className="shell-scope-banner-icon" aria-hidden="true">
               <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <circle cx="12" cy="12" r="10" />
                 <line x1="12" y1="16" x2="12" y2="12" />
@@ -327,7 +609,28 @@ export function AppShell({
               </svg>
             </div>
             <div className="shell-scope-banner-text">
-              <strong>Read-only mode:</strong> Connected with read-only permissions. Creating, modifying, deleting, and device management actions are locked down.
+              <strong>Snapshot reminder.</strong>{" "}
+              {clientContainer.staleReason ??
+                `Export a tenant pack and environment as-built for ${clientContainer.manifest?.name ?? "this client"}.`}
+            </div>
+            <div className="shell-stale-actions">
+              <button
+                type="button"
+                className="axis-btn axis-btn-primary"
+                disabled={clientContainerBusy}
+                onClick={() => onExportClientSnapshot?.()}
+              >
+                {clientContainerBusy ? "Working…" : "Export now"}
+              </button>
+              <SnoozeControl
+                busy={clientContainerBusy}
+                defaultDays={
+                  clientContainer.manifest?.stalePrompt?.snoozeDays ??
+                  clientContainer.staleAfterDays ??
+                  14
+                }
+                onSnooze={(days) => onSnoozeClientStale?.(days)}
+              />
             </div>
           </div>
         ) : null}

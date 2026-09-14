@@ -9,7 +9,8 @@
   --axis-surface-3: #45475a;
   --axis-overlay: #585b70;
   --axis-bg: var(--axis-crust);
-  --axis-border: color-mix(in srgb, #45475a 62%, transparent);
+  /* Opaque mixes — Linux WebKit banding when alpha-backed fills composite poorly. */
+  --axis-border: color-mix(in srgb, #45475a 62%, var(--axis-crust));
   --axis-border-strong: #585b70;
   --axis-fg: #cdd6f4;
   --axis-muted: #7f849c;
@@ -17,16 +18,16 @@
   --axis-ink: #89b4fa;
   --axis-ink-soft: #b4befe;
   --axis-accent: #89b4fa;
-  --axis-accent-soft: rgba(137, 180, 250, 0.14);
+  --axis-accent-soft: color-mix(in srgb, var(--axis-accent) 14%, var(--axis-base));
   --axis-on-accent: #11111b;
   --axis-success: #a6e3a1;
-  --axis-success-soft: rgba(166, 227, 161, 0.14);
+  --axis-success-soft: color-mix(in srgb, var(--axis-success) 14%, var(--axis-base));
   --axis-warning: #f9e2af;
-  --axis-warning-soft: rgba(249, 226, 175, 0.12);
+  --axis-warning-soft: color-mix(in srgb, var(--axis-warning) 12%, var(--axis-base));
   --axis-danger: #f38ba8;
-  --axis-danger-soft: rgba(243, 139, 168, 0.14);
+  --axis-danger-soft: color-mix(in srgb, var(--axis-danger) 14%, var(--axis-base));
   --axis-info: #89b4fa;
-  --axis-info-soft: rgba(137, 180, 250, 0.14);
+  --axis-info-soft: color-mix(in srgb, var(--axis-info) 14%, var(--axis-base));
 
   --axis-space-1: 0.25rem;
   --axis-space-2: 0.5rem;
@@ -49,9 +50,9 @@
   --axis-radius-sm: 4px;
   --axis-radius: 6px;
   --axis-radius-lg: 8px;
-  --axis-shadow: 0 1px 0 color-mix(in srgb, #000 28%, transparent);
-  --axis-shadow-md: 0 10px 28px color-mix(in srgb, #000 42%, transparent);
-  --axis-ring: color-mix(in srgb, var(--axis-accent) 45%, transparent);
+  --axis-shadow: 0 1px 0 color-mix(in srgb, #000 28%, var(--axis-crust));
+  --axis-shadow-md: 0 10px 28px color-mix(in srgb, #000 42%, var(--axis-crust));
+  --axis-ring: color-mix(in srgb, var(--axis-accent) 45%, var(--axis-base));
   --axis-ease: 140ms cubic-bezier(0.22, 1, 0.36, 1);
   --axis-rail-width: 15.25rem;
   --axis-titlebar-height: 2.75rem;
@@ -173,13 +174,25 @@ input[type="radio"]:disabled {
   cursor: not-allowed;
 }
 
-/* Shared select styling */
+/* Shared select styling — WebKitGTK ignores theme colors on native selects. */
 select {
+  appearance: none;
+  -webkit-appearance: none;
   border: 1px solid var(--axis-border);
   border-radius: var(--axis-radius);
-  background: var(--axis-mantle);
+  background-color: var(--axis-mantle);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='none' stroke='%23a6adc8' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round' d='M3 4.5 6 7.5 9 4.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.55rem center;
+  background-size: 0.75rem;
+  padding-right: 1.75rem;
   color: var(--axis-fg);
   font: inherit;
+}
+
+select option {
+  background: var(--axis-mantle);
+  color: var(--axis-fg);
 }
 
 select:focus {
@@ -191,7 +204,8 @@ select:focus {
 select:disabled {
   cursor: not-allowed;
   color: var(--axis-muted);
-  background: var(--axis-surface-2);
+  background-color: var(--axis-surface-2);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='none' stroke='%237f849c' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round' d='M3 4.5 6 7.5 9 4.5'/%3E%3C/svg%3E");
 }
 
 @keyframes axis-enter {

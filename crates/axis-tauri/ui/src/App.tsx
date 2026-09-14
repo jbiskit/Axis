@@ -1,21 +1,26 @@
 import { AppShell } from "./components/AppShell";
+import { ContextSwapDialog } from "./components/ContextSwapDialog";
+import { CreateClientContainerDialog } from "./components/CreateClientContainerDialog";
 import { IntuneWorkspace } from "./components/IntuneWorkspace";
 import { LoginScreen } from "./components/LoginScreen";
 import { PopoutView } from "./components/PopoutView";
 import { UnsavedLeaveGuard } from "./components/workbench/UnsavedLeaveGuard";
 import { UpdateDialog } from "./components/UpdateDialog";
+import { useClientContainer } from "./hooks/useClientContainer";
 import { useDevices } from "./hooks/useDevices";
 import { useHashRoute } from "./hooks/useHashRoute";
 import { useSession } from "./hooks/useSession";
 import { useUpdater } from "./hooks/useUpdater";
 import { requestLeave } from "./lib/inspectorDrafts";
 import { isPopoutRoute } from "./lib/popout";
+import { clearShellBannerDismissals, ReadOnlyProvider } from "./lib/readOnly";
 
 export default function App() {
   const session = useSession();
   const route = useHashRoute();
   const isPopout = isPopoutRoute(route.pathname);
   const updater = useUpdater(!isPopout);
+  const client = useClientContainer(session.signedIn && !isPopout);
   const devicesEnabled =
     session.signedIn &&
     !isPopout &&
@@ -48,7 +53,9 @@ export default function App() {
           ) : !session.signedIn ? (
             <p className="muted">No live session in this window. Sign in from the main Axis window, then pop out again.</p>
           ) : (
-            <PopoutView kind={route.search.get("kind") ?? ""} id={route.search.get("id") ?? ""} />
+            <ReadOnlyProvider value={session.isReadOnly}>
+              <PopoutView kind={route.search.get("kind") ?? ""} id={route.search.get("id") ?? ""} />
+            </ReadOnlyProvider>
           )}
         </main>
         <UnsavedLeaveGuard />
@@ -90,7 +97,7 @@ export default function App() {
   }
 
   return (
-    <>
+    <ReadOnlyProvider value={session.isReadOnly}>
       <AppShell
         route={route}
         accountName={session.accountName}
@@ -104,8 +111,21 @@ export default function App() {
         updateStatus={updater.status}
         onAutoCheckChange={updater.setAutoCheck}
         onCheckForUpdate={() => void updater.checkNow()}
+        onSwapContext={() => void session.swapContext()}
+        contextSwapBusy={session.contextSwapActive}
+        clientContainer={client.status}
+        clientContainerBusy={client.busy}
+        onOpenClientContainer={() => void client.open()}
+        onCreateClientContainer={() => void client.beginCreate()}
+        onCloseClientContainer={() => void client.clear()}
+        onExportClientSnapshot={() => void client.exportSnapshot()}
+        onSnoozeClientStale={(days) => void client.snooze(days)}
+        onCompareClientSnapshots={() => {
+          window.location.hash = "/intune/client";
+        }}
         onSignOut={() => {
           requestLeave(() => {
+            clearShellBannerDismissals();
             window.location.hash = "/intune";
             void session.logout();
           });
@@ -118,7 +138,6 @@ export default function App() {
           glanceError={session.glanceError}
           accountName={session.accountName}
           signedIn={session.signedIn}
-          isReadOnly={session.isReadOnly}
           devices={devices.devices}
           devicesLoading={devices.loading}
           devicesError={devices.error}
@@ -126,10 +145,29 @@ export default function App() {
           devicesFetchedAt={devices.fetchedAt}
           onRefreshGlance={() => void session.reloadGlance()}
           onRefreshDevices={() => void devices.reload()}
+          clientContainer={client.status}
+          onRefreshClientContainer={() => void client.refresh()}
         />
       </AppShell>
       <UnsavedLeaveGuard />
+      {session.contextSwapActive && session.deviceCode && session.contextSwapTargetMode ? (
+        <ContextSwapDialog
+          targetMode={session.contextSwapTargetMode}
+          deviceCode={session.deviceCode}
+          onCancel={() => void session.cancelLogin()}
+        />
+      ) : null}
+      {client.createPath ? (
+        <CreateClientContainerDialog
+          folderPath={client.createPath}
+          busy={client.busy}
+          error={client.error}
+          defaultName={session.glance?.organizationName}
+          onCancel={client.cancelCreate}
+          onCreate={(name, primaryDomain) => void client.finishCreate(name, primaryDomain)}
+        />
+      ) : null}
       {updateDialog}
-    </>
+    </ReadOnlyProvider>
   );
 }

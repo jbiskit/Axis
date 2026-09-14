@@ -7,6 +7,7 @@ import { settingsCatalogPlatformFromScope } from "../lib/catalog";
 import { matchesCatalogPolicyFilters, platformFilterOptionsFromList, compareCatalogPolicy, sortRows, type AssignedFilter, type CatalogPolicySortKey, type ColumnSort, type ListFilterOption } from "../lib/listSelection";
 import { INTUNE_PLATFORM_LABELS, type IntunePlatform } from "../lib/platforms";
 import { hrefWithParam, navigate } from "../lib/route";
+import { WriteActionButton } from "../lib/readOnly";
 import { withTransientItem } from "../lib/duplicateObject";
 import { useCatalogFileImport } from "./workbench/CatalogFileImportDialog";
 import {
@@ -114,9 +115,13 @@ export function SettingsCatalogWorkbench({
     window.setTimeout(() => onRefresh(), 0);
   }, catalogPlatform ?? "windows");
   const importButton = (
-    <button type="button" className="axis-btn" onClick={() => void catalogImport.openPicker()}>
+    <WriteActionButton
+      type="button"
+      className="axis-btn"
+      onClick={() => void catalogImport.openPicker()}
+    >
       Import
-    </button>
+    </WriteActionButton>
   );
   const loadedLimitBanner = truncated ? (
     <IncompleteBanner>

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { READ_ONLY_WRITE_HINT, useReadOnly } from "../../lib/readOnly";
 import {
   collectDeviceDiagnostics,
   deleteManagedDevice,
@@ -27,6 +28,9 @@ export function DeviceActionsBar({
   onActionMessage?: (message: string | null, error?: string | null) => void;
   onDeleted?: () => void;
 }) {
+  const readOnly = useReadOnly();
+  const actionsDisabled = disabled || readOnly;
+  const actionsHint = readOnly ? READ_ONLY_WRITE_HINT : undefined;
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [remoteOpen, setRemoteOpen] = useState(false);
   const [removeOpen, setRemoveOpen] = useState(false);
@@ -150,7 +154,7 @@ export function DeviceActionsBar({
     }
   }
 
-  const busy = Boolean(busyAction) || disabled;
+  const busy = Boolean(busyAction) || actionsDisabled;
   const confirmCopy: Record<
     Exclude<ConfirmKind, null>,
     { title: string; message: string; label: string; danger?: boolean }
@@ -192,17 +196,25 @@ export function DeviceActionsBar({
           type="button"
           className="axis-btn"
           disabled={busy}
+          title={actionsHint}
           onClick={() => void runAction("sync", "Sync", () => syncManagedDevice(deviceId))}
         >
           {busyAction === "sync" ? "Syncing…" : "Sync"}
         </button>
-        <button type="button" className="axis-btn" disabled={busy} onClick={() => setRemediationOpen(true)}>
+        <button
+          type="button"
+          className="axis-btn"
+          disabled={busy}
+          title={actionsHint}
+          onClick={() => setRemediationOpen(true)}
+        >
           Run remediation
         </button>
         <button
           type="button"
           className="axis-btn"
           disabled={busy}
+          title={actionsHint}
           onClick={() =>
             void runAction("diagnostics", "Diagnostics collection", () =>
               collectDeviceDiagnostics(deviceId),
@@ -216,6 +228,7 @@ export function DeviceActionsBar({
             type="button"
             className="axis-btn"
             disabled={busy}
+            title={actionsHint}
             onClick={() => {
               setRemoteOpen((open) => !open);
               setRemoveOpen(false);
@@ -223,7 +236,7 @@ export function DeviceActionsBar({
           >
             Remote actions ▾
           </button>
-          {remoteOpen ? (
+          {remoteOpen && !readOnly ? (
             <div className="device-menu-panel">
               <button type="button" onClick={() => setConfirmKind("reboot")}>
                 Reboot
@@ -239,6 +252,7 @@ export function DeviceActionsBar({
             type="button"
             className="axis-btn"
             disabled={busy}
+            title={actionsHint}
             onClick={() => {
               setRemoveOpen((open) => !open);
               setRemoteOpen(false);
@@ -246,7 +260,7 @@ export function DeviceActionsBar({
           >
             Remove data ▾
           </button>
-          {removeOpen ? (
+          {removeOpen && !readOnly ? (
             <div className="device-menu-panel">
               <button type="button" onClick={() => setConfirmKind("retire")}>
                 Retire
@@ -257,7 +271,13 @@ export function DeviceActionsBar({
             </div>
           ) : null}
         </div>
-        <button type="button" className="axis-btn axis-btn-danger" disabled={busy} onClick={() => setConfirmKind("delete")}>
+        <button
+          type="button"
+          className="axis-btn axis-btn-danger"
+          disabled={busy}
+          title={actionsHint}
+          onClick={() => setConfirmKind("delete")}
+        >
           Delete
         </button>
       </div>

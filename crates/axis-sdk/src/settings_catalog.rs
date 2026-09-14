@@ -1458,6 +1458,36 @@ async fn replace_configuration_policy_settings(
         .await
 }
 
+/// Replace every setting on an existing Settings Catalog policy with the given instances.
+/// Used by client-container restore (Replace mode).
+pub async fn replace_catalog_policy_settings(
+    access_token: &str,
+    policy_id: &str,
+    settings: &[Value],
+) -> Result<(), GraphError> {
+    let client = GraphClient::new();
+    let policy: Value = client
+        .fetch_plain(
+            access_token,
+            &format!(
+                "/deviceManagement/configurationPolicies/{policy_id}?$select=id,name,description,platforms,technologies,roleScopeTagIds,templateReference"
+            ),
+            "beta",
+        )
+        .await?;
+    let instances: Vec<Value> = settings
+        .iter()
+        .map(|setting| {
+            setting
+                .get("settingInstance")
+                .cloned()
+                .unwrap_or_else(|| setting.clone())
+        })
+        .collect();
+    replace_configuration_policy_settings(&client, access_token, policy_id, &policy, instances)
+        .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

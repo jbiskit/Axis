@@ -8,21 +8,24 @@ use crate::graph::{GraphClient, GraphCollection, GraphError};
 use crate::inventory::{
     fetch_autopilot_profiles, fetch_compliance_policies, fetch_configuration_policies,
     fetch_endpoint_security_intents, fetch_enrollment_configurations,
-    fetch_group_policy_configurations, fetch_mobile_apps,
-    fetch_tenant_scripts, fetch_windows_update_policies, CatalogPolicySummary, InventoryList,
-    MobileAppSummary, TenantScriptSummary,
+    fetch_group_policy_configurations, fetch_mobile_apps, fetch_tenant_scripts,
+    fetch_windows_update_policies, AutopilotProfile, CatalogPolicySummary, InventoryList,
+    MobileAppSummary, TenantScriptSummary, WindowsUpdatePolicy,
 };
 use crate::compliance_status::device_status_overview_path;
 use crate::object_detail::{fetch_graph_object_detail, GraphObjectDetail};
+use crate::pack_export::graph_fetch_concurrency;
 use crate::policy_health::{
     fetch_app_install_health, fetch_configuration_policy_health, index_app_install,
-    index_policy_health, lookup_app_install, lookup_policy_health,
+    index_policy_health, lookup_app_install, lookup_policy_health, AppInstallHealth,
 };
 use crate::types::TenantGlance;
 use chrono::Utc;
+use futures::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::Arc;
 use urlencoding::encode;
 
 const SETTINGS_PAGE_MAX: usize = 1000;
@@ -275,81 +278,125 @@ pub async fn generate_environment_report(
     let mut warnings = Vec::new();
 
     on_progress(progress("inventory", 0, 0, "Loading tenant inventory…"));
-    let catalog = if selection.wants_policy_objects() {
-        list_or_warn(
-            "Settings Catalog",
-            fetch_configuration_policies(access_token).await,
-            &mut warnings,
-        )
-    } else {
-        Vec::new()
-    };
-    let scripts = if selection.wants_script_objects() || selection.wants_policy_objects() {
-        list_or_warn(
-            "Scripts",
-            fetch_tenant_scripts(access_token).await,
-            &mut warnings,
-        )
-    } else {
-        Vec::new()
-    };
-    let compliance = if selection.wants_policy_objects() {
-        list_or_warn(
-            "Compliance policies",
-            fetch_compliance_policies(access_token).await,
-            &mut warnings,
-        )
-    } else {
-        Vec::new()
-    };
-    let intents = if selection.wants_policy_objects() && selection.windows {
-        list_or_warn(
-            "Endpoint Security",
-            fetch_endpoint_security_intents(access_token).await,
-            &mut warnings,
-        )
-    } else {
-        Vec::new()
-    };
-    let windows_update = if selection.wants_update_objects() {
-        list_or_warn(
-            "Windows Update",
-            fetch_windows_update_policies(access_token).await,
-            &mut warnings,
-        )
-    } else {
-        Vec::new()
-    };
-    let autopilot = if selection.wants_enrollment_objects() && selection.windows {
-        list_or_warn(
-            "Autopilot profiles",
-            fetch_autopilot_profiles(access_token).await,
-            &mut warnings,
-        )
-    } else {
-        Vec::new()
-    };
-    let group_policy = if selection.wants_policy_objects() && selection.windows {
-        list_or_warn(
-            "Group Policy",
-            fetch_group_policy_configurations(access_token).await,
-            &mut warnings,
-        )
-    } else {
-        Vec::new()
-    };
-    let enrollment = if selection.wants_enrollment_objects() {
-        list_or_warn(
-            "Enrollment",
-            fetch_enrollment_configurations(access_token).await,
-            &mut warnings,
-        )
-    } else {
-        Vec::new()
-    };
+    let concurrency = graph_fetch_concurrency();
+    let wants_policies = selection.wants_policy_objects();
+    let wants_scripts = selection.wants_script_objects() || wants_policies;
+    let wants_intents = wants_policies && selection.windows;
+    let wants_updates = selection.wants_update_objects();
+    let wants_autopilot = selection.wants_enrollment_objects() && selection.windows;
+    let wants_gpo = wants_policies && selection.windows;
+    let wants_enrollment = selection.wants_enrollment_objects();
 
-    on_progress(progress("posture", 0, 0, "Loading posture snapshot…"));
-    let glance = match fetch_tenant_glance(access_token, token_scopes).await {
+    let (
+        catalog_result,
+        scripts_result,
+        compliance_result,
+        intents_result,
+        windows_update_result,
+        autopilot_result,
+        group_policy_result,
+        enrollment_result,
+    ) = tokio::join!(
+        async {
+            if wants_policies {
+                Some(fetch_configuration_policies(access_token).await)
+            } else {
+                None
+            }
+        },
+        async {
+            if wants_scripts {
+                Some(fetch_tenant_scripts(access_token).await)
+            } else {
+                None
+            }
+        },
+        async {
+            if wants_policies {
+                Some(fetch_compliance_policies(access_token).await)
+            } else {
+                None
+            }
+        },
+        async {
+            if wants_intents {
+                Some(fetch_endpoint_security_intents(access_token).await)
+            } else {
+                None
+            }
+        },
+        async {
+            if wants_updates {
+                Some(fetch_windows_update_policies(access_token).await)
+            } else {
+                None
+            }
+        },
+        async {
+            if wants_autopilot {
+                Some(fetch_autopilot_profiles(access_token).await)
+            } else {
+                None
+            }
+        },
+        async {
+            if wants_gpo {
+                Some(fetch_group_policy_configurations(access_token).await)
+            } else {
+                None
+            }
+        },
+        async {
+            if wants_enrollment {
+                Some(fetch_enrollment_configurations(access_token).await)
+            } else {
+                None
+            }
+        },
+    );
+
+    let catalog = optional_list_or_warn("Settings Catalog", catalog_result, &mut warnings);
+    let scripts = optional_list_or_warn("Scripts", scripts_result, &mut warnings);
+    let compliance = optional_list_or_warn("Compliance policies", compliance_result, &mut warnings);
+    let intents = optional_list_or_warn("Endpoint Security", intents_result, &mut warnings);
+    let windows_update =
+        optional_list_or_warn("Windows Update", windows_update_result, &mut warnings);
+    let autopilot = optional_list_or_warn("Autopilot profiles", autopilot_result, &mut warnings);
+    let group_policy = optional_list_or_warn("Group Policy", group_policy_result, &mut warnings);
+    let enrollment = optional_list_or_warn("Enrollment", enrollment_result, &mut warnings);
+
+    on_progress(progress(
+        "posture",
+        0,
+        0,
+        &format!("Loading posture (then up to {concurrency} parallel detail fetches)…"),
+    ));
+    let (glance_result, health_result, docs_result, filters_result) = tokio::join!(
+        fetch_tenant_glance(access_token, token_scopes),
+        async {
+            if wants_policies {
+                Some(fetch_configuration_policy_health(access_token).await)
+            } else {
+                None
+            }
+        },
+        async {
+            if wants_policies {
+                Some(fetch_compliance_property_docs("").await)
+            } else {
+                None
+            }
+        },
+        async {
+            if selection.any_content_surface() && selection.any_platform() {
+                Some(list_assignment_filters(access_token).await)
+            } else {
+                None
+            }
+        },
+    );
+
+    let glance = match glance_result {
         Ok(glance) => glance,
         Err(error) => {
             warnings.push(format!("Posture snapshot: {error}"));
@@ -357,54 +404,46 @@ pub async fn generate_environment_report(
         }
     };
 
-    let health_rows = if selection.wants_policy_objects() {
-        on_progress(progress("posture", 0, 0, "Loading policy device status…"));
-        match fetch_configuration_policy_health(access_token).await {
-            Ok(rows) => rows,
-            Err(error) => {
-                warnings.push(format!("Policy device status: {error}"));
-                Vec::new()
-            }
+    let health_rows = match health_result {
+        Some(Ok(rows)) => rows,
+        Some(Err(error)) => {
+            warnings.push(format!("Policy device status: {error}"));
+            Vec::new()
         }
-    } else {
-        Vec::new()
+        None => Vec::new(),
     };
     let health_index = index_policy_health(&health_rows);
 
-    let compliance_docs = if selection.wants_policy_objects() {
-        match fetch_compliance_property_docs("").await {
-            Ok(docs) => docs
-                .into_iter()
-                .map(|doc| (doc.name.clone(), doc))
-                .collect::<HashMap<_, _>>(),
-            Err(error) => {
-                warnings.push(format!("Compliance labels: {error}"));
-                HashMap::new()
-            }
+    let compliance_docs: Arc<HashMap<String, CompliancePropertyDoc>> = Arc::new(match docs_result {
+        Some(Ok(docs)) => docs
+            .into_iter()
+            .map(|doc| (doc.name.clone(), doc))
+            .collect(),
+        Some(Err(error)) => {
+            warnings.push(format!("Compliance labels: {error}"));
+            HashMap::new()
         }
-    } else {
-        HashMap::new()
+        None => HashMap::new(),
+    });
+
+    let filters = match filters_result {
+        Some(Ok(filters)) => filters,
+        Some(Err(error)) => {
+            warnings.push(format!("Assignment filters: {error}"));
+            Vec::new()
+        }
+        None => Vec::new(),
     };
 
-    let filters = if selection.any_content_surface() && selection.any_platform() {
-        match list_assignment_filters(access_token).await {
-            Ok(filters) => filters,
-            Err(error) => {
-                warnings.push(format!("Assignment filters: {error}"));
-                Vec::new()
-            }
-        }
-    } else {
-        Vec::new()
-    };
-
-    let script_names: HashMap<String, String> = scripts
-        .iter()
-        .map(|script| (script.id.clone(), script.display_name.clone()))
-        .collect();
+    let script_names: Arc<HashMap<String, String>> = Arc::new(
+        scripts
+            .iter()
+            .map(|script| (script.id.clone(), script.display_name.clone()))
+            .collect(),
+    );
 
     let catalog_work: Vec<_> = catalog
-        .iter()
+        .into_iter()
         .filter(|policy| {
             let (scope, _) = platform_scope_from_catalog(policy.platforms.as_deref());
             selection.includes_scope(&scope)
@@ -413,7 +452,7 @@ pub async fn generate_environment_report(
         .collect();
     let script_work: Vec<_> = if selection.wants_script_objects() {
         scripts
-            .iter()
+            .into_iter()
             .filter(|script| {
                 selection.includes_scope(&script_platform(&script.kind))
                     && EnvironmentReportSelection::allows_id(&selection.script_ids, &script.id)
@@ -423,7 +462,7 @@ pub async fn generate_environment_report(
         Vec::new()
     };
     let compliance_work: Vec<_> = compliance
-        .iter()
+        .into_iter()
         .filter(|policy| {
             let (scope, _) = platform_scope_from_catalog(policy.platforms.as_deref());
             selection.includes_scope(&scope)
@@ -431,22 +470,22 @@ pub async fn generate_environment_report(
         })
         .collect();
     let intent_work: Vec<_> = intents
-        .iter()
+        .into_iter()
         .filter(|policy| EnvironmentReportSelection::allows_id(&selection.policy_ids, &policy.id))
         .collect();
-    let update_work: Vec<_> = windows_update.iter().collect();
+    let update_work: Vec<_> = windows_update.into_iter().collect();
     let autopilot_work: Vec<_> = autopilot
-        .iter()
+        .into_iter()
         .filter(|profile| {
             EnvironmentReportSelection::allows_id(&selection.enrollment_ids, &profile.id)
         })
         .collect();
     let group_policy_work: Vec<_> = group_policy
-        .iter()
+        .into_iter()
         .filter(|policy| EnvironmentReportSelection::allows_id(&selection.policy_ids, &policy.id))
         .collect();
     let enrollment_work: Vec<_> = enrollment
-        .iter()
+        .into_iter()
         .filter(|policy| {
             EnvironmentReportSelection::allows_id(&selection.enrollment_ids, &policy.id)
         })
@@ -460,198 +499,202 @@ pub async fn generate_environment_report(
         + autopilot_work.len()
         + group_policy_work.len()
         + enrollment_work.len()) as u32;
-    let mut current = 0u32;
+
+    enum ReportCardJob {
+        Catalog(CatalogPolicySummary),
+        Script(TenantScriptSummary),
+        Compliance(CatalogPolicySummary),
+        Intent(CatalogPolicySummary),
+        Update(WindowsUpdatePolicy),
+        Autopilot(AutopilotProfile),
+        GroupPolicy(CatalogPolicySummary),
+        Enrollment(CatalogPolicySummary),
+    }
+
+    enum CardOutcome {
+        Ok(ReportCard),
+        Warn(String),
+        Enrollment(ReportCard),
+    }
+
+    let mut jobs = Vec::with_capacity(total as usize);
+    jobs.extend(catalog_work.into_iter().map(ReportCardJob::Catalog));
+    jobs.extend(script_work.into_iter().map(ReportCardJob::Script));
+    jobs.extend(compliance_work.into_iter().map(ReportCardJob::Compliance));
+    jobs.extend(intent_work.into_iter().map(ReportCardJob::Intent));
+    jobs.extend(update_work.into_iter().map(ReportCardJob::Update));
+    jobs.extend(autopilot_work.into_iter().map(ReportCardJob::Autopilot));
+    jobs.extend(group_policy_work.into_iter().map(ReportCardJob::GroupPolicy));
+    jobs.extend(enrollment_work.into_iter().map(ReportCardJob::Enrollment));
+
+    on_progress(progress(
+        "export",
+        0,
+        total.max(1),
+        &format!("Fetching {total} report objects (concurrency {concurrency})…"),
+    ));
+
+    let token = access_token.to_string();
+    let mut completed = 0u32;
+    let outcomes: Vec<CardOutcome> = stream::iter(jobs)
+        .map(|job| {
+            let token = token.clone();
+            let compliance_docs = Arc::clone(&compliance_docs);
+            let script_names = Arc::clone(&script_names);
+            async move {
+                match job {
+                    ReportCardJob::Catalog(policy) => {
+                        let (scope, platform) =
+                            platform_scope_from_catalog(policy.platforms.as_deref());
+                        match load_graph_card(
+                            &token,
+                            "configurationPolicy",
+                            &policy.id,
+                            SECTION_POLICIES,
+                            scope,
+                            platform,
+                            "Settings Catalog",
+                            Some(policy.description.as_deref().unwrap_or("")),
+                            None,
+                            None,
+                            None,
+                        )
+                        .await
+                        {
+                            Ok(card) => CardOutcome::Ok(card),
+                            Err(error) => CardOutcome::Warn(format!("{}: {error}", policy.name)),
+                        }
+                    }
+                    ReportCardJob::Script(script) => {
+                        let kind = inspector_kind_for_script(&script.kind);
+                        match load_script_card(&token, &script, kind).await {
+                            Ok(card) => CardOutcome::Ok(card),
+                            Err(error) => {
+                                CardOutcome::Warn(format!("{}: {error}", script.display_name))
+                            }
+                        }
+                    }
+                    ReportCardJob::Compliance(policy) => {
+                        let (scope, platform) =
+                            platform_scope_from_catalog(policy.platforms.as_deref());
+                        match load_graph_card(
+                            &token,
+                            "compliancePolicy",
+                            &policy.id,
+                            SECTION_POLICIES,
+                            scope,
+                            platform,
+                            "Compliance policy",
+                            Some(policy.description.as_deref().unwrap_or("")),
+                            None,
+                            Some(compliance_docs.as_ref()),
+                            Some(script_names.as_ref()),
+                        )
+                        .await
+                        {
+                            Ok(card) => CardOutcome::Ok(card),
+                            Err(error) => CardOutcome::Warn(format!("{}: {error}", policy.name)),
+                        }
+                    }
+                    ReportCardJob::Intent(policy) => {
+                        match load_endpoint_security_card(&token, &policy).await {
+                            Ok(card) => CardOutcome::Ok(card),
+                            Err(error) => CardOutcome::Warn(format!("{}: {error}", policy.name)),
+                        }
+                    }
+                    ReportCardJob::Update(policy) => {
+                        let kind = format!("windowsUpdate:{}", policy.family);
+                        match load_graph_card(
+                            &token,
+                            &kind,
+                            &policy.id,
+                            SECTION_UPDATES,
+                            "Windows".into(),
+                            "Windows".into(),
+                            windows_update_family_label(&policy.family),
+                            Some(policy.description.as_deref().unwrap_or("")),
+                            None,
+                            None,
+                            None,
+                        )
+                        .await
+                        {
+                            Ok(card) => CardOutcome::Ok(card),
+                            Err(error) => CardOutcome::Warn(format!("{}: {error}", policy.name)),
+                        }
+                    }
+                    ReportCardJob::Autopilot(profile) => match load_graph_card(
+                        &token,
+                        "autopilotProfile",
+                        &profile.id,
+                        SECTION_ENROLLMENT,
+                        "Windows".into(),
+                        "Windows".into(),
+                        "Autopilot profile",
+                        Some(profile.description.as_deref().unwrap_or("")),
+                        None,
+                        None,
+                        None,
+                    )
+                    .await
+                    {
+                        Ok(card) => CardOutcome::Ok(card),
+                        Err(error) => {
+                            CardOutcome::Warn(format!("{}: {error}", profile.display_name))
+                        }
+                    },
+                    ReportCardJob::GroupPolicy(policy) => match load_graph_card(
+                        &token,
+                        "groupPolicyConfiguration",
+                        &policy.id,
+                        SECTION_POLICIES,
+                        "Windows".into(),
+                        "Windows".into(),
+                        "Group Policy",
+                        Some(policy.description.as_deref().unwrap_or("")),
+                        None,
+                        None,
+                        None,
+                    )
+                    .await
+                    {
+                        Ok(card) => CardOutcome::Ok(card),
+                        Err(error) => CardOutcome::Warn(format!("{}: {error}", policy.name)),
+                    },
+                    ReportCardJob::Enrollment(policy) => {
+                        match load_enrollment_card(&token, &policy).await {
+                            Ok(card) => CardOutcome::Enrollment(card),
+                            Err(error) => CardOutcome::Warn(format!("{}: {error}", policy.name)),
+                        }
+                    }
+                }
+            }
+        })
+        .buffer_unordered(concurrency)
+        .inspect(|_| {
+            completed += 1;
+            on_progress(progress(
+                "export",
+                completed,
+                total.max(1),
+                &format!("Loaded {completed} of {total}"),
+            ));
+        })
+        .collect()
+        .await;
+
     let mut cards = Vec::new();
-
-    for policy in catalog_work {
-        current += 1;
-        on_progress(progress(
-            "catalog",
-            current,
-            total,
-            &format!("Catalog: {}", policy.name),
-        ));
-        let (scope, platform) = platform_scope_from_catalog(policy.platforms.as_deref());
-        match load_graph_card(
-            access_token,
-            "configurationPolicy",
-            &policy.id,
-            SECTION_POLICIES,
-            scope,
-            platform,
-            "Settings Catalog",
-            Some(policy.description.as_deref().unwrap_or("")),
-            None,
-            None,
-            None,
-        )
-        .await
-        {
-            Ok(card) => cards.push(card),
-            Err(error) => warnings.push(format!("{}: {error}", policy.name)),
-        }
-    }
-
-    for script in script_work {
-        current += 1;
-        on_progress(progress(
-            "scripts",
-            current,
-            total,
-            &format!("Script: {}", script.display_name),
-        ));
-        let kind = inspector_kind_for_script(&script.kind);
-        match load_script_card(access_token, script, kind).await {
-            Ok(card) => cards.push(card),
-            Err(error) => warnings.push(format!("{}: {error}", script.display_name)),
-        }
-    }
-
-    for policy in compliance_work {
-        current += 1;
-        on_progress(progress(
-            "compliance",
-            current,
-            total,
-            &format!("Compliance: {}", policy.name),
-        ));
-        let (scope, platform) = platform_scope_from_catalog(policy.platforms.as_deref());
-        match load_graph_card(
-            access_token,
-            "compliancePolicy",
-            &policy.id,
-            SECTION_POLICIES,
-            scope,
-            platform,
-            "Compliance policy",
-            Some(policy.description.as_deref().unwrap_or("")),
-            None,
-            Some(&compliance_docs),
-            Some(&script_names),
-        )
-        .await
-        {
-            Ok(card) => cards.push(card),
-            Err(error) => warnings.push(format!("{}: {error}", policy.name)),
-        }
-    }
-
-    for policy in intent_work {
-        current += 1;
-        on_progress(progress(
-            "endpoint-security",
-            current,
-            total,
-            &format!("Endpoint Security: {}", policy.name),
-        ));
-        match load_endpoint_security_card(access_token, policy).await {
-            Ok(card) => cards.push(card),
-            Err(error) => warnings.push(format!("{}: {error}", policy.name)),
-        }
-    }
-
-    for policy in update_work {
-        current += 1;
-        on_progress(progress(
-            "windows-update",
-            current,
-            total,
-            &format!("Windows Update: {}", policy.name),
-        ));
-        let kind = format!("windowsUpdate:{}", policy.family);
-        match load_graph_card(
-            access_token,
-            &kind,
-            &policy.id,
-            SECTION_UPDATES,
-            "Windows".into(),
-            "Windows".into(),
-            windows_update_family_label(&policy.family),
-            Some(policy.description.as_deref().unwrap_or("")),
-            None,
-            None,
-            None,
-        )
-        .await
-        {
-            Ok(card) => cards.push(card),
-            Err(error) => warnings.push(format!("{}: {error}", policy.name)),
-        }
-    }
-
-    for profile in autopilot_work {
-        current += 1;
-        on_progress(progress(
-            "autopilot",
-            current,
-            total,
-            &format!("Autopilot: {}", profile.display_name),
-        ));
-        match load_graph_card(
-            access_token,
-            "autopilotProfile",
-            &profile.id,
-            SECTION_ENROLLMENT,
-            "Windows".into(),
-            "Windows".into(),
-            "Autopilot profile",
-            Some(profile.description.as_deref().unwrap_or("")),
-            None,
-            None,
-            None,
-        )
-        .await
-        {
-            Ok(card) => cards.push(card),
-            Err(error) => warnings.push(format!("{}: {error}", profile.display_name)),
-        }
-    }
-
-    for policy in group_policy_work {
-        current += 1;
-        on_progress(progress(
-            "group-policy",
-            current,
-            total,
-            &format!("Group Policy: {}", policy.name),
-        ));
-        match load_graph_card(
-            access_token,
-            "groupPolicyConfiguration",
-            &policy.id,
-            SECTION_POLICIES,
-            "Windows".into(),
-            "Windows".into(),
-            "Group Policy",
-            Some(policy.description.as_deref().unwrap_or("")),
-            None,
-            None,
-            None,
-        )
-        .await
-        {
-            Ok(card) => cards.push(card),
-            Err(error) => warnings.push(format!("{}: {error}", policy.name)),
-        }
-    }
-
     let mut enrollment_loaded = 0usize;
-    for policy in enrollment_work {
-        current += 1;
-        on_progress(progress(
-            "enrollment",
-            current,
-            total,
-            &format!("Enrollment: {}", policy.name),
-        ));
-        match load_enrollment_card(access_token, policy).await {
-            Ok(card) => {
+    for outcome in outcomes {
+        match outcome {
+            CardOutcome::Ok(card) => cards.push(card),
+            CardOutcome::Warn(message) => warnings.push(message),
+            CardOutcome::Enrollment(card) => {
                 if selection.includes_scope(&card.scope) {
                     enrollment_loaded += 1;
                     cards.push(card);
                 }
             }
-            Err(error) => warnings.push(format!("{}: {error}", policy.name)),
         }
     }
 
@@ -659,8 +702,8 @@ pub async fn generate_environment_report(
     if selection.wants_enrollment_extras() {
         on_progress(progress(
             "enrollment",
-            current,
             total,
+            total.max(1),
             "Loading enrollment connectors and tenant enrollment settings…",
         ));
         let (extra_enrollment, ids) =
@@ -835,31 +878,59 @@ async fn fetch_apps_for_selection(
             warnings,
         );
     }
-    let mut apps = Vec::new();
-    let mut seen = HashSet::new();
-    let mut platforms = Vec::new();
+
+    let token = access_token.to_string();
+    let mut tasks = Vec::new();
     if selection.windows {
-        platforms.push("windows");
+        let token = token.clone();
+        tasks.push(tokio::spawn(async move {
+            (
+                "windows".to_string(),
+                fetch_mobile_apps(&token, Some("windows"), None).await,
+            )
+        }));
     }
     if selection.macos {
-        platforms.push("macos");
+        let token = token.clone();
+        tasks.push(tokio::spawn(async move {
+            (
+                "macos".to_string(),
+                fetch_mobile_apps(&token, Some("macos"), None).await,
+            )
+        }));
     }
     if selection.ios {
-        platforms.push("ios");
+        let token = token.clone();
+        tasks.push(tokio::spawn(async move {
+            (
+                "ios".to_string(),
+                fetch_mobile_apps(&token, Some("ios"), None).await,
+            )
+        }));
     }
     if selection.android {
-        platforms.push("android");
+        let token = token.clone();
+        tasks.push(tokio::spawn(async move {
+            (
+                "android".to_string(),
+                fetch_mobile_apps(&token, Some("android"), None).await,
+            )
+        }));
     }
-    for platform in platforms {
-        let batch = list_or_warn(
-            &format!("Applications ({platform})"),
-            fetch_mobile_apps(access_token, Some(platform), None).await,
-            warnings,
-        );
-        for app in batch {
-            if seen.insert(app.id.clone()) {
-                apps.push(app);
+
+    let mut apps = Vec::new();
+    let mut seen = HashSet::new();
+    for task in tasks {
+        match task.await {
+            Ok((platform, result)) => {
+                let batch = list_or_warn(&format!("Applications ({platform})"), result, warnings);
+                for app in batch {
+                    if seen.insert(app.id.clone()) {
+                        apps.push(app);
+                    }
+                }
             }
+            Err(error) => warnings.push(format!("Applications: task failed: {error}")),
         }
     }
     apps
@@ -893,6 +964,17 @@ fn list_or_warn<T>(
             warnings.push(format!("{label}: {error}"));
             Vec::new()
         }
+    }
+}
+
+fn optional_list_or_warn<T>(
+    label: &str,
+    result: Option<Result<InventoryList<T>, GraphError>>,
+    warnings: &mut Vec<String>,
+) -> Vec<T> {
+    match result {
+        Some(result) => list_or_warn(label, result, warnings),
+        None => Vec::new(),
     }
 }
 
@@ -2941,7 +3023,7 @@ async fn collect_app_inventory<F: Fn(EnvironmentReportProgress)>(
     on_progress: &F,
     warnings: &mut Vec<String>,
 ) -> (AppInventory, Vec<String>) {
-    let client = GraphClient::new();
+    let concurrency = graph_fetch_concurrency();
     on_progress(progress("apps", 0, 0, "Loading app install status…"));
     let install_rows = match fetch_app_install_health(access_token).await {
         Ok(rows) => rows,
@@ -2950,7 +3032,7 @@ async fn collect_app_inventory<F: Fn(EnvironmentReportProgress)>(
             Vec::new()
         }
     };
-    let install_index = index_app_install(&install_rows);
+    let install_index = Arc::new(index_app_install(&install_rows));
     let mut mechanisms: BTreeMap<String, (u32, u32)> = BTreeMap::new();
     for app in apps {
         let label = app_mechanism(app);
@@ -2961,6 +3043,34 @@ async fn collect_app_inventory<F: Fn(EnvironmentReportProgress)>(
         }
     }
     let total = apps.len() as u32;
+    on_progress(progress(
+        "apps",
+        0,
+        total.max(1),
+        &format!("Fetching {total} apps (concurrency {concurrency})…"),
+    ));
+
+    let token = access_token.to_string();
+    let mut completed = 0u32;
+    let results: Vec<AppFetchResult> = stream::iter(apps.iter().cloned())
+        .map(|app| {
+            let token = token.clone();
+            let install_index = Arc::clone(&install_index);
+            async move { load_app_card(&token, app, install_index.as_ref()).await }
+        })
+        .buffer_unordered(concurrency)
+        .inspect(|_| {
+            completed += 1;
+            on_progress(progress(
+                "apps",
+                completed,
+                total.max(1),
+                &format!("Loaded {completed} of {total} apps"),
+            ));
+        })
+        .collect()
+        .await;
+
     let mut failed_device_total = 0u32;
     let mut installed_device_total = 0u32;
     let mut failing = Vec::new();
@@ -2969,141 +3079,23 @@ async fn collect_app_inventory<F: Fn(EnvironmentReportProgress)>(
     let mut detail_errors = 0u32;
     let mut assigned_count = 0usize;
     let mut cards = Vec::new();
-    for (index, app) in apps.iter().enumerate() {
-        let mut drafts = Vec::new();
-        let mut settings = Vec::new();
-        let mut code_blocks = Vec::new();
-        let mut object_assigned = app.is_assigned == Some(true);
-        on_progress(progress(
-            "apps",
-            (index as u32) + 1,
-            total,
-            &format!("App: {}", app.display_name),
-        ));
-        let enc = encode(&app.id);
-        match client
-            .fetch_plain::<Value>(
-                access_token,
-                &format!("/deviceAppManagement/mobileApps/{enc}"),
-                "beta",
-            )
-            .await
-        {
-            Ok(object) => {
-                if let Some(flag) = object.get("isAssigned").and_then(Value::as_bool) {
-                    object_assigned = flag;
-                }
-                settings = app_property_rows(&object);
-                if let Some(notes) = object
-                    .get("notes")
-                    .and_then(Value::as_str)
-                    .filter(|value| !value.trim().is_empty())
-                {
-                    if !settings.iter().any(|row| row.name == "Notes") {
-                        settings.push(SettingRow::new("Notes", notes));
-                    }
-                }
-                collect_app_scripts(&object, &mut code_blocks);
-            }
-            Err(_) => detail_errors += 1,
+    for result in results {
+        if result.detail_error {
+            detail_errors += 1;
         }
-        let report_row = lookup_app_install(&install_index, &app.id, &app.display_name);
-        let assigned = object_assigned || report_row.is_some();
-        if assigned {
+        if result.summary_error {
+            summary_errors += 1;
+        }
+        if result.assigned {
             assigned_count += 1;
-            match client
-                .fetch_all_pages::<Value>(
-                    access_token,
-                    &format!("/deviceAppManagement/mobileApps/{enc}/assignments"),
-                    "beta",
-                    ASSIGNMENTS_MAX,
-                )
-                .await
-            {
-                Ok(rows) => {
-                    drafts = drafts_from_graph_assignments(&rows, true);
-                    for draft in &drafts {
-                        if let Some(id) = draft.group_id.clone() {
-                            group_ids.push(id);
-                        }
-                    }
-                }
-                Err(_) => {}
-            }
         }
-        let app_install = if let Some(row) = report_row {
-            Some(AppInstallStats {
-                installed: row.installed,
-                failed: row.failed,
-                not_installed: row.not_installed,
-                pending: row.pending,
-                not_applicable: row.not_applicable,
-            })
-        } else if assigned {
-            match client
-                .fetch_plain::<Value>(
-                    access_token,
-                    &format!("/deviceAppManagement/mobileApps/{enc}/installSummary"),
-                    "beta",
-                )
-                .await
-            {
-                Ok(summary) => Some(AppInstallStats {
-                    installed: number_u32(&summary, "installedDeviceCount"),
-                    failed: number_u32(&summary, "failedDeviceCount"),
-                    not_installed: number_u32(&summary, "notInstalledDeviceCount"),
-                    pending: number_u32(&summary, "pendingInstallDeviceCount"),
-                    not_applicable: number_u32(&summary, "notApplicableDeviceCount"),
-                }),
-                Err(_) => {
-                    summary_errors += 1;
-                    None
-                }
-            }
-        } else {
-            None
-        };
-        if let Some(stats) = &app_install {
-            failed_device_total += stats.failed;
-            installed_device_total += stats.installed;
-            if stats.failed > 0 {
-                failing.push((app.display_name.clone(), app_mechanism(app), stats.failed));
-            }
+        failed_device_total += result.failed;
+        installed_device_total += result.installed;
+        group_ids.extend(result.group_ids);
+        if let Some(row) = result.failing {
+            failing.push(row);
         }
-        let platform = canonical_platform(app.platform.as_deref().unwrap_or(""));
-        let mut metadata = vec![
-            SettingRow::new("Mechanism", app_mechanism(app)),
-            SettingRow::new("Assigned", if assigned { "Yes" } else { "No" }),
-        ];
-        if let Some(publisher) = app.publisher.as_deref().filter(|value| !value.is_empty()) {
-            metadata.push(SettingRow::new("Publisher", publisher));
-        }
-        if let Some(version) = app.display_version.as_deref().filter(|value| !value.is_empty()) {
-            metadata.push(SettingRow::new("Version", version));
-        }
-        if let Some(package) = app
-            .package_identifier
-            .as_deref()
-            .filter(|value| !value.is_empty())
-        {
-            metadata.push(SettingRow::new("Package", package));
-        }
-        cards.push(ReportCard {
-            source_id: app.id.clone(),
-            section: SECTION_APPS,
-            scope: platform.clone(),
-            title: app.display_name.clone(),
-            description: String::new(),
-            platform,
-            kind_label: app_mechanism(app),
-            drafts,
-            metadata,
-            settings,
-            code_blocks,
-            stats: None,
-            app_install,
-            note: None,
-        });
+        cards.push(result.card);
     }
     if detail_errors > 0 {
         warnings.push(format!(
@@ -3115,7 +3107,12 @@ async fn collect_app_inventory<F: Fn(EnvironmentReportProgress)>(
             "App install summaries unavailable for {summary_errors} assigned apps."
         ));
     }
-    failing.sort_by(|left, right| right.2.cmp(&left.2).then(left.0.to_lowercase().cmp(&right.0.to_lowercase())));
+    failing.sort_by(|left, right| {
+        right
+            .2
+            .cmp(&left.2)
+            .then(left.0.to_lowercase().cmp(&right.0.to_lowercase()))
+    });
     failing.truncate(25);
     let by_mechanism = mechanisms
         .into_iter()
@@ -3137,6 +3134,172 @@ async fn collect_app_inventory<F: Fn(EnvironmentReportProgress)>(
         },
         group_ids,
     )
+}
+
+struct AppFetchResult {
+    card: ReportCard,
+    group_ids: Vec<String>,
+    assigned: bool,
+    failed: u32,
+    installed: u32,
+    failing: Option<(String, String, u32)>,
+    detail_error: bool,
+    summary_error: bool,
+}
+
+async fn load_app_card(
+    access_token: &str,
+    app: MobileAppSummary,
+    install_index: &HashMap<String, AppInstallHealth>,
+) -> AppFetchResult {
+    let client = GraphClient::new();
+    let mut drafts = Vec::new();
+    let mut settings = Vec::new();
+    let mut code_blocks = Vec::new();
+    let mut object_assigned = app.is_assigned == Some(true);
+    let mut detail_error = false;
+    let mut summary_error = false;
+    let mut group_ids = Vec::new();
+    let enc = encode(&app.id);
+    match client
+        .fetch_plain::<Value>(
+            access_token,
+            &format!("/deviceAppManagement/mobileApps/{enc}"),
+            "beta",
+        )
+        .await
+    {
+        Ok(object) => {
+            if let Some(flag) = object.get("isAssigned").and_then(Value::as_bool) {
+                object_assigned = flag;
+            }
+            settings = app_property_rows(&object);
+            if let Some(notes) = object
+                .get("notes")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+            {
+                if !settings.iter().any(|row| row.name == "Notes") {
+                    settings.push(SettingRow::new("Notes", notes));
+                }
+            }
+            collect_app_scripts(&object, &mut code_blocks);
+        }
+        Err(_) => detail_error = true,
+    }
+    let report_row = lookup_app_install(install_index, &app.id, &app.display_name);
+    let assigned = object_assigned || report_row.is_some();
+    if assigned {
+        match client
+            .fetch_all_pages::<Value>(
+                access_token,
+                &format!("/deviceAppManagement/mobileApps/{enc}/assignments"),
+                "beta",
+                ASSIGNMENTS_MAX,
+            )
+            .await
+        {
+            Ok(rows) => {
+                drafts = drafts_from_graph_assignments(&rows, true);
+                for draft in &drafts {
+                    if let Some(id) = draft.group_id.clone() {
+                        group_ids.push(id);
+                    }
+                }
+            }
+            Err(_) => {}
+        }
+    }
+    let app_install = if let Some(row) = report_row {
+        Some(AppInstallStats {
+            installed: row.installed,
+            failed: row.failed,
+            not_installed: row.not_installed,
+            pending: row.pending,
+            not_applicable: row.not_applicable,
+        })
+    } else if assigned {
+        match client
+            .fetch_plain::<Value>(
+                access_token,
+                &format!("/deviceAppManagement/mobileApps/{enc}/installSummary"),
+                "beta",
+            )
+            .await
+        {
+            Ok(summary) => Some(AppInstallStats {
+                installed: number_u32(&summary, "installedDeviceCount"),
+                failed: number_u32(&summary, "failedDeviceCount"),
+                not_installed: number_u32(&summary, "notInstalledDeviceCount"),
+                pending: number_u32(&summary, "pendingInstallDeviceCount"),
+                not_applicable: number_u32(&summary, "notApplicableDeviceCount"),
+            }),
+            Err(_) => {
+                summary_error = true;
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let mut failed = 0u32;
+    let mut installed = 0u32;
+    let mut failing = None;
+    if let Some(stats) = &app_install {
+        failed = stats.failed;
+        installed = stats.installed;
+        if stats.failed > 0 {
+            failing = Some((
+                app.display_name.clone(),
+                app_mechanism(&app),
+                stats.failed,
+            ));
+        }
+    }
+    let platform = canonical_platform(app.platform.as_deref().unwrap_or(""));
+    let mut metadata = vec![
+        SettingRow::new("Mechanism", app_mechanism(&app)),
+        SettingRow::new("Assigned", if assigned { "Yes" } else { "No" }),
+    ];
+    if let Some(publisher) = app.publisher.as_deref().filter(|value| !value.is_empty()) {
+        metadata.push(SettingRow::new("Publisher", publisher));
+    }
+    if let Some(version) = app.display_version.as_deref().filter(|value| !value.is_empty()) {
+        metadata.push(SettingRow::new("Version", version));
+    }
+    if let Some(package) = app
+        .package_identifier
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        metadata.push(SettingRow::new("Package", package));
+    }
+    let card = ReportCard {
+        source_id: app.id.clone(),
+        section: SECTION_APPS,
+        scope: platform.clone(),
+        title: app.display_name.clone(),
+        description: String::new(),
+        platform,
+        kind_label: app_mechanism(&app),
+        drafts,
+        metadata,
+        settings,
+        code_blocks,
+        stats: None,
+        app_install,
+        note: None,
+    };
+    AppFetchResult {
+        card,
+        group_ids,
+        assigned,
+        failed,
+        installed,
+        failing,
+        detail_error,
+        summary_error,
+    }
 }
 
 fn collect_app_scripts(value: &Value, out: &mut Vec<(String, String)>) {
