@@ -35,7 +35,7 @@ use axis_sdk::{
     E8BaselineReference, E8BaselineSource, GraphObjectDetail, InventoryList, LapsCredentialInfo,
     MobileAppSummary, PolicySettingIssue, RemediationDeviceStatusReport, SettingConflictDetail,
     SettingsCatalogPlatform, TenantScriptSummary, UpdateObjectMetadataInput, UpdateScriptContentInput, UpdatedObjectMetadata,
-    WindowsUpdatePolicy,
+    WindowsUpdatePolicy, SessionMode,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -541,6 +541,13 @@ async fn session_token(state: &State<'_, AppState>) -> Result<Option<String>, St
         .await
         .map_err(|error| error.to_string())?
         .map(|token| token.access_token))
+}
+
+async fn ensure_write_allowed(state: &State<'_, AppState>) -> Result<(), String> {
+    if state.auth.session_mode().await == SessionMode::Read {
+        return Err("Action blocked: Axis is running in Read-only mode.".into());
+    }
+    Ok(())
 }
 
 #[derive(Debug, Serialize)]
@@ -1074,6 +1081,7 @@ pub async fn create_settings_catalog_policy_cmd(
     platform: String,
     settings: Vec<Value>,
 ) -> Result<CreateCatalogPolicyResponse, String> {
+    ensure_write_allowed(&state).await?;
     let catalog_platform = parse_catalog_platform(&platform);
     let Some(token) = session_token(&state).await? else {
         return Ok(CreateCatalogPolicyResponse {
@@ -1116,6 +1124,7 @@ pub async fn create_endpoint_security_policy_cmd(
     platforms: Option<String>,
     technologies: Option<String>,
 ) -> Result<CreateCatalogPolicyResponse, String> {
+    ensure_write_allowed(&state).await?;
     let catalog_platform = parse_catalog_platform(&platform);
     let Some(token) = session_token(&state).await? else {
         return Ok(CreateCatalogPolicyResponse {
@@ -1156,6 +1165,7 @@ pub async fn add_settings_to_policy_cmd(
     policy_id: String,
     settings: Vec<Value>,
 ) -> Result<CreateCatalogPolicyResponse, String> {
+    ensure_write_allowed(&state).await?;
     let Some(token) = session_token(&state).await? else {
         return Ok(CreateCatalogPolicyResponse {
             policy: None,
@@ -1186,6 +1196,7 @@ pub async fn remove_settings_from_policy_cmd(
     policy_id: String,
     definition_ids: Vec<String>,
 ) -> Result<CreateCatalogPolicyResponse, String> {
+    ensure_write_allowed(&state).await?;
     let Some(token) = session_token(&state).await? else {
         return Ok(CreateCatalogPolicyResponse {
             policy: None,
@@ -1374,6 +1385,7 @@ pub async fn sync_managed_device_cmd(
     state: State<'_, AppState>,
     device_id: String,
 ) -> Result<ActionResponse, String> {
+    ensure_write_allowed(&state).await?;
     let Some(token) = session_token(&state).await? else {
         return Ok(ActionResponse {
             ok: false,
@@ -1394,6 +1406,7 @@ pub async fn reboot_managed_device_cmd(
     state: State<'_, AppState>,
     device_id: String,
 ) -> Result<ActionResponse, String> {
+    ensure_write_allowed(&state).await?;
     let Some(token) = session_token(&state).await? else {
         return Ok(ActionResponse {
             ok: false,
@@ -1414,6 +1427,7 @@ pub async fn remote_lock_managed_device_cmd(
     state: State<'_, AppState>,
     device_id: String,
 ) -> Result<ActionResponse, String> {
+    ensure_write_allowed(&state).await?;
     let Some(token) = session_token(&state).await? else {
         return Ok(ActionResponse {
             ok: false,
@@ -1434,6 +1448,7 @@ pub async fn collect_device_diagnostics_cmd(
     state: State<'_, AppState>,
     device_id: String,
 ) -> Result<ActionResponse, String> {
+    ensure_write_allowed(&state).await?;
     let Some(token) = session_token(&state).await? else {
         return Ok(ActionResponse {
             ok: false,
@@ -1455,6 +1470,7 @@ pub async fn initiate_on_demand_remediation_cmd(
     device_id: String,
     script_policy_id: String,
 ) -> Result<ActionResponse, String> {
+    ensure_write_allowed(&state).await?;
     let Some(token) = session_token(&state).await? else {
         return Ok(ActionResponse {
             ok: false,
@@ -1475,6 +1491,7 @@ pub async fn retire_managed_device_cmd(
     state: State<'_, AppState>,
     device_id: String,
 ) -> Result<ActionResponse, String> {
+    ensure_write_allowed(&state).await?;
     let Some(token) = session_token(&state).await? else {
         return Ok(ActionResponse {
             ok: false,
@@ -1495,6 +1512,7 @@ pub async fn wipe_managed_device_cmd(
     state: State<'_, AppState>,
     device_id: String,
 ) -> Result<ActionResponse, String> {
+    ensure_write_allowed(&state).await?;
     let Some(token) = session_token(&state).await? else {
         return Ok(ActionResponse {
             ok: false,
@@ -1515,6 +1533,7 @@ pub async fn delete_managed_device_cmd(
     state: State<'_, AppState>,
     device_id: String,
 ) -> Result<ActionResponse, String> {
+    ensure_write_allowed(&state).await?;
     let Some(token) = session_token(&state).await? else {
         return Ok(ActionResponse {
             ok: false,
@@ -1624,6 +1643,7 @@ pub async fn rotate_laps_password_cmd(
     state: State<'_, AppState>,
     managed_device_id: String,
 ) -> Result<ActionResponse, String> {
+    ensure_write_allowed(&state).await?;
     let Some(token) = session_token(&state).await? else {
         return Ok(ActionResponse {
             ok: false,
@@ -1657,6 +1677,7 @@ pub async fn update_script_content_cmd(
     state: State<'_, AppState>,
     input: UpdateScriptContentInput,
 ) -> Result<ActionResponse, String> {
+    ensure_write_allowed(&state).await?;
     let Some(token) = session_token(&state).await? else {
         return Ok(ActionResponse {
             ok: false,
@@ -1750,6 +1771,7 @@ pub async fn create_compliance_policy_cmd(
     state: State<'_, AppState>,
     input: CreateCompliancePolicyInput,
 ) -> Result<CreateCompliancePolicyResponse, String> {
+    ensure_write_allowed(&state).await?;
     let Some(token) = session_token(&state).await? else {
         return Ok(CreateCompliancePolicyResponse {
             policy: None,
@@ -1773,6 +1795,7 @@ pub async fn update_compliance_policy_cmd(
     state: State<'_, AppState>,
     input: UpdateCompliancePolicyInput,
 ) -> Result<ActionResponse, String> {
+    ensure_write_allowed(&state).await?;
     let Some(token) = session_token(&state).await? else {
         return Ok(ActionResponse {
             ok: false,
@@ -1796,6 +1819,7 @@ pub async fn create_tenant_script_cmd(
     state: State<'_, AppState>,
     input: CreateTenantScriptInput,
 ) -> Result<CreateTenantScriptResponse, String> {
+    ensure_write_allowed(&state).await?;
     let Some(token) = session_token(&state).await? else {
         return Ok(CreateTenantScriptResponse {
             script: None,
@@ -1830,6 +1854,7 @@ pub async fn duplicate_graph_object_cmd(
     description: Option<String>,
     copy_assignments: Option<bool>,
 ) -> Result<DuplicateGraphObjectResponse, String> {
+    ensure_write_allowed(&state).await?;
     let Some(token) = session_token(&state).await? else {
         return Ok(DuplicateGraphObjectResponse {
             object: None,
@@ -1869,6 +1894,7 @@ pub async fn update_object_metadata_cmd(
     state: State<'_, AppState>,
     input: UpdateObjectMetadataInput,
 ) -> Result<UpdateObjectMetadataResponse, String> {
+    ensure_write_allowed(&state).await?;
     let Some(token) = session_token(&state).await? else {
         return Ok(UpdateObjectMetadataResponse {
             object: None,
@@ -1893,6 +1919,7 @@ pub async fn delete_graph_object_cmd(
     kind: String,
     id: String,
 ) -> Result<ActionResponse, String> {
+    ensure_write_allowed(&state).await?;
     let Some(token) = session_token(&state).await? else {
         return Ok(ActionResponse {
             ok: false,
@@ -1980,6 +2007,7 @@ pub async fn create_directory_group_cmd(
     state: State<'_, AppState>,
     input: CreateDirectoryGroupInput,
 ) -> Result<CreateDirectoryGroupResponse, String> {
+    ensure_write_allowed(&state).await?;
     let Some(token) = session_token(&state).await? else {
         return Ok(CreateDirectoryGroupResponse {
             group: None,
@@ -2106,6 +2134,7 @@ pub async fn assign_object_assignments_cmd(
     drafts: Vec<AssignmentDraft>,
     object_odata_type: Option<String>,
 ) -> Result<ActionResponse, String> {
+    ensure_write_allowed(&state).await?;
     let Some(token) = session_token(&state).await? else {
         return Ok(ActionResponse {
             ok: false,

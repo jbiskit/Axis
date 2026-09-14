@@ -58,7 +58,13 @@ pub fn effective_session_mode(requested: SessionMode) -> SessionMode {
 }
 
 pub fn is_write_or_privileged_scope(scope: &str) -> bool {
-    scope.contains("ReadWrite") || scope.contains("PrivilegedOperations")
+    scope.contains("ReadWrite")
+        || scope.contains("PrivilegedOperations")
+        || scope.ends_with(".Write")
+        || scope.contains(".Write.")
+        || scope.contains(".Manage.")
+        || scope.ends_with(".Manage")
+        || scope.eq_ignore_ascii_case("Directory.AccessAsUser.All")
 }
 
 /// True when the access-token `scp` claim includes a Graph write or privileged scope.
@@ -66,6 +72,19 @@ pub fn token_scp_has_write_scopes(scp: Option<&str>) -> bool {
     scp.unwrap_or("")
         .split_whitespace()
         .any(is_write_or_privileged_scope)
+}
+
+/// Extracts all write or privileged scopes present in the access-token `scp` claim.
+pub fn token_write_scopes(scp: Option<&str>) -> Vec<String> {
+    let mut write_scopes: Vec<String> = scp
+        .unwrap_or("")
+        .split_whitespace()
+        .filter(|scope| is_write_or_privileged_scope(scope))
+        .map(str::to_string)
+        .collect();
+    write_scopes.sort();
+    write_scopes.dedup();
+    write_scopes
 }
 
 pub fn device_code_scopes() -> Vec<String> {
@@ -91,6 +110,7 @@ fn base_scopes() -> Vec<String> {
         "DeviceLocalCredential.Read.All".to_string(),
         "DeviceManagementConfiguration.Read.All".to_string(),
         "DeviceManagementApps.Read.All".to_string(),
+        "DeviceManagementRBAC.Read.All".to_string(),
         "DeviceManagementServiceConfig.Read.All".to_string(),
         "DeviceManagementScripts.Read.All".to_string(),
         "DeviceManagementManagedDevices.Read.All".to_string(),
@@ -106,6 +126,7 @@ fn write_scopes() -> Vec<String> {
         "DeviceManagementScripts.ReadWrite.All".to_string(),
         "DeviceManagementManagedDevices.ReadWrite.All".to_string(),
         "DeviceManagementManagedDevices.PrivilegedOperations.All".to_string(),
+        "DeviceManagementRBAC.ReadWrite.All".to_string(),
         "Group.ReadWrite.All".to_string(),
     ]
 }
@@ -179,7 +200,17 @@ fn scope_parameter(scopes: &[String]) -> String {
 
 pub fn scopes_for_mode_with_extras(mode: SessionMode, extras: &[String]) -> Vec<String> {
     let mut scopes = scopes_for_mode(mode);
-    scopes.extend(extras.iter().cloned());
+    if mode == SessionMode::Read {
+        // Enforce strictly read-only: do not request write scopes even if provided in extras
+        scopes.extend(
+            extras
+                .iter()
+                .filter(|scope| !is_write_or_privileged_scope(scope))
+                .cloned(),
+        );
+    } else {
+        scopes.extend(extras.iter().cloned());
+    }
     scopes.sort();
     scopes.dedup();
     scopes
@@ -315,6 +346,19 @@ impl AuthManager {
         };
         let claims = decode_access_token_claims(access_token);
         token_scp_has_write_scopes(claims.scp.as_deref())
+    }
+
+    /// Returns any write or privileged scopes on the current access token.
+    pub async fn token_write_scopes(&self) -> Vec<String> {
+        let current = self.session.lock().await;
+        let Some(session) = current.as_ref() else {
+            return Vec::new();
+        };
+        let Some(access_token) = session.access_token.as_deref() else {
+            return Vec::new();
+        };
+        let claims = decode_access_token_claims(access_token);
+        token_write_scopes(claims.scp.as_deref())
     }
 
     pub async fn start_device_code_flow(
@@ -460,7 +504,7 @@ impl AuthManager {
             expires_on,
             account_name,
             tenant_id,
-            mode: SessionMode::Admin,
+            mode: flow.mode,
         })
     }
 
@@ -628,7 +672,7 @@ fn load_persisted_session() -> Option<DeviceSession> {
         access_token_expires_on: stored.access_expires_on,
         account_name: stored.account_name,
         tenant_id: stored.tenant_id,
-        mode: SessionMode::Admin,
+        mode: stored.mode,
         client_id: stored.client_id,
         extra_scopes: stored.extra_scopes,
     })
@@ -796,6 +840,13 @@ mod tests {
             1
         );
         assert!(!scopes.iter().any(|scope| scope == ".default"));
+
+        // In Read mode, write scopes in extras must be ignored
+        let read_scopes = scopes_for_mode_with_extras(SessionMode::Read, &extras);
+        assert!(!read_scopes
+            .iter()
+            .any(|scope| scope == "Policy.ReadWrite.ConditionalAccess"));
+        assert!(read_scopes.iter().any(|scope| scope == "User.Read"));
     }
 
     #[test]
@@ -810,6 +861,17 @@ mod tests {
         assert!(token_scp_has_write_scopes(Some(
             "DeviceManagementManagedDevices.PrivilegedOperations.All"
         )));
+
+        let write_scopes = token_write_scopes(Some(
+            "User.Read DeviceManagementConfiguration.ReadWrite.All Directory.AccessAsUser.All"
+        ));
+        assert_eq!(
+            write_scopes,
+            vec![
+                "DeviceManagementConfiguration.ReadWrite.All".to_string(),
+                "Directory.AccessAsUser.All".to_string(),
+            ]
+        );
     }
 
     #[test]

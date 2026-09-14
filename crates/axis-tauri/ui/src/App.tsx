@@ -95,6 +95,9 @@ export default function App() {
         route={route}
         accountName={session.accountName}
         organizationName={session.glance?.organizationName ?? null}
+        mode={session.mode}
+        readOnlyScopeExceedsRequest={session.readOnlyScopeExceedsRequest}
+        exceededWriteScopes={session.exceededWriteScopes}
         appVersion={updater.appVersion}
         autoCheck={updater.autoCheck}
         checkingForUpdate={updater.checking}
@@ -115,6 +118,7 @@ export default function App() {
           glanceError={session.glanceError}
           accountName={session.accountName}
           signedIn={session.signedIn}
+          isReadOnly={session.isReadOnly}
           devices={devices.devices}
           devicesLoading={devices.loading}
           devicesError={devices.error}

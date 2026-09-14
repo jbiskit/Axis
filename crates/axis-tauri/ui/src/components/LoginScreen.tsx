@@ -1,6 +1,6 @@
 import { useState } from "react";
-import type { DeviceCodePrompt } from "../types/glance";
-import { loadLastExtraScopes } from "../lib/loginPrefs";
+import type { DeviceCodePrompt, SessionMode } from "../types/glance";
+import { loadLastExtraScopes, loadLastSessionMode } from "../lib/loginPrefs";
 import { AppUpdateControls } from "./AppUpdateControls";
 
 export function LoginScreen({
@@ -15,7 +15,7 @@ export function LoginScreen({
   onCheckForUpdate,
 }: {
   deviceCode: DeviceCodePrompt | null;
-  onLogin: (extraScopes: string) => Promise<void>;
+  onLogin: (mode: SessionMode, extraScopes: string) => Promise<void>;
   onCancel?: () => Promise<void> | void;
   appVersion: string | null;
   autoCheck: boolean;
@@ -26,6 +26,7 @@ export function LoginScreen({
 }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [mode, setMode] = useState<SessionMode>(loadLastSessionMode);
   const [extraScopes, setExtraScopes] = useState(loadLastExtraScopes);
   const waitingOnMicrosoft = busy || Boolean(deviceCode);
 
@@ -33,7 +34,7 @@ export function LoginScreen({
     setBusy(true);
     setError(null);
     try {
-      await onLogin(extraScopes);
+      await onLogin(mode, extraScopes);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Sign-in failed");
     } finally {
@@ -111,6 +112,37 @@ export function LoginScreen({
           </div>
         ) : null}
 
+        <fieldset className="login-preset">
+          <legend>Session access mode</legend>
+          <label className={mode === "read" ? "is-active" : ""}>
+            <input
+              type="radio"
+              name="sessionMode"
+              value="read"
+              checked={mode === "read"}
+              disabled={waitingOnMicrosoft}
+              onChange={() => setMode("read")}
+            />
+            Read-only (Recommended)
+          </label>
+          <label className={mode === "admin" ? "is-active" : ""}>
+            <input
+              type="radio"
+              name="sessionMode"
+              value="admin"
+              checked={mode === "admin"}
+              disabled={waitingOnMicrosoft}
+              onChange={() => setMode("admin")}
+            />
+            Read &amp; Write (Admin)
+          </label>
+        </fieldset>
+        <p className="login-preset-hint">
+          {mode === "read"
+            ? "Requests only read permissions in Microsoft Graph Command Line Tools. Writing, modifying, and destructive actions are locked down in the UI."
+            : "Requests write-capable delegated permissions to create, update, and manage Intune policies, scripts, and assignments."}
+        </p>
+
         <details className="login-extras-details">
           <summary>Optional extra Graph scopes</summary>
           <label className="login-extras">
@@ -159,8 +191,9 @@ export function LoginScreen({
         ) : null}
 
         <p className="login-note">
-          Tokens use Microsoft Graph Command Line Tools by default. Permissions on the
-          session are whatever Entra issued for that public client.
+          Tokens use Microsoft Graph Command Line Tools by default. In Read-only mode,
+          Axis only requests read scopes. If Entra previously issued write permissions
+          to your tenant, Axis alerts you with a banner and enforces a strict UI lockdown.
         </p>
 
         <AppUpdateControls
