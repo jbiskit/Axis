@@ -34,6 +34,7 @@ pub fn can_delete_graph_object(kind: &str) -> bool {
             | "groupPolicyConfiguration"
             | "deviceConfiguration"
             | "appProtection"
+            | "autopilotDevice"
             | "windowsUpdate:rings"
             | "windowsUpdate:feature"
             | "windowsUpdate:quality"
@@ -55,6 +56,7 @@ fn object_path(kind: &str, id: &str) -> Result<String, GraphError> {
         "enrollmentConfiguration" => "deviceManagement/deviceEnrollmentConfigurations",
         "appProtection" => "deviceAppManagement/managedAppPolicies",
         "autopilotProfile" => "deviceManagement/windowsAutopilotDeploymentProfiles",
+        "autopilotDevice" => "deviceManagement/windowsAutopilotDeviceIdentities",
         "windowsUpdate:feature" => "deviceManagement/windowsFeatureUpdateProfiles",
         "windowsUpdate:quality" => "deviceManagement/windowsQualityUpdateProfiles",
         "windowsUpdate:drivers" => "deviceManagement/windowsDriverUpdateProfiles",
@@ -72,6 +74,67 @@ fn object_path(kind: &str, id: &str) -> Result<String, GraphError> {
         }
     };
     Ok(format!("/{collection}/{id}"))
+}
+
+/// Updates Autopilot device identity properties (group tag, optional display name / user).
+/// Graph: POST …/windowsAutopilotDeviceIdentities/{id}/updateDeviceProperties
+pub async fn update_autopilot_device_properties(
+    access_token: &str,
+    id: &str,
+    group_tag: &str,
+) -> Result<(), GraphError> {
+    let enc = urlencoding::encode(id);
+    let path = format!(
+        "/deviceManagement/windowsAutopilotDeviceIdentities/{enc}/updateDeviceProperties"
+    );
+    GraphClient::new()
+        .post_no_content(
+            access_token,
+            &path,
+            "beta",
+            &json!({ "groupTag": group_tag }),
+        )
+        .await
+}
+
+/// Graph documents a 10-minute cooldown between Autopilot sync triggers (429 if earlier).
+pub const AUTOPILOT_SYNC_COOLDOWN_SECS: u64 = 10 * 60;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowsAutopilotSettings {
+    pub id: Option<String>,
+    pub last_sync_date_time: Option<String>,
+    pub last_manual_sync_trigger_date_time: Option<String>,
+    pub sync_status: Option<String>,
+}
+
+pub async fn fetch_windows_autopilot_settings(
+    access_token: &str,
+) -> Result<WindowsAutopilotSettings, GraphError> {
+    GraphClient::new()
+        .fetch_plain(
+            access_token,
+            "/deviceManagement/windowsAutopilotSettings",
+            "beta",
+        )
+        .await
+}
+
+/// Initiates Autopilot device sync (`POST …/windowsAutopilotSettings/sync`), then re-reads settings.
+/// Graph returns 409 if a sync is already in progress, 429 within the cooldown window.
+pub async fn sync_windows_autopilot_devices(
+    access_token: &str,
+) -> Result<WindowsAutopilotSettings, GraphError> {
+    GraphClient::new()
+        .post_no_content(
+            access_token,
+            "/deviceManagement/windowsAutopilotSettings/sync",
+            "beta",
+            &json!({}),
+        )
+        .await?;
+    fetch_windows_autopilot_settings(access_token).await
 }
 
 pub async fn delete_graph_object(
@@ -158,6 +221,7 @@ mod tests {
         assert!(can_delete_graph_object("configurationPolicy"));
         assert!(can_delete_graph_object("compliancePolicy"));
         assert!(can_delete_graph_object("script:remediation"));
+        assert!(can_delete_graph_object("autopilotDevice"));
         assert!(!can_delete_graph_object("mobileApp"));
         assert!(!can_delete_graph_object("autopilotProfile"));
     }

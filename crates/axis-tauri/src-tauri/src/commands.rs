@@ -1,26 +1,34 @@
 use crate::AppState;
 use axis_sdk::{
     add_settings_to_policy, remove_settings_from_policy, apply_filter_names, apply_group_metadata, assign_object_assignments,
-    assignment_capabilities, collect_managed_device_diagnostics, create_directory_group,
+    assignment_capabilities_for, collect_managed_device_diagnostics, create_directory_group,
+    create_enrollment_platform_restriction,
+    create_enrollment_limit,
     create_compliance_policy, create_policy_with_settings, create_policy_with_template,
     create_tenant_script, delete_graph_object, delete_managed_device, fetch_compliance_policy_status_with_options, fetch_compliance_property_docs, update_compliance_policy,
-    duplicate_graph_object,
-    drafts_from_graph_assignments, fetch_app_protection_policies, fetch_autopilot_devices,
+    duplicate_graph_object, update_autopilot_device_properties, fetch_windows_autopilot_settings,
+    sync_windows_autopilot_devices, WindowsAutopilotSettings,
+    create_autopilot_profile, update_autopilot_profile, CreateAutopilotProfileInput,
+    UpdateAutopilotProfileInput,
+    drafts_from_graph_assignments, normalize_assignment_drafts_for, fetch_app_protection_policies,
+    fetch_autopilot_devices,
     fetch_applied_policy_settings, fetch_autopilot_profiles, fetch_baseline_export_json,
     fetch_baseline_reference_sources, fetch_compliance_policies,
     fetch_configuration_policies, fetch_device_configurations, fetch_e8_baseline_references,
     fetch_configuration_policy_template, list_configuration_policy_templates,
-    fetch_endpoint_security_intents, fetch_enrollment_configurations, fetch_graph_object_detail,
+    fetch_endpoint_security_intents, fetch_enrollment_configurations_filtered, fetch_graph_object_detail,
     fetch_group_policy_configurations, fetch_managed_device_detail, fetch_policy_setting_issues,
     fetch_mobile_apps, fetch_script_run_status, fetch_remediation_scripts, fetch_setting_conflict_details, fetch_store_apps,
     fetch_tenant_scripts, fetch_win32_apps, fetch_windows_update_policies,
     dest_dir_from_save_as, export_selected_graph_objects, export_tenant_pack, PackExportObject,
     PackExportOptions, PackExportProgress, PackExportResult, SelectedExportResult,
+    create_empty_kit, create_local_pack, open_pack_workspace, open_pack_workspace_from_source,
+    write_pack_kit, CreateLocalPackInput, PackKitWriteInput, PackWorkspace, PackKitSummary,
     finalize_snapshot, list_snapshots, prepare_snapshot_export, snapshot_label, snapshot_pack_dir,
     ClientContainerStatus, ClientSnapshotSummary, SnapshotManifest, SNAPSHOT_REPORT_DIR,
     diff_pack_roots, PackDiffReport,
-    apply_restore, list_restore_candidates, plan_restore, RestoreApplyResult, RestoreCandidate,
-    RestoreMode, RestorePlan,
+    apply_kit_apply, apply_restore, list_restore_candidates, plan_kit_apply, plan_restore,
+    KitApplyPlan, KitApplyResult, RestoreApplyResult, RestoreCandidate, RestoreMode, RestorePlan,
     generate_environment_report, EnvironmentReport, EnvironmentReportProgress,
     EnvironmentReportSelection,
     decode_access_token_claims,
@@ -29,17 +37,22 @@ use axis_sdk::{
     reboot_managed_device, remote_lock_managed_device, resolve_directory_groups,
     retire_managed_device, reveal_bitlocker_recovery_key, reveal_laps_credentials,
     rotate_managed_device_laps_password, search_catalog_settings, search_directory_groups,
-    sync_managed_device, update_object_metadata, update_script_content, wipe_managed_device, AppProtectionPolicy,
+    sync_managed_device, update_enrollment_platform_restrictions, update_enrollment_limit,
+    update_object_metadata, update_script_content, wipe_managed_device, AppProtectionPolicy,
     AppliedPolicySettingsLoad, AssignmentCapabilities, AssignmentDraft, AssignmentFilter, AutopilotDevice, AutopilotProfile,
     BaselineReferenceSourceInput, BaselineReferenceSourceLoad, BitLockerRecoveryKeySummary,
     CatalogCategory, CatalogIndexState, CatalogPolicySummary, CatalogSearchResult,
     ConfigurationPolicyTemplateSummary,
     CompliancePolicyStatusReport,
-    CategorySettingsLoad, CreateCompliancePolicyInput, CreateDirectoryGroupInput, CreateTenantScriptInput, CreatedCatalogPolicy, UpdateCompliancePolicyInput,
+    CategorySettingsLoad, CreateCompliancePolicyInput, CreateDirectoryGroupInput,
+    CreateEnrollmentLimitInput, CreateEnrollmentPlatformRestrictionInput, CreateTenantScriptInput,
+    CreatedCatalogPolicy, UpdateCompliancePolicyInput,
     DirectoryAuditEvent, DirectoryGroup, DuplicatedObject,
     E8BaselineReference, E8BaselineSource, GraphObjectDetail, InventoryList, LapsCredentialInfo,
     MobileAppSummary, PolicySettingIssue, RemediationDeviceStatusReport, SettingConflictDetail,
-    SettingsCatalogPlatform, TenantScriptSummary, UpdateObjectMetadataInput, UpdateScriptContentInput, UpdatedObjectMetadata,
+    SettingsCatalogPlatform, TenantScriptSummary, UpdateEnrollmentLimitInput,
+    UpdateEnrollmentPlatformRestrictionsInput,
+    UpdateObjectMetadataInput, UpdateScriptContentInput, UpdatedObjectMetadata,
     WindowsUpdatePolicy, SessionMode,
 };
 use serde::Serialize;
@@ -168,6 +181,94 @@ pub async fn pick_local_pack_folder_cmd(title: Option<String>) -> Result<Option<
             .pick_folder()
             .map(|path| path.to_string_lossy().into_owned())
     })
+    .await
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn open_pack_workspace_cmd(pack_root: String) -> Result<PackWorkspace, String> {
+    open_pack_workspace(&pack_root).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn open_pack_workspace_from_source_cmd(
+    source: BaselineReferenceSourceInput,
+) -> Result<PackWorkspace, String> {
+    open_pack_workspace_from_source(source)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn write_pack_kit_cmd(input: PackKitWriteInput) -> Result<PackKitSummary, String> {
+    write_pack_kit(input).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn create_pack_kit_cmd(
+    pack_root: String,
+    name: Option<String>,
+) -> Result<PackKitSummary, String> {
+    create_empty_kit(&pack_root, name.as_deref().unwrap_or("New kit")).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn create_local_pack_cmd(input: CreateLocalPackInput) -> Result<PackWorkspace, String> {
+    create_local_pack(input).map_err(|error| error.to_string())
+}
+
+const KIT_APPLY_PROGRESS_EVENT: &str = "axis-pack-kit-apply-progress";
+
+#[tauri::command]
+pub async fn plan_pack_kit_apply_cmd(
+    state: State<'_, AppState>,
+    pack_root: String,
+    kit_rel_path: String,
+    mode: String,
+) -> Result<KitApplyPlan, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Err("Sign in to plan applying a kit.".into());
+    };
+    let mode = RestoreMode::parse(&mode).map_err(|error| error.to_string())?;
+    let root = std::path::PathBuf::from(pack_root.trim());
+    if !root.is_dir() {
+        return Err("Local pack folder is required to apply a kit.".into());
+    }
+    plan_kit_apply(&token, &root, kit_rel_path.trim(), mode)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn apply_pack_kit_cmd(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    pack_root: String,
+    kit_rel_path: String,
+    mode: String,
+    keys: Vec<String>,
+) -> Result<KitApplyResult, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Err("Sign in to apply a kit.".into());
+    };
+    let mode = RestoreMode::parse(&mode).map_err(|error| error.to_string())?;
+    let root = std::path::PathBuf::from(pack_root.trim());
+    if !root.is_dir() {
+        return Err("Local pack folder is required to apply a kit.".into());
+    }
+    if keys.is_empty() {
+        return Err("Select at least one object to apply.".into());
+    }
+    apply_kit_apply(
+        &token,
+        &root,
+        kit_rel_path.trim(),
+        mode,
+        &keys,
+        |message| {
+            let _ = app.emit(KIT_APPLY_PROGRESS_EVENT, &message);
+        },
+    )
     .await
     .map_err(|error| error.to_string())
 }
@@ -1154,9 +1255,18 @@ pub async fn fetch_windows_update_policies_cmd(
 #[tauri::command]
 pub async fn fetch_enrollment_configurations_cmd(
     state: State<'_, AppState>,
+    kind: Option<String>,
 ) -> Result<InventoryResponse<CatalogPolicySummary>, String> {
     let token = session_token(&state).await?.unwrap_or_default();
-    with_inventory(&state, fetch_enrollment_configurations(&token)).await
+    let query = kind
+        .as_deref()
+        .and_then(axis_sdk::EnrollmentConfigQuery::parse)
+        .unwrap_or(axis_sdk::EnrollmentConfigQuery::All);
+    with_inventory(
+        &state,
+        fetch_enrollment_configurations_filtered(&token, query),
+    )
+    .await
 }
 
 #[derive(Debug, Serialize)]
@@ -2167,6 +2277,20 @@ pub struct CreateCompliancePolicyResponse {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CreateEnrollmentPlatformRestrictionResponse {
+    pub policy: Option<CatalogPolicySummary>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateEnrollmentLimitResponse {
+    pub policy: Option<CatalogPolicySummary>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CompliancePropertyDocsResponse {
     pub properties: Vec<axis_sdk::CompliancePropertyDoc>,
     pub error: Option<String>,
@@ -2249,6 +2373,109 @@ pub async fn create_compliance_policy_cmd(
 }
 
 #[tauri::command]
+pub async fn create_enrollment_platform_restriction_cmd(
+    state: State<'_, AppState>,
+    input: CreateEnrollmentPlatformRestrictionInput,
+) -> Result<CreateEnrollmentPlatformRestrictionResponse, String> {
+    ensure_write_allowed(&state).await?;
+    let Some(token) = session_token(&state).await? else {
+        return Ok(CreateEnrollmentPlatformRestrictionResponse {
+            policy: None,
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match create_enrollment_platform_restriction(&token, input).await {
+        Ok(policy) => Ok(CreateEnrollmentPlatformRestrictionResponse {
+            policy: Some(policy),
+            error: None,
+        }),
+        Err(error) => Ok(CreateEnrollmentPlatformRestrictionResponse {
+            policy: None,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn create_enrollment_limit_cmd(
+    state: State<'_, AppState>,
+    input: CreateEnrollmentLimitInput,
+) -> Result<CreateEnrollmentLimitResponse, String> {
+    ensure_write_allowed(&state).await?;
+    let Some(token) = session_token(&state).await? else {
+        return Ok(CreateEnrollmentLimitResponse {
+            policy: None,
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match create_enrollment_limit(&token, input).await {
+        Ok(policy) => Ok(CreateEnrollmentLimitResponse {
+            policy: Some(policy),
+            error: None,
+        }),
+        Err(error) => Ok(CreateEnrollmentLimitResponse {
+            policy: None,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateAutopilotProfileResponse {
+    pub profile: Option<AutopilotProfile>,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn create_autopilot_profile_cmd(
+    state: State<'_, AppState>,
+    input: CreateAutopilotProfileInput,
+) -> Result<CreateAutopilotProfileResponse, String> {
+    ensure_write_allowed(&state).await?;
+    let Some(token) = session_token(&state).await? else {
+        return Ok(CreateAutopilotProfileResponse {
+            profile: None,
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match create_autopilot_profile(&token, input).await {
+        Ok(profile) => Ok(CreateAutopilotProfileResponse {
+            profile: Some(profile),
+            error: None,
+        }),
+        Err(error) => Ok(CreateAutopilotProfileResponse {
+            profile: None,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn update_autopilot_profile_cmd(
+    state: State<'_, AppState>,
+    input: UpdateAutopilotProfileInput,
+) -> Result<ActionResponse, String> {
+    ensure_write_allowed(&state).await?;
+    let Some(token) = session_token(&state).await? else {
+        return Ok(ActionResponse {
+            ok: false,
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match update_autopilot_profile(&token, input).await {
+        Ok(()) => Ok(ActionResponse {
+            ok: true,
+            error: None,
+        }),
+        Err(error) => Ok(ActionResponse {
+            ok: false,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[tauri::command]
 pub async fn update_compliance_policy_cmd(
     state: State<'_, AppState>,
     input: UpdateCompliancePolicyInput,
@@ -2261,6 +2488,54 @@ pub async fn update_compliance_policy_cmd(
         });
     };
     match update_compliance_policy(&token, input).await {
+        Ok(()) => Ok(ActionResponse {
+            ok: true,
+            error: None,
+        }),
+        Err(error) => Ok(ActionResponse {
+            ok: false,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn update_enrollment_platform_restrictions_cmd(
+    state: State<'_, AppState>,
+    input: UpdateEnrollmentPlatformRestrictionsInput,
+) -> Result<ActionResponse, String> {
+    ensure_write_allowed(&state).await?;
+    let Some(token) = session_token(&state).await? else {
+        return Ok(ActionResponse {
+            ok: false,
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match update_enrollment_platform_restrictions(&token, input).await {
+        Ok(()) => Ok(ActionResponse {
+            ok: true,
+            error: None,
+        }),
+        Err(error) => Ok(ActionResponse {
+            ok: false,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn update_enrollment_limit_cmd(
+    state: State<'_, AppState>,
+    input: UpdateEnrollmentLimitInput,
+) -> Result<ActionResponse, String> {
+    ensure_write_allowed(&state).await?;
+    let Some(token) = session_token(&state).await? else {
+        return Ok(ActionResponse {
+            ok: false,
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match update_enrollment_limit(&token, input).await {
         Ok(()) => Ok(ActionResponse {
             ok: true,
             error: None,
@@ -2397,6 +2672,110 @@ pub async fn delete_graph_object_cmd(
 }
 
 #[tauri::command]
+pub async fn update_autopilot_device_group_tag_cmd(
+    state: State<'_, AppState>,
+    id: String,
+    group_tag: String,
+) -> Result<ActionResponse, String> {
+    ensure_write_allowed(&state).await?;
+    let Some(token) = session_token(&state).await? else {
+        return Ok(ActionResponse {
+            ok: false,
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match update_autopilot_device_properties(&token, &id, &group_tag).await {
+        Ok(()) => Ok(ActionResponse {
+            ok: true,
+            error: None,
+        }),
+        Err(error) => Ok(ActionResponse {
+            ok: false,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowsAutopilotSettingsResponse {
+    pub settings: Option<WindowsAutopilotSettings>,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn fetch_windows_autopilot_settings_cmd(
+    state: State<'_, AppState>,
+) -> Result<WindowsAutopilotSettingsResponse, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Ok(WindowsAutopilotSettingsResponse {
+            settings: None,
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match fetch_windows_autopilot_settings(&token).await {
+        Ok(settings) => Ok(WindowsAutopilotSettingsResponse {
+            settings: Some(settings),
+            error: None,
+        }),
+        Err(error) => Ok(WindowsAutopilotSettingsResponse {
+            settings: None,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncWindowsAutopilotResponse {
+    pub ok: bool,
+    pub error: Option<String>,
+    pub status: Option<u16>,
+    pub settings: Option<WindowsAutopilotSettings>,
+}
+
+#[tauri::command]
+pub async fn sync_windows_autopilot_devices_cmd(
+    state: State<'_, AppState>,
+) -> Result<SyncWindowsAutopilotResponse, String> {
+    ensure_write_allowed(&state).await?;
+    let Some(token) = session_token(&state).await? else {
+        return Ok(SyncWindowsAutopilotResponse {
+            ok: false,
+            error: Some("Not signed in.".into()),
+            status: None,
+            settings: None,
+        });
+    };
+    match sync_windows_autopilot_devices(&token).await {
+        Ok(settings) => Ok(SyncWindowsAutopilotResponse {
+            ok: true,
+            error: None,
+            status: None,
+            settings: Some(settings),
+        }),
+        Err(error) => {
+            let status = error.status();
+            let settings = fetch_windows_autopilot_settings(&token).await.ok();
+            let message = match status {
+                Some(409) => "An Autopilot sync is already in progress.".into(),
+                Some(429) => {
+                    "Autopilot sync is on cooldown (Graph allows one manual sync every 10 minutes)."
+                        .into()
+                }
+                _ => error.to_string(),
+            };
+            Ok(SyncWindowsAutopilotResponse {
+                ok: false,
+                error: Some(message),
+                status,
+                settings,
+            })
+        }
+    }
+}
+
+#[tauri::command]
 pub async fn lint_script_cmd(
     language: String,
     source: String,
@@ -2527,11 +2906,16 @@ pub async fn load_assignment_workspace_cmd(
     state: State<'_, AppState>,
     kind: String,
     assignments: Vec<Value>,
+    object_odata_type: Option<String>,
 ) -> Result<AssignmentWorkspaceResponse, String> {
-    let capabilities = assignment_capabilities(&kind);
+    let odata = object_odata_type.as_deref();
+    let capabilities = assignment_capabilities_for(&kind, odata);
     let Some(token) = session_token(&state).await? else {
+        let mut drafts =
+            drafts_from_graph_assignments(&assignments, capabilities.supports_intent);
+        normalize_assignment_drafts_for(&kind, odata, &mut drafts);
         return Ok(AssignmentWorkspaceResponse {
-            drafts: drafts_from_graph_assignments(&assignments, capabilities.supports_intent),
+            drafts,
             filters: Vec::new(),
             capabilities,
             filters_error: Some("Not signed in.".into()),
@@ -2540,6 +2924,7 @@ pub async fn load_assignment_workspace_cmd(
     };
 
     let mut drafts = drafts_from_graph_assignments(&assignments, capabilities.supports_intent);
+    normalize_assignment_drafts_for(&kind, odata, &mut drafts);
     let group_ids: Vec<String> = drafts
         .iter()
         .filter_map(|draft| draft.group_id.clone())

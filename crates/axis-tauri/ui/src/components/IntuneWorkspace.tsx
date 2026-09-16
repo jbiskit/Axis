@@ -45,6 +45,28 @@ import {
 } from "../lib/scriptKinds";
 import { withTransientItem } from "../lib/duplicateObject";
 import {
+  ENROLLMENT_AUTOPILOT_PATH,
+  ENROLLMENT_AUTOPILOT_DEVICES_PATH,
+  ENROLLMENT_AUTOPILOT_PROFILES_PATH,
+  ENROLLMENT_ESP_PATH,
+  ENROLLMENT_LIMIT_RESTRICTIONS_PATH,
+  ENROLLMENT_PLATFORM_RESTRICTIONS_PATH,
+  ENROLLMENT_WINDOWS_HELLO_PATH,
+  enrollmentQueryKindFromPath,
+  type EnrollmentConfigQueryKind,
+} from "../lib/enrollment";
+import {
+  autopilotDeviceStateFilterOptions,
+  autopilotDeviceTagFilterOptions,
+  autopilotJoinTypeLabel,
+  autopilotProfileJoinFilterOptions,
+  autopilotSyncCooldownRemainingMs,
+  autopilotSyncStatusLabel,
+  formatAutopilotSyncCooldown,
+  matchesAutopilotDeviceFilters,
+  matchesAutopilotProfileFilters,
+} from "../lib/autopilotProfile";
+import {
   fetchAppProtectionPolicies,
   fetchAutopilotDevices,
   fetchAutopilotProfiles,
@@ -57,6 +79,7 @@ import {
   fetchGroupPolicyConfigurations,
   createSettingsCatalogPolicy,
   exportTenantPack,
+  fetchWindowsAutopilotSettings,
   openExternalUrl,
   pickLocalPackFolder,
   fetchStoreApps,
@@ -64,6 +87,8 @@ import {
   fetchMobileApps,
   fetchWindowsUpdatePolicies,
   listConfigurationPolicyTemplates,
+  syncWindowsAutopilotDevices,
+  type WindowsAutopilotSettings,
 } from "../lib/tauri";
 import { catalogPolicyProfileName } from "../lib/catalogPolicyProfile";
 import {
@@ -105,9 +130,13 @@ import { SettingsCatalogWorkbench } from "./SettingsCatalogWorkbench";
 import { TenantOverview } from "./TenantOverview";
 import { WriteActivityView } from "./WriteActivityView";
 import { EnvironmentReportView } from "./EnvironmentReportView";
+import { PacksKitsView } from "./PacksKitsView";
 import { GraphObjectInspector } from "./workbench/GraphObjectInspector";
 import { PageHeader, SignalCard } from "./ui/PageChrome";
 import { CreateCompliancePolicyDialog } from "./workbench/CreateCompliancePolicyDialog";
+import { CreateEnrollmentRestrictionDialog } from "./workbench/CreateEnrollmentRestrictionDialog";
+import { CreateEnrollmentLimitDialog } from "./workbench/CreateEnrollmentLimitDialog";
+import { CreateAutopilotProfileDialog } from "./workbench/CreateAutopilotProfileDialog";
 import { CreateEndpointSecurityPolicyDialog } from "./workbench/CreateEndpointSecurityPolicyDialog";
 import { CreateScriptDialog, type ScriptFamily } from "./workbench/CreateScriptDialog";
 import { DocumentTabs, InspectorWithDocumentTabs } from "./workbench/DocumentTabs";
@@ -124,6 +153,7 @@ import {
   SelectCheckbox,
   useCheckedIds,
 } from "./workbench/PolicyBulkAssign";
+import { AutopilotGroupTagDialog } from "./workbench/AutopilotGroupTagDialog";
 import {
   CapabilityStub,
   CompactObjectList,
@@ -204,7 +234,14 @@ export function IntuneWorkspace({
   const loadAutopilotProfiles = useCallback(() => fetchAutopilotProfiles(), []);
   const loadWu = useCallback(() => fetchWindowsUpdatePolicies(), []);
   const loadMam = useCallback(() => fetchAppProtectionPolicies(), []);
-  const loadEnrollment = useCallback(() => fetchEnrollmentConfigurations(), []);
+  const loadEnrollment = useCallback(() => {
+    const kind = enrollmentQueryKindFromPath(pathname);
+    return fetchEnrollmentConfigurations(kind);
+  }, [pathname]);
+  const [createEnrollmentOpen, setCreateEnrollmentOpen] = useState(false);
+  const [createEnrollmentLimitOpen, setCreateEnrollmentLimitOpen] = useState(false);
+  const enrollmentListActive = Boolean(enrollmentQueryKindFromPath(pathname));
+  const enrollment = useInventory(loadEnrollment, signedIn && enrollmentListActive, signedIn);
 
   const appsInventory =
     pathname === "/intune/apps" ||
@@ -241,12 +278,12 @@ export function IntuneWorkspace({
   );
   const autopilotDevices = useInventory(
     loadAutopilotDevices,
-    signedIn && pathname.includes("autopilot"),
+    signedIn && pathname.startsWith(ENROLLMENT_AUTOPILOT_DEVICES_PATH),
     signedIn,
   );
   const autopilotProfiles = useInventory(
     loadAutopilotProfiles,
-    signedIn && pathname.includes("autopilot"),
+    signedIn && pathname.startsWith(ENROLLMENT_AUTOPILOT_PROFILES_PATH),
     signedIn,
   );
   const windowsUpdate = useInventory(
@@ -255,11 +292,6 @@ export function IntuneWorkspace({
     signedIn,
   );
   const mam = useInventory(loadMam, signedIn && pathname.includes("protection"), signedIn);
-  const enrollment = useInventory(
-    loadEnrollment,
-    signedIn && pathname === "/intune/enrollment/windows",
-    signedIn,
-  );
 
   if (pathname === "/intune" || pathname === "/intune/") {
     return (
@@ -342,47 +374,184 @@ export function IntuneWorkspace({
   }
 
   if (pathname.startsWith("/intune/enrollment")) {
-    if (pathname === "/intune/enrollment/windows") {
+    // Legacy bookmarks → platform-driven Windows Autopilot routes.
+    if (pathname === "/intune/enrollment/autopilot" || pathname === "/intune/enrollment/windows") {
       return (
-        <NamedPolicyList
-          eyebrow="Enrollment"
-          title="Windows enrollment"
-          description="Device enrollment configurations from Graph."
-          items={enrollment.items}
-          loading={enrollment.loading}
-          error={enrollment.error}
-          truncated={enrollment.truncated}
-          selectedId={search.get("policy")}
-          onSelect={(id) => navigate(hrefWithParam(pathname, search, "policy", id))}
-          onRefresh={() => void enrollment.reload()}
-          objectKind="enrollmentConfiguration"
-          incomplete="ESP / enrollment profile authoring is not ported. Live Graph object, assignments, and JSON are shown."
+        <EnrollmentPathRedirect
+          to={(() => {
+            const next = new URLSearchParams(search);
+            const query = next.toString();
+            return query
+              ? `${ENROLLMENT_AUTOPILOT_PROFILES_PATH}?${query}`
+              : ENROLLMENT_AUTOPILOT_PROFILES_PATH;
+          })()}
         />
       );
     }
+
+    if (pathname === ENROLLMENT_AUTOPILOT_PATH) {
+      const next = new URLSearchParams(search);
+      const deviceId = next.get("autopilot");
+      const profileId = next.get("profile");
+      if (deviceId) {
+        next.delete("profile");
+        const query = next.toString();
+        return (
+          <EnrollmentPathRedirect
+            to={
+              query
+                ? `${ENROLLMENT_AUTOPILOT_DEVICES_PATH}?${query}`
+                : ENROLLMENT_AUTOPILOT_DEVICES_PATH
+            }
+          />
+        );
+      }
+      if (profileId) {
+        next.delete("autopilot");
+        const query = next.toString();
+        return (
+          <EnrollmentPathRedirect
+            to={
+              query
+                ? `${ENROLLMENT_AUTOPILOT_PROFILES_PATH}?${query}`
+                : ENROLLMENT_AUTOPILOT_PROFILES_PATH
+            }
+          />
+        );
+      }
+      return <EnrollmentPathRedirect to={ENROLLMENT_AUTOPILOT_PROFILES_PATH} />;
+    }
+
+    if (pathname === ENROLLMENT_AUTOPILOT_DEVICES_PATH) {
+      return (
+        <AutopilotDevicesView
+          devices={autopilotDevices}
+          selectedId={search.get("autopilot")}
+          onSelect={(id) =>
+            navigate(hrefWithParam(ENROLLMENT_AUTOPILOT_DEVICES_PATH, search, "autopilot", id))
+          }
+        />
+      );
+    }
+
+    if (pathname === ENROLLMENT_AUTOPILOT_PROFILES_PATH) {
+      return (
+        <AutopilotProfilesView
+          profiles={autopilotProfiles}
+          selectedId={search.get("profile")}
+          onSelect={(id) =>
+            navigate(hrefWithParam(ENROLLMENT_AUTOPILOT_PROFILES_PATH, search, "profile", id))
+          }
+        />
+      );
+    }
+
+    const enrollmentList: {
+      kind: EnrollmentConfigQueryKind;
+      title: string;
+      description: string;
+      incomplete?: string;
+    } | null =
+      pathname === ENROLLMENT_ESP_PATH
+        ? {
+            kind: "esp",
+            title: "Enrollment Status Page",
+            description: "Windows Autopilot Enrollment Status Page configurations.",
+            incomplete:
+              "ESP authoring is not ported. Live Graph object, assignments, and JSON are shown.",
+          }
+        : pathname === ENROLLMENT_WINDOWS_HELLO_PATH
+          ? {
+              kind: "windowsHello",
+              title: "Windows Hello for Business",
+              description: "Windows Hello for Business enrolment configurations.",
+              incomplete:
+                "WHfB enrolment authoring is not ported. Live Graph object, assignments, and JSON are shown.",
+            }
+          : pathname === ENROLLMENT_PLATFORM_RESTRICTIONS_PATH
+            ? {
+                kind: "platformRestrictions",
+                title: "Device platform restrictions",
+                description:
+                  "Tenant-wide restrictions that control which platforms and ownership types can enrol. Loaded with the Intune portal filter SinglePlatformRestriction (default + per-platform).",
+              }
+            : pathname === ENROLLMENT_LIMIT_RESTRICTIONS_PATH
+              ? {
+                  kind: "limitRestrictions",
+                  title: "Device limit restrictions",
+                  description:
+                    "Tenant-wide limits on how many devices a user can enrol (1–15).",
+                }
+              : null;
+
+    if (enrollmentList) {
+      const canCreatePlatform = enrollmentList.kind === "platformRestrictions";
+      const canCreateLimit = enrollmentList.kind === "limitRestrictions";
+      const canCreate = canCreatePlatform || canCreateLimit;
+      return (
+        <>
+          <NamedPolicyList
+            eyebrow="Enrollment"
+            title={enrollmentList.title}
+            description={enrollmentList.description}
+            items={enrollment.items}
+            loading={enrollment.loading}
+            error={enrollment.error}
+            truncated={enrollment.truncated}
+            selectedId={search.get("policy")}
+            onSelect={(id) => navigate(hrefWithParam(pathname, search, "policy", id))}
+            onRefresh={() => void enrollment.reload()}
+            objectKind="enrollmentConfiguration"
+            incomplete={enrollmentList.incomplete}
+            defaultSortKey="priority"
+            showPriority
+            showDeviceLimit={canCreateLimit}
+            onCreate={
+              canCreate
+                ? () =>
+                    canCreateLimit
+                      ? setCreateEnrollmentLimitOpen(true)
+                      : setCreateEnrollmentOpen(true)
+                : undefined
+            }
+          />
+          {canCreatePlatform ? (
+            <CreateEnrollmentRestrictionDialog
+              open={createEnrollmentOpen}
+              onClose={() => setCreateEnrollmentOpen(false)}
+              onCreated={(policy) => {
+                setCreateEnrollmentOpen(false);
+                const next = new URLSearchParams(search);
+                next.set("policy", policy.id);
+                navigate(`${pathname}?${next.toString()}`);
+                void enrollment.reload();
+              }}
+            />
+          ) : null}
+          {canCreateLimit ? (
+            <CreateEnrollmentLimitDialog
+              open={createEnrollmentLimitOpen}
+              onClose={() => setCreateEnrollmentLimitOpen(false)}
+              onCreated={(policy) => {
+                setCreateEnrollmentLimitOpen(false);
+                const next = new URLSearchParams(search);
+                next.set("policy", policy.id);
+                navigate(`${pathname}?${next.toString()}`);
+                void enrollment.reload();
+              }}
+            />
+          ) : null}
+        </>
+      );
+    }
+
     return (
-      <AutopilotWorkbench
-        devices={autopilotDevices}
-        profiles={autopilotProfiles}
-        selectedDevice={search.get("autopilot")}
-        selectedProfile={search.get("profile")}
-        onSelectDevice={(id) => {
-          const next = new URLSearchParams(search);
-          if (id) next.set("autopilot", id);
-          else next.delete("autopilot");
-          next.delete("profile");
-          const query = next.toString();
-          navigate(query ? `/intune/enrollment/autopilot?${query}` : "/intune/enrollment/autopilot");
-        }}
-        onSelectProfile={(id) => {
-          const next = new URLSearchParams(search);
-          if (id) next.set("profile", id);
-          else next.delete("profile");
-          next.delete("autopilot");
-          const query = next.toString();
-          navigate(query ? `/intune/enrollment/autopilot?${query}` : "/intune/enrollment/autopilot");
-        }}
-      />
+      <section className="axis-panel axis-panel-padded">
+        <PageHeader
+          title="Enrollment"
+          description="Choose a platform under Enrollment, or open tenant Restrictions for platform and device-limit rules."
+        />
+      </section>
     );
   }
 
@@ -584,6 +753,10 @@ export function IntuneWorkspace({
         onRefresh={() => void windowsUpdate.reload()}
       />
     );
+  }
+
+  if (pathname === "/intune/packs") {
+    return <PacksKitsView />;
   }
 
   if (pathname === "/intune/baselines" || pathname === "/intune/templates") {
@@ -1397,6 +1570,17 @@ function EndpointSecurityBlade({
   );
 }
 
+function EnrollmentPathRedirect({ to }: { to: string }) {
+  useEffect(() => {
+    navigate(to);
+  }, [to]);
+  return (
+    <p className="muted" style={{ margin: "1rem" }}>
+      Redirecting…
+    </p>
+  );
+}
+
 function NamedPolicyList({
   eyebrow,
   title,
@@ -1413,6 +1597,9 @@ function NamedPolicyList({
   createFamily,
   templateFamily,
   onCreate,
+  defaultSortKey = "name",
+  showPriority = false,
+  showDeviceLimit = false,
 }: {
   eyebrow: string;
   title: string;
@@ -1431,10 +1618,16 @@ function NamedPolicyList({
   templateFamily?: string;
   /** When provided, show a primary "Create" action (template-backed lists). */
   onCreate?: () => void;
+  /** Initial column sort (enrollment blades use priority). */
+  defaultSortKey?: CatalogPolicySortKey;
+  /** Show Graph priority instead of Settings count (enrollment configs). */
+  showPriority?: boolean;
+  /** Show Graph device limit (enrollment limit configs; uses settingCount). */
+  showDeviceLimit?: boolean;
 }) {
   const { query, setQuery, assignedFilter, setAssignedFilter, platformFilter, setPlatformFilter } =
     useListSearchState();
-  const { sort, toggle: toggleSort } = useColumnSort<CatalogPolicySortKey>("name");
+  const { sort, toggle: toggleSort } = useColumnSort<CatalogPolicySortKey>(defaultSortKey);
   const [overlay, setOverlay] = useState<CatalogPolicySummary | null>(null);
   const [creating, setCreating] = useState(false);
   const [templates, setTemplates] = useState<ConfigurationPolicyTemplateSummary[] | null>(null);
@@ -1646,7 +1839,14 @@ function NamedPolicyList({
                       <SortableTh column="profile" label="Profile" sort={sort} onSort={toggleSort} />
                     ) : null}
                     <SortableTh column="platform" label="Platform" sort={sort} onSort={toggleSort} />
-                    <SortableTh column="settings" label="Settings" sort={sort} onSort={toggleSort} />
+                    {showPriority ? (
+                      <SortableTh column="priority" label="Priority" sort={sort} onSort={toggleSort} />
+                    ) : null}
+                    {showDeviceLimit ? (
+                      <SortableTh column="settings" label="Device limit" sort={sort} onSort={toggleSort} />
+                    ) : !showPriority ? (
+                      <SortableTh column="settings" label="Settings" sort={sort} onSort={toggleSort} />
+                    ) : null}
                     <SortableTh column="assigned" label="Assigned" sort={sort} onSort={toggleSort} />
                     <SortableTh column="modified" label="Last modified" sort={sort} onSort={toggleSort} />
                   </tr>
@@ -1669,7 +1869,14 @@ function NamedPolicyList({
                       <td>{item.name}</td>
                       {showProfile ? <td className="muted">{profileName(item)}</td> : null}
                       <td className="muted">{item.platforms ?? "—"}</td>
-                      <td className="muted">{item.settingCount ?? "—"}</td>
+                      {showPriority ? (
+                        <td className="muted">{item.priority ?? "—"}</td>
+                      ) : null}
+                      {showDeviceLimit ? (
+                        <td className="muted">{item.settingCount ?? "—"}</td>
+                      ) : !showPriority ? (
+                        <td className="muted">{item.settingCount ?? "—"}</td>
+                      ) : null}
                       <td className="muted">{item.isAssigned ? "Yes" : "No"}</td>
                       <td className="muted">{formatRelative(item.lastModifiedDateTime)}</td>
                     </tr>
@@ -2352,97 +2559,470 @@ function ScriptsWorkbench({
   );
 }
 
-function AutopilotWorkbench({
+function autopilotProfileJoinLabel(item: AutopilotProfile): string {
+  if (item.deviceJoinType === "hybrid") return "Hybrid Microsoft Entra joined";
+  if (item.deviceJoinType === "entra") return "Microsoft Entra joined";
+  return autopilotJoinTypeLabel(item.odataType);
+}
+
+function AutopilotDevicesView({
   devices,
-  profiles,
-  selectedDevice,
-  selectedProfile,
-  onSelectDevice,
-  onSelectProfile,
+  selectedId,
+  onSelect,
 }: {
   devices: ReturnType<typeof useInventory<import("../types/inventory").AutopilotDevice>>;
-  profiles: ReturnType<typeof useInventory<import("../types/inventory").AutopilotProfile>>;
-  selectedDevice: string | null;
-  selectedProfile: string | null;
-  onSelectDevice: (id: string) => void;
-  onSelectProfile: (id: string) => void;
+  selectedId: string | null;
+  onSelect: (id: string) => void;
 }) {
-  const [profileOverlay, setProfileOverlay] = useState<AutopilotProfile | null>(null);
-  const profileItems = useMemo(
-    () => withTransientItem(profiles.items, profileOverlay),
-    [profiles.items, profileOverlay],
+  const { writeDisabled } = useWriteGate();
+  const { query, setQuery } = useListSearchState();
+  const [stateFilter, setStateFilter] = useState("all");
+  const [tagFilter, setTagFilter] = useState("all");
+  const [groupTagOpen, setGroupTagOpen] = useState(false);
+  const [autopilotSettings, setAutopilotSettings] = useState<WindowsAutopilotSettings | null>(null);
+  const [syncBusy, setSyncBusy] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const { sort, toggle } = useColumnSort<"serial" | "tag" | "state" | "model">("serial");
+
+  const reloadSettings = useCallback(async () => {
+    try {
+      const response = await fetchWindowsAutopilotSettings();
+      if (response.settings) setAutopilotSettings(response.settings);
+    } catch {
+      /* ignore — sync controls degrade gracefully */
+    }
+  }, []);
+
+  useEffect(() => {
+    void reloadSettings();
+  }, [reloadSettings]);
+
+  const cooldownMs = autopilotSyncCooldownRemainingMs(
+    autopilotSettings?.lastManualSyncTriggerDateTime,
+    nowMs,
   );
-  const { sort: deviceSort, toggle: toggleDeviceSort } = useColumnSort<"serial" | "tag" | "state">("serial");
-  const { sort: profileSort, toggle: toggleProfileSort } = useColumnSort<"name" | "modified">("name");
-  const sortedDevices = useMemo(
+  const syncInProgress =
+    (autopilotSettings?.syncStatus ?? "").trim().toLowerCase() === "inprogress";
+  const syncOnCooldown = cooldownMs > 0;
+
+  useEffect(() => {
+    if (!syncOnCooldown && !syncInProgress) return;
+    const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [syncOnCooldown, syncInProgress]);
+
+  useEffect(() => {
+    if (!syncInProgress) return;
+    const poll = window.setInterval(() => void reloadSettings(), 5000);
+    return () => window.clearInterval(poll);
+  }, [syncInProgress, reloadSettings]);
+
+  async function runSync() {
+    setSyncBusy(true);
+    setSyncError(null);
+    try {
+      const response = await syncWindowsAutopilotDevices();
+      const triggeredAt = new Date().toISOString();
+      if (response.settings || response.ok) {
+        setAutopilotSettings((current) => ({
+          ...current,
+          ...response.settings,
+          lastManualSyncTriggerDateTime:
+            response.settings?.lastManualSyncTriggerDateTime ??
+            (response.ok ? triggeredAt : current?.lastManualSyncTriggerDateTime),
+          syncStatus:
+            response.settings?.syncStatus ??
+            (response.ok ? "inProgress" : current?.syncStatus),
+        }));
+      }
+      setNowMs(Date.now());
+      if (!response.ok) {
+        setSyncError(response.error ?? "Autopilot sync failed.");
+      } else {
+        void devices.reload();
+      }
+    } catch (err) {
+      setSyncError(err instanceof Error ? err.message : "Autopilot sync failed.");
+    } finally {
+      setSyncBusy(false);
+    }
+  }
+
+  const syncStatusText = autopilotSyncStatusLabel(autopilotSettings?.syncStatus);
+  const syncHint = syncOnCooldown
+    ? `Sync cooldown ${formatAutopilotSyncCooldown(cooldownMs)}`
+    : syncInProgress
+      ? "Sync in progress…"
+      : autopilotSettings?.lastSyncDateTime
+        ? `Last sync ${formatRelative(autopilotSettings.lastSyncDateTime)}`
+        : syncStatusText;
+
+  const syncControls = (
+    <>
+      {syncHint ? (
+        <span className="muted" style={{ fontSize: "0.75rem", alignSelf: "center" }} title={syncHint}>
+          {syncHint}
+        </span>
+      ) : null}
+      <WriteActionButton
+        type="button"
+        className="axis-btn axis-btn-primary"
+        disabled={writeDisabled || syncBusy || syncOnCooldown || syncInProgress}
+        title={
+          syncOnCooldown
+            ? `Graph allows one manual sync every 10 minutes. Available in ${formatAutopilotSyncCooldown(cooldownMs)}.`
+            : syncInProgress
+              ? "An Autopilot sync is already running."
+              : "Sync Autopilot devices from Store for Business and other portals"
+        }
+        onClick={() => void runSync()}
+      >
+        {syncBusy ? "Starting sync…" : syncOnCooldown ? `Sync (${formatAutopilotSyncCooldown(cooldownMs)})` : "Sync"}
+      </WriteActionButton>
+    </>
+  );
+
+  const stateOptions = useMemo(
+    () => autopilotDeviceStateFilterOptions(devices.items),
+    [devices.items],
+  );
+  const tagOptions = useMemo(
+    () => autopilotDeviceTagFilterOptions(devices.items),
+    [devices.items],
+  );
+  const listFilters = useMemo(
+    () => [
+      {
+        label: "State",
+        value: stateFilter,
+        onChange: setStateFilter,
+        options: stateOptions,
+      },
+      {
+        label: "Group tag",
+        value: tagFilter,
+        onChange: setTagFilter,
+        options: tagOptions,
+      },
+    ],
+    [stateFilter, tagFilter, stateOptions, tagOptions],
+  );
+  const filtered = useMemo(
     () =>
-      sortRows(devices.items, deviceSort.dir, (a, b) => {
+      devices.items.filter((item) =>
+        matchesAutopilotDeviceFilters(item, query, stateFilter, tagFilter),
+      ),
+    [devices.items, query, stateFilter, tagFilter],
+  );
+  const sorted = useMemo(
+    () =>
+      sortRows(filtered, sort.dir, (a, b) => {
         const aName = a.serialNumber ?? a.displayName ?? a.id;
         const bName = b.serialNumber ?? b.displayName ?? b.id;
-        if (deviceSort.key === "tag") return compareText(a.groupTag, b.groupTag) || compareText(aName, bName);
-        if (deviceSort.key === "state") return compareText(a.enrollmentState, b.enrollmentState) || compareText(aName, bName);
+        if (sort.key === "tag") return compareText(a.groupTag, b.groupTag) || compareText(aName, bName);
+        if (sort.key === "state") {
+          return compareText(a.enrollmentState, b.enrollmentState) || compareText(aName, bName);
+        }
+        if (sort.key === "model") {
+          return (
+            compareText(a.manufacturer, b.manufacturer) ||
+            compareText(a.model, b.model) ||
+            compareText(aName, bName)
+          );
+        }
         return compareText(aName, bName) || compareText(a.id, b.id);
       }),
-    [deviceSort, devices.items],
+    [filtered, sort],
   );
-  const sortedProfiles = useMemo(
+  const filteredIds = useMemo(() => sorted.map((item) => item.id), [sorted]);
+  const selection = useCheckedIds(filteredIds);
+  const checkedDevices = sorted.filter((item) => selection.checkedIds.has(item.id));
+  const deviceTitle = (item: (typeof sorted)[number]) =>
+    item.serialNumber ?? item.displayName ?? item.id;
+  const bulkDelete = (
+    <BulkListActions
+      targets={checkedDevices.map((item) => ({
+        id: item.id,
+        title: deviceTitle(item),
+        kind: "autopilotDevice",
+      }))}
+      onDeleted={(deleted) => {
+        if (deleted.some((target) => target.id === selectedId)) onSelect("");
+        selection.clear();
+        void devices.reload();
+      }}
+    />
+  );
+  const sharedTag =
+    checkedDevices.length === 1 ? (checkedDevices[0]?.groupTag ?? "") : "";
+  const selected = devices.items.find((item) => item.id === selectedId);
+  const countLabel = `${filtered.length} of ${devices.items.length}`;
+  return (
+    <>
+    <WorkspaceSplit
+      inspectorPrimary={Boolean(selected)}
+      master={
+        <ObjectListMenuHost
+          onDeleted={(target) => {
+            if (selectedId === target.id) onSelect("");
+            void devices.reload();
+          }}
+        >
+          {selected ? (
+            <div className="stack">
+              <BulkAssignBar
+                count={checkedDevices.length}
+                editLabel="Update group tag"
+                editHint="Set the same group tag on every selected Autopilot device"
+                onEdit={() => setGroupTagOpen(true)}
+                onClear={selection.clear}
+                extra={bulkDelete}
+              />
+              {syncError ? <div className="axis-alert axis-alert-danger">{syncError}</div> : null}
+              <div className="device-list-compact">
+                <CompactObjectList
+                  title="Devices"
+                  objectKind="autopilotDevice"
+                  items={sorted.map((item) => ({
+                    id: item.id,
+                    title: deviceTitle(item),
+                    meta: [item.groupTag, item.enrollmentState].filter(Boolean).join(" · "),
+                  }))}
+                  selectedId={selectedId}
+                  onSelect={onSelect}
+                  onRefresh={() => void devices.reload()}
+                  loading={devices.loading}
+                  error={devices.error}
+                  query={query}
+                  onQueryChange={setQuery}
+                  countLabel={countLabel}
+                  searchPlaceholder="Serial, tag, model, state, user…"
+                  filters={listFilters}
+                  checkedIds={selection.checkedIds}
+                  onToggleChecked={selection.toggle}
+                  allSelected={selection.allSelected}
+                  onToggleAll={selection.toggleAll}
+                  selectAllIndeterminate={checkedDevices.length > 0 && !selection.allSelected}
+                  selectAllDisabled={sorted.length === 0}
+                  selectAllLabel="Select all filtered Autopilot devices"
+                  actions={syncControls}
+                />
+              </div>
+            </div>
+          ) : (
+            <div className="stack">
+              <PageHeader
+                eyebrow="Enrollment · Autopilot"
+                title="Devices"
+                description="Windows Autopilot hardware identities registered in this tenant."
+                onRefresh={() => void devices.reload()}
+                refreshing={devices.loading}
+                actions={
+                  <>
+                    {syncControls}
+                    <button
+                      type="button"
+                      className="axis-btn"
+                      onClick={() => void devices.reload()}
+                      disabled={devices.loading}
+                    >
+                      {devices.loading ? "Refreshing…" : "Refresh"}
+                    </button>
+                  </>
+                }
+              />
+              {devices.error ? (
+                <div className="axis-alert axis-alert-danger">{devices.error}</div>
+              ) : null}
+              {syncError ? <div className="axis-alert axis-alert-danger">{syncError}</div> : null}
+              <BulkAssignBar
+                count={checkedDevices.length}
+                editLabel="Update group tag"
+                editHint="Set the same group tag on every selected Autopilot device"
+                onEdit={() => setGroupTagOpen(true)}
+                onClear={selection.clear}
+                extra={bulkDelete}
+              />
+              <SearchableTable
+                query={query}
+                onQueryChange={setQuery}
+                countLabel={countLabel}
+                placeholder="Serial, tag, model, state, user…"
+                filters={listFilters}
+              >
+                <table className="axis-table">
+                  <thead>
+                    <tr>
+                      <th className="axis-table-check">
+                        <SelectCheckbox
+                          checked={selection.allSelected}
+                          indeterminate={checkedDevices.length > 0 && !selection.allSelected}
+                          disabled={sorted.length === 0}
+                          label="Select all filtered Autopilot devices"
+                          onChange={selection.toggleAll}
+                        />
+                      </th>
+                      <SortableTh column="serial" label="Serial" sort={sort} onSort={toggle} />
+                      <SortableTh column="tag" label="Group tag" sort={sort} onSort={toggle} />
+                      <SortableTh column="model" label="Model" sort={sort} onSort={toggle} />
+                      <SortableTh column="state" label="State" sort={sort} onSort={toggle} />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sorted.map((item) => (
+                      <tr
+                        key={item.id}
+                        className={`row-link${selectedId === item.id ? " selected" : ""}`}
+                        onClick={() => onSelect(item.id)}
+                        {...listTargetProps(item.id, deviceTitle(item), "autopilotDevice")}
+                      >
+                        <td className="axis-table-check">
+                          <SelectCheckbox
+                            checked={selection.checkedIds.has(item.id)}
+                            label={`Select ${deviceTitle(item)}`}
+                            onChange={() => selection.toggle(item.id)}
+                          />
+                        </td>
+                        <td>{deviceTitle(item)}</td>
+                        <td className="muted">{item.groupTag ?? "—"}</td>
+                        <td className="muted">
+                          {[item.manufacturer, item.model].filter(Boolean).join(" ") || "—"}
+                        </td>
+                        <td className="muted">{item.enrollmentState ?? "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {!devices.loading && sorted.length === 0 ? (
+                  <p className="muted" style={{ padding: "1rem" }}>
+                    {query.trim() || stateFilter !== "all" || tagFilter !== "all"
+                      ? "No matching Autopilot devices."
+                      : "No Autopilot devices."}
+                  </p>
+                ) : null}
+              </SearchableTable>
+            </div>
+          )}
+        </ObjectListMenuHost>
+      }
+      inspector={
+        selected ? (
+          <GraphObjectInspector
+            key={selected.id}
+            kind="autopilotDevice"
+            id={selected.id}
+            fallbackTitle={deviceTitle(selected)}
+            incomplete="Profile assignment writes are not in this pass. Use the list to update group tags or delete devices in bulk."
+            onClose={() => onSelect("")}
+          />
+        ) : (
+          <InspectorEmpty label="Select an Autopilot device to inspect it here." />
+        )
+      }
+    />
+    <AutopilotGroupTagDialog
+      open={groupTagOpen}
+      targets={checkedDevices.map((item) => ({
+        id: item.id,
+        title: deviceTitle(item),
+      }))}
+      initialTag={sharedTag}
+      onClose={() => setGroupTagOpen(false)}
+      onSaved={() => {
+        void devices.reload();
+        selection.clear();
+      }}
+    />
+    </>
+  );
+}
+
+function AutopilotProfilesView({
+  profiles,
+  selectedId,
+  onSelect,
+}: {
+  profiles: ReturnType<typeof useInventory<import("../types/inventory").AutopilotProfile>>;
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+}) {
+  const [overlay, setOverlay] = useState<AutopilotProfile | null>(null);
+  const [creating, setCreating] = useState(false);
+  const { query, setQuery } = useListSearchState();
+  const [joinFilter, setJoinFilter] = useState("all");
+  const items = useMemo(
+    () => withTransientItem(profiles.items, overlay),
+    [profiles.items, overlay],
+  );
+  const joinOptions = useMemo(() => autopilotProfileJoinFilterOptions(items), [items]);
+  const listFilters = useMemo(
+    () => [
+      {
+        label: "Join type",
+        value: joinFilter,
+        onChange: setJoinFilter,
+        options: joinOptions,
+      },
+    ],
+    [joinFilter, joinOptions],
+  );
+  const filtered = useMemo(
     () =>
-      sortRows(profileItems, profileSort.dir, (a, b) => {
-        if (profileSort.key === "modified") {
-          return compareIso(a.lastModifiedDateTime, b.lastModifiedDateTime) || compareText(a.displayName, b.displayName);
+      items.filter((item) =>
+        matchesAutopilotProfileFilters(
+          item,
+          query,
+          joinFilter,
+          autopilotProfileJoinLabel(item),
+        ),
+      ),
+    [items, query, joinFilter],
+  );
+  const { sort, toggle } = useColumnSort<"name" | "join" | "modified">("name");
+  const sorted = useMemo(
+    () =>
+      sortRows(filtered, sort.dir, (a, b) => {
+        if (sort.key === "modified") {
+          return (
+            compareIso(a.lastModifiedDateTime, b.lastModifiedDateTime) ||
+            compareText(a.displayName, b.displayName)
+          );
+        }
+        if (sort.key === "join") {
+          return (
+            compareText(autopilotProfileJoinLabel(a), autopilotProfileJoinLabel(b)) ||
+            compareText(a.displayName, b.displayName)
+          );
         }
         return compareText(a.displayName, b.displayName) || compareText(a.id, b.id);
       }),
-    [profileItems, profileSort],
+    [filtered, sort],
   );
-  const device = devices.items.find((item) => item.id === selectedDevice);
-  const profile = profileItems.find((item) => item.id === selectedProfile);
-  const selected = Boolean(device || profile);
-  const lists = (
-    <>
-      <CompactObjectList
-        title="Devices"
-        items={sortedDevices.map((item) => ({
-          id: item.id,
-          title: item.serialNumber ?? item.displayName ?? item.id,
-          meta: [item.groupTag, item.enrollmentState].filter(Boolean).join(" · "),
-        }))}
-        selectedId={selectedDevice}
-        onSelect={onSelectDevice}
-        onRefresh={() => {
-          void devices.reload();
-          void profiles.reload();
-        }}
-        loading={devices.loading}
-        error={devices.error}
-      />
-      <CompactObjectList
-        title="Profiles"
-        objectKind="autopilotProfile"
-        items={sortedProfiles.map((item) => ({
-          id: item.id,
-          title: item.displayName,
-          meta: formatRelative(item.lastModifiedDateTime),
-        }))}
-        selectedId={selectedProfile}
-        onSelect={onSelectProfile}
-        loading={profiles.loading}
-        error={profiles.error}
-      />
-    </>
+  const selected = items.find((item) => item.id === selectedId);
+  const countLabel = `${filtered.length} of ${items.length}`;
+  const createButton = (
+    <WriteActionButton
+      type="button"
+      className="axis-btn axis-btn-primary"
+      onClick={() => setCreating(true)}
+    >
+      New
+    </WriteActionButton>
   );
   return (
+    <>
     <WorkspaceSplit
-      inspectorPrimary={selected}
+      inspectorPrimary={Boolean(selected)}
       master={
         <ObjectListMenuHost
           onDuplicated={(created) => {
-            setProfileOverlay({ id: created.id, displayName: created.title });
-            onSelectProfile(created.id);
+            setOverlay({ id: created.id, displayName: created.title });
+            onSelect(created.id);
             void profiles.reload();
           }}
           onMetadataUpdated={(updated) => {
-            setProfileOverlay({
+            setOverlay({
               id: updated.id,
               displayName: updated.title,
               description: updated.description,
@@ -2450,106 +3030,123 @@ function AutopilotWorkbench({
             void profiles.reload();
           }}
         >
-        {selected ? (
-          <div className="device-list-compact" style={{ gap: "0.85rem" }}>
-            {lists}
-          </div>
-        ) : (
-          <div className="stack">
-            <PageHeader
-              eyebrow="Enrollment"
-              title="Autopilot"
-              description="Device identities and deployment profiles from Graph. Select a row to inspect it here."
-              actions={
-                <button
-                  type="button"
-                  className="axis-btn"
-                  onClick={() => {
-                    void devices.reload();
-                    void profiles.reload();
-                  }}
-                >
-                  Refresh
-                </button>
-              }
-            />
-            {devices.error ? <div className="axis-alert axis-alert-danger">{devices.error}</div> : null}
-            {profiles.error ? <div className="axis-alert axis-alert-danger">{profiles.error}</div> : null}
-            <div className="overview-grid-2">
-              <section className="axis-panel" style={{ overflow: "hidden" }}>
-                <h2 style={{ margin: "0.75rem 1rem", fontSize: "0.85rem" }}>Devices</h2>
+          {selected ? (
+            <div className="device-list-compact">
+              <CompactObjectList
+                title="Deployment profiles"
+                objectKind="autopilotProfile"
+                items={sorted.map((item) => ({
+                  id: item.id,
+                  title: item.displayName,
+                  meta: [autopilotProfileJoinLabel(item), formatRelative(item.lastModifiedDateTime)]
+                    .filter((part) => part && part !== "—")
+                    .join(" · "),
+                }))}
+                selectedId={selectedId}
+                onSelect={onSelect}
+                onRefresh={() => void profiles.reload()}
+                loading={profiles.loading}
+                error={profiles.error}
+                query={query}
+                onQueryChange={setQuery}
+                countLabel={countLabel}
+                searchPlaceholder="Name, join type, description…"
+                filters={listFilters}
+                actions={createButton}
+              />
+            </div>
+          ) : (
+            <div className="stack">
+              <PageHeader
+                eyebrow="Enrollment · Autopilot"
+                title="Deployment profiles"
+                description="Windows Autopilot deployment profiles — join type, OOBE, and pre-provisioning."
+                onRefresh={() => void profiles.reload()}
+                refreshing={profiles.loading}
+                actions={
+                  <>
+                    {createButton}
+                    <button
+                      type="button"
+                      className="axis-btn"
+                      onClick={() => void profiles.reload()}
+                      disabled={profiles.loading}
+                    >
+                      {profiles.loading ? "Refreshing…" : "Refresh"}
+                    </button>
+                  </>
+                }
+              />
+              {profiles.error ? (
+                <div className="axis-alert axis-alert-danger">{profiles.error}</div>
+              ) : null}
+              <SearchableTable
+                query={query}
+                onQueryChange={setQuery}
+                countLabel={countLabel}
+                placeholder="Name, join type, description…"
+                filters={listFilters}
+              >
                 <table className="axis-table">
                   <thead>
                     <tr>
-                      <SortableTh column="serial" label="Serial" sort={deviceSort} onSort={toggleDeviceSort} />
-                      <SortableTh column="tag" label="Tag" sort={deviceSort} onSort={toggleDeviceSort} />
-                      <SortableTh column="state" label="State" sort={deviceSort} onSort={toggleDeviceSort} />
+                      <SortableTh column="name" label="Name" sort={sort} onSort={toggle} />
+                      <SortableTh column="join" label="Join type" sort={sort} onSort={toggle} />
+                      <SortableTh column="modified" label="Modified" sort={sort} onSort={toggle} />
                     </tr>
                   </thead>
                   <tbody>
-                    {sortedDevices.map((item) => (
-                      <tr key={item.id} className="row-link" onClick={() => onSelectDevice(item.id)}>
-                        <td>{item.serialNumber ?? item.displayName ?? item.id}</td>
-                        <td className="muted">{item.groupTag ?? "—"}</td>
-                        <td className="muted">{item.enrollmentState ?? "—"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </section>
-              <section className="axis-panel" style={{ overflow: "hidden" }}>
-                <h2 style={{ margin: "0.75rem 1rem", fontSize: "0.85rem" }}>Profiles</h2>
-                <table className="axis-table">
-                  <thead>
-                    <tr>
-                      <SortableTh column="name" label="Name" sort={profileSort} onSort={toggleProfileSort} />
-                      <SortableTh column="modified" label="Modified" sort={profileSort} onSort={toggleProfileSort} />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {sortedProfiles.map((item) => (
+                    {sorted.map((item) => (
                       <tr
                         key={item.id}
-                        className="row-link"
-                        onClick={() => onSelectProfile(item.id)}
+                        className={`row-link${selectedId === item.id ? " selected" : ""}`}
+                        onClick={() => onSelect(item.id)}
                         {...listTargetProps(item.id, item.displayName, "autopilotProfile")}
                       >
                         <td>{item.displayName}</td>
+                        <td className="muted">{autopilotProfileJoinLabel(item)}</td>
                         <td className="muted">{formatRelative(item.lastModifiedDateTime)}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
-              </section>
+                {!profiles.loading && sorted.length === 0 ? (
+                  <p className="muted" style={{ padding: "1rem" }}>
+                    {query.trim() || joinFilter !== "all"
+                      ? "No matching deployment profiles."
+                      : "No Autopilot deployment profiles."}
+                  </p>
+                ) : null}
+              </SearchableTable>
             </div>
-          </div>
-        )}
+          )}
         </ObjectListMenuHost>
       }
       inspector={
-        device ? (
+        selected ? (
           <GraphObjectInspector
-            key={device.id}
-            kind="autopilotDevice"
-            id={device.id}
-            fallbackTitle={device.serialNumber ?? device.displayName ?? device.id}
-            incomplete="Group tag updates and profile assignment writes are not in this pass. The full Autopilot identity is shown."
-            onClose={() => onSelectDevice("")}
-          />
-        ) : profile ? (
-          <GraphObjectInspector
-            key={profile.id}
+            key={selected.id}
             kind="autopilotProfile"
-            id={profile.id}
-            fallbackTitle={profile.displayName}
-            incomplete="Profile create/edit and assignment drafts are not ported. The full profile and assignments are shown."
-            onClose={() => onSelectProfile("")}
+            id={selected.id}
+            fallbackTitle={selected.displayName}
+            incomplete="Assignment writes for Autopilot profiles are not ported yet. Edit join/OOBE settings on Overview; assign groups from the portal or a later pass."
+            onClose={() => onSelect("")}
           />
         ) : (
-          <InspectorEmpty label="Select an Autopilot device or profile to inspect it here. Close clears the selection and stays on Enrollment." />
+          <InspectorEmpty label="Select a deployment profile to inspect it here." />
         )
       }
     />
+    <CreateAutopilotProfileDialog
+      open={creating}
+      onClose={() => setCreating(false)}
+      onCreated={(created) => {
+        setOverlay(created);
+        onSelect(created.id);
+        void profiles.reload();
+      }}
+    />
+    </>
   );
 }
 

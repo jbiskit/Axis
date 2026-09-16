@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { closeThisWindow, popOutObject } from "../../lib/popout";
-import { summarizeAssignmentDraft } from "../../lib/assignmentSummary";
+import {
+  graphHasAllDevicesTarget,
+  graphHasAllUsersTarget,
+  summarizeAssignmentDraft,
+} from "../../lib/assignmentSummary";
 import { intunePortalUrlForKind } from "../../lib/intune/portalLinks";
 import {
   fetchGraphObjectDetail,
@@ -35,6 +39,18 @@ import { TemplatePolicySettingsEditor } from "./TemplatePolicySettingsEditor";
 import { AssignmentsDialog } from "./PolicyBulkAssign";
 import { ScriptRunStatus } from "./RemediationDeviceStatus";
 import { formatRelative, IncompleteBanner, InspectorErrorBoundary } from "./shared";
+import {
+  isEnrollmentPlatformRestrictionsObject,
+} from "../../lib/enrollmentRestrictions";
+import { isEnrollmentLimitObject } from "../../lib/enrollmentLimits";
+import {
+  autopilotDeviceSections,
+  isAutopilotProfileObject,
+} from "../../lib/autopilotProfile";
+import { EnrollmentRestrictionsEditor } from "./EnrollmentRestrictionsEditor";
+import { EnrollmentLimitEditor } from "./EnrollmentLimitEditor";
+import { AutopilotProfileEditor } from "./AutopilotProfileEditor";
+import { AutopilotOverviewSections } from "./AutopilotOverviewSections";
 
 type InspectorTab = "overview" | "status" | "assignments" | "payload";
 
@@ -197,6 +213,10 @@ function overviewRows(detail: GraphObjectDetail): Array<{ label: string; value: 
   const object = asRecord(detail.object) ?? {};
   const keys = [
     ["Description", "description"],
+    ["Priority", "priority"],
+    ["Platform", "platformType"],
+    ["Enrollment type", "deviceEnrollmentConfigurationType"],
+    ["Device limit", "limit"],
     ["Publisher", "publisher"],
     ["Version", "version"],
     ["Version", "displayVersion"],
@@ -441,7 +461,11 @@ export function GraphObjectInspector({
       };
     }
     if (!cachedDrafts) setAssignmentsLoading(true);
-    void loadAssignmentWorkspace(kind, assignments)
+    void loadAssignmentWorkspace(
+      kind,
+      assignments,
+      text(asRecord(detail.object)?.["@odata.type"]),
+    )
       .then((response) => {
         if (cancelled) return;
         setAssignmentDrafts(response.drafts);
@@ -505,7 +529,25 @@ export function GraphObjectInspector({
       templateReference.templateId.trim(),
   );
   const extras = detail?.extras ?? null;
-  const rows = useMemo(() => (detail ? overviewRows(detail) : []), [detail]);
+  const rows = useMemo(() => {
+    if (!detail) return [];
+    const all = overviewRows(detail);
+    if (kind !== "autopilotProfile" && kind !== "autopilotDevice") return all;
+    // Structured Autopilot sections own join / OOBE / identity fields — keep a slim header.
+    const keep = new Set(["Id", "Kind", "Assigned", "Description", "Created", "Modified"]);
+    return all.filter((row) => keep.has(row.label));
+  }, [detail, kind]);
+  const showRestrictionEditor =
+    kind === "enrollmentConfiguration" &&
+    isEnrollmentPlatformRestrictionsObject(asRecord(detail?.object));
+  const showLimitEditor =
+    kind === "enrollmentConfiguration" &&
+    isEnrollmentLimitObject(asRecord(detail?.object));
+  const showAutopilotProfileOverview =
+    kind === "autopilotProfile" && isAutopilotProfileObject(asRecord(detail?.object));
+  const showAutopilotDeviceOverview = kind === "autopilotDevice";
+  const hideEmptySettingsTab =
+    kind === "autopilotProfile" || kind === "autopilotDevice";
   const inspectorTabs: Array<[InspectorTab, string]> = [
     ["overview", "Overview"],
     ...(kind === "compliancePolicy" ||
@@ -513,8 +555,22 @@ export function GraphObjectInspector({
     kind.startsWith("script:platform-")
       ? ([["status", "Device status"]] as Array<[InspectorTab, string]>)
       : []),
-    ["assignments", `Assignments (${assignments.length})`],
-    ["payload", `${payloadLabel}${settings.length ? ` (${settings.length})` : ""}`],
+    [
+      "assignments",
+      `Assignments (${
+        kind === "enrollmentConfiguration" && !assignmentsLoading
+          ? assignmentDrafts.length
+          : assignments.length
+      })`,
+    ],
+    ...(hideEmptySettingsTab
+      ? []
+      : ([
+          [
+            "payload",
+            `${payloadLabel}${settings.length ? ` (${settings.length})` : ""}`,
+          ],
+        ] as Array<[InspectorTab, string]>)),
   ];
   const supportsRemediationSchedule = kind === "script:remediation";
   const canEditScripts = Boolean(scriptInfo);
@@ -733,6 +789,29 @@ export function GraphObjectInspector({
                   </div>
                 ))}
               </dl>
+              {showRestrictionEditor ? (
+                <EnrollmentRestrictionsEditor
+                  policyId={detail.id}
+                  object={asRecord(detail.object)}
+                />
+              ) : null}
+              {showLimitEditor ? (
+                <EnrollmentLimitEditor
+                  policyId={detail.id}
+                  object={asRecord(detail.object)}
+                />
+              ) : null}
+              {showAutopilotProfileOverview ? (
+                <AutopilotProfileEditor
+                  profileId={detail.id}
+                  object={asRecord(detail.object)}
+                />
+              ) : null}
+              {showAutopilotDeviceOverview ? (
+                <AutopilotOverviewSections
+                  sections={autopilotDeviceSections(asRecord(detail.object))}
+                />
+              ) : null}
             </section>
           ) : null}
           {tab === "status" && kind === "compliancePolicy" ? (
@@ -744,11 +823,32 @@ export function GraphObjectInspector({
           ) : null}
           {tab === "assignments" ? (
             <section className="axis-panel" style={{ padding: "0.85rem" }}>
+              {kind === "enrollmentConfiguration" &&
+              showLimitEditor &&
+              (graphHasAllUsersTarget(assignments) || graphHasAllDevicesTarget(assignments)) &&
+              assignmentDrafts.length === 0 ? (
+                <div className="axis-alert axis-alert-info" style={{ marginBottom: "0.75rem" }}>
+                  Graph reports an All users or All devices assignment (often the tenant default).
+                  Device limit restrictions are group-scoped — open Update assignments to set
+                  groups.
+                </div>
+              ) : null}
+              {kind === "enrollmentConfiguration" &&
+              !showLimitEditor &&
+              graphHasAllDevicesTarget(assignments) &&
+              assignmentDrafts.length === 0 ? (
+                <div className="axis-alert axis-alert-info" style={{ marginBottom: "0.75rem" }}>
+                  Graph reports an All devices assignment (often the tenant default). Enrollment
+                  restrictions are user-scoped — open Update assignments to set users or groups.
+                </div>
+              ) : null}
               <div className="device-toolbar">
                 <p className="muted" style={{ margin: 0 }}>
-                  {assignments.length === 0
-                    ? "No assignments on this object."
-                    : `${assignments.length} assignment${assignments.length === 1 ? "" : "s"}.`}
+                  {assignmentDrafts.length === 0
+                    ? showLimitEditor
+                      ? "No group assignments on this object."
+                      : "No user or group assignments on this object."
+                    : `${assignmentDrafts.length} assignment${assignmentDrafts.length === 1 ? "" : "s"}.`}
                 </p>
                 {canAssign && !readOnly ? (
                   <button
@@ -779,7 +879,7 @@ export function GraphObjectInspector({
               ) : null}
             </section>
           ) : null}
-          <div className="stack" hidden={tab !== "payload"}>
+          <div className="stack" hidden={tab !== "payload" || hideEmptySettingsTab}>
               {canEditScripts ? (
                 <section className="axis-panel" style={{ padding: "1rem 1.1rem" }}>
                   <div className="inspector-form">

@@ -168,6 +168,56 @@ export function intuneEnrollmentWindowsUrl(): string {
   return `${INTUNE_ORIGIN}/#view/Microsoft_Intune_DeviceSettings/DevicesMenu/~/windowsEnrollment`;
 }
 
+/**
+ * Device platform restriction properties blade.
+ * Confirmed live URL:
+ *   …/RestrictionMenuBlade/~/properties/restrictionId/{id}/afwId//isSinglePlatform~/true
+ */
+export function intuneEnrollmentRestrictionUrl(restrictionId: string): string {
+  return (
+    `${INTUNE_ORIGIN}/#view/Microsoft_Intune_Enrollment/RestrictionMenuBlade` +
+    `/~/properties` +
+    `/restrictionId/${encodeURIComponent(restrictionId)}` +
+    `/afwId/` +
+    `/isSinglePlatform~/true`
+  );
+}
+
+/**
+ * Device limit restriction — same RestrictionMenuBlade family; portal list is under
+ * Enrollment → Device limit restriction. Object blade uses restrictionId without the
+ * single-platform flag used for platform restrictions.
+ */
+export function intuneEnrollmentLimitUrl(restrictionId: string): string {
+  return (
+    `${INTUNE_ORIGIN}/#view/Microsoft_Intune_Enrollment/RestrictionMenuBlade` +
+    `/~/properties` +
+    `/restrictionId/${encodeURIComponent(restrictionId)}` +
+    `/afwId/`
+  );
+}
+
+function isEnrollmentPlatformRestrictionObject(
+  object?: Record<string, unknown> | null,
+): boolean {
+  const odata = stringField(object, "@odata.type")?.toLowerCase() ?? "";
+  if (odata.includes("deviceenrollmentplatformrestriction")) return true;
+  if (object?.platformRestriction != null || object?.platformType != null) return true;
+  const configType = stringField(object, "deviceEnrollmentConfigurationType")?.toLowerCase() ?? "";
+  return (
+    configType === "singleplatformrestriction" ||
+    configType === "platformrestrictions" ||
+    configType === "defaultplatformrestrictions"
+  );
+}
+
+function isEnrollmentLimitObject(object?: Record<string, unknown> | null): boolean {
+  const odata = stringField(object, "@odata.type")?.toLowerCase() ?? "";
+  if (odata.includes("deviceenrollmentlimitconfiguration")) return true;
+  const configType = stringField(object, "deviceEnrollmentConfigurationType")?.toLowerCase() ?? "";
+  return configType === "limit" || configType === "defaultlimit";
+}
+
 export function intuneImportAdmxUrl(): string {
   return `${INTUNE_ORIGIN}/#view/Microsoft_Intune_DeviceSettings/DevicesMenu/~/configuration`;
 }
@@ -272,7 +322,15 @@ export function intunePortalUrlForKind(
     });
   }
   if (kind === "deviceConfiguration") return intuneConfigurationPoliciesListUrl();
-  if (kind === "enrollmentConfiguration") return intuneEnrollmentWindowsUrl();
+  if (kind === "enrollmentConfiguration") {
+    if (isEnrollmentPlatformRestrictionObject(object)) {
+      return intuneEnrollmentRestrictionUrl(id);
+    }
+    if (isEnrollmentLimitObject(object)) {
+      return intuneEnrollmentLimitUrl(id);
+    }
+    return intuneEnrollmentWindowsUrl();
+  }
   if (kind === "mobileApp") return intuneAppUrl(id);
   if (kind === "appProtection") return intuneAppsListUrl();
   if (kind.startsWith("script:remediation")) {

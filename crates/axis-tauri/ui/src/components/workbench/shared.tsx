@@ -222,6 +222,7 @@ export function SearchableTable({
   platformOptions,
   showPlatformFilter = false,
   secondaryFilter,
+  filters,
   children,
 }: {
   query: string;
@@ -240,6 +241,13 @@ export function SearchableTable({
     onChange: (value: string) => void;
     options: ListFilterOption[];
   };
+  /** Extra dropdown filters (State, Tag, Join type, …). */
+  filters?: Array<{
+    label: string;
+    value: string;
+    onChange: (value: string) => void;
+    options: ListFilterOption[];
+  }>;
   children: ReactNode;
 }) {
   return (
@@ -256,6 +264,7 @@ export function SearchableTable({
         platformOptions={platformOptions}
         showPlatformFilter={showPlatformFilter}
         secondaryFilter={secondaryFilter}
+        filters={filters}
       />
       <section className="axis-panel">
         {children}
@@ -276,6 +285,7 @@ export function ListSearchToolbar({
   platformOptions,
   showPlatformFilter = false,
   secondaryFilter,
+  filters,
 }: {
   query: string;
   onQueryChange: (value: string) => void;
@@ -293,7 +303,17 @@ export function ListSearchToolbar({
     onChange: (value: string) => void;
     options: ListFilterOption[];
   };
+  filters?: Array<{
+    label: string;
+    value: string;
+    onChange: (value: string) => void;
+    options: ListFilterOption[];
+  }>;
 }) {
+  const extraFilters = [
+    ...(secondaryFilter ? [secondaryFilter] : []),
+    ...(filters ?? []),
+  ];
   return (
     <div className="device-toolbar">
       <label className="device-field">
@@ -335,22 +355,22 @@ export function ListSearchToolbar({
           </select>
         </label>
       ) : null}
-      {secondaryFilter ? (
-        <label className="device-field device-field-filter">
-          {secondaryFilter.label}
+      {extraFilters.map((filter) => (
+        <label key={filter.label} className="device-field device-field-filter">
+          {filter.label}
           <select
             className="axis-input"
-            value={secondaryFilter.value}
-            onChange={(event) => secondaryFilter.onChange(event.target.value)}
+            value={filter.value}
+            onChange={(event) => filter.onChange(event.target.value)}
           >
-            {secondaryFilter.options.map((option) => (
+            {filter.options.map((option) => (
               <option key={option.value} value={option.value}>
                 {option.label}
               </option>
             ))}
           </select>
         </label>
-      ) : null}
+      ))}
       {countLabel ? (
         <p className="muted" style={{ margin: 0, fontSize: "0.6875rem", alignSelf: "end" }}>
           {countLabel}
@@ -389,6 +409,7 @@ export function CompactObjectList({
   selectAllDisabled,
   selectAllLabel,
   secondaryFilter,
+  filters,
   objectKind,
 }: {
   title: string;
@@ -424,6 +445,12 @@ export function CompactObjectList({
     onChange: (value: string) => void;
     options: ListFilterOption[];
   };
+  filters?: Array<{
+    label: string;
+    value: string;
+    onChange: (value: string) => void;
+    options: ListFilterOption[];
+  }>;
   objectKind?: string;
 }) {
   const refreshAll = onRefresh
@@ -472,6 +499,7 @@ export function CompactObjectList({
           platformOptions={platformOptions}
           showPlatformFilter={showPlatformFilter}
           secondaryFilter={secondaryFilter}
+          filters={filters}
         />
       ) : null}
       {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
@@ -482,7 +510,8 @@ export function CompactObjectList({
           {query?.trim() ||
           (assignedFilter != null && assignedFilter !== "all") ||
           (showPlatformFilter && platformFilter != null && platformFilter !== "all") ||
-          (secondaryFilter != null && secondaryFilter.value !== "all")
+          (secondaryFilter != null && secondaryFilter.value !== "all") ||
+          (filters?.some((filter) => filter.value !== "all") ?? false)
             ? "No matching items."
             : "No items."}
         </p>

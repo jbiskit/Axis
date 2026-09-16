@@ -93,7 +93,10 @@ fn spec_for(kind: &str, id: &str) -> Result<KindSpec, GraphError> {
             decode_scripts: false,
         },
         "enrollmentConfiguration" => KindSpec {
-            object_path: format!("/deviceManagement/deviceEnrollmentConfigurations/{enc}"),
+            // Portal detail: GET …/deviceEnrollmentConfigurations/{id}?$expand=assignments
+            object_path: format!(
+                "/deviceManagement/deviceEnrollmentConfigurations/{enc}?$expand=assignments"
+            ),
             assignments_path: Some(format!(
                 "/deviceManagement/deviceEnrollmentConfigurations/{enc}/assignments"
             )),
@@ -527,18 +530,18 @@ pub async fn fetch_graph_object_detail(
 
     let mut assignments = Vec::new();
     if let Some(path) = &spec.assignments_path {
-        match client
-            .fetch_all_pages::<Value>(access_token, path, "beta", ASSIGNMENTS_MAX)
-            .await
-        {
-            Ok(rows) => assignments = rows,
-            Err(error) => {
-                let embedded = take_embedded_assignments(&object);
-                if embedded.is_empty() {
-                    warnings.push(format!("Assignments: {error}"));
-                } else {
-                    assignments = embedded;
-                }
+        // Prefer assignments embedded via $expand=… when present (enrollment configs,
+        // scripts). Fall back to the /assignments collection if expand was empty/missing.
+        let embedded = take_embedded_assignments(&object);
+        if !embedded.is_empty() {
+            assignments = embedded;
+        } else {
+            match client
+                .fetch_all_pages::<Value>(access_token, path, "beta", ASSIGNMENTS_MAX)
+                .await
+            {
+                Ok(rows) => assignments = rows,
+                Err(error) => warnings.push(format!("Assignments: {error}")),
             }
         }
     }

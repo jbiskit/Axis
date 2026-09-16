@@ -404,7 +404,7 @@ fn is_local_source_input(input: &BaselineReferenceSourceInput) -> bool {
 }
 
 /// Returns owner, repo, git_ref, path.
-fn parse_github_repo_url(input: &str) -> Option<(String, String, String, String)> {
+pub(crate) fn parse_github_repo_url(input: &str) -> Option<(String, String, String, String)> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return None;
@@ -456,7 +456,7 @@ fn trimmed_token(token: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
-fn github_contents_url(owner: &str, repo: &str, path: &str, git_ref: &str) -> String {
+pub(crate) fn github_contents_url(owner: &str, repo: &str, path: &str, git_ref: &str) -> String {
     let encoded_ref = urlencoding::encode(git_ref);
     if path.is_empty() {
         format!("https://api.github.com/repos/{owner}/{repo}/contents?ref={encoded_ref}")

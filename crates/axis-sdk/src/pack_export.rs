@@ -413,6 +413,7 @@ where
             template_id: None,
             template_display_name: None,
             odata_type: profile.odata_type,
+            priority: None,
         }));
     }
     jobs.extend(group_policy.into_iter().map(ExportJob::GroupPolicy));

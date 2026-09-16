@@ -257,6 +257,7 @@ fn summary_from_created(
             .and_then(Value::as_str)
             .map(str::to_string)
             .or_else(|| Some(kind.odata_type.to_string())),
+        priority: None,
     })
 }
 

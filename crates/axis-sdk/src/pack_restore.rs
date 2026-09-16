@@ -2,20 +2,28 @@
 //!
 //! v1 supports Settings Catalog policies and scripts (platform / remediation / compliance).
 //! Modes:
-//! - **Add** — create when missing; skip when a live match exists
-//! - **Replace** — update matching live objects; skip when no match
+//! - **Add** — create when missing; skip when a live match exists (identical or settings differ)
+//! - **Update** — patch matching live objects' settings/script content in place when content
+//!   differs; skip identical / missing
+//!
+//! After an identity match (Graph id or display name), Axis compares settings / script text
+//! so the plan can show **Identical** vs **Settings differ**.
+//! Update is not delete+create — it patches the existing Graph object.
 
 use crate::inventory::{
     fetch_configuration_policies, fetch_tenant_scripts, CatalogPolicySummary, TenantScriptSummary,
 };
 use crate::object_detail::{
-    create_tenant_script, update_script_content, CreateTenantScriptInput, UpdateScriptContentInput,
+    create_tenant_script, fetch_graph_object_detail, update_script_content, CreateTenantScriptInput,
+    UpdateScriptContentInput,
 };
+use crate::object_duplicate::strip_keys;
 use crate::settings_catalog::{
     create_policy_with_settings, create_policy_with_template, replace_catalog_policy_settings,
     SettingsCatalogPlatform,
 };
 use crate::GraphError;
+use futures::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
@@ -39,14 +47,14 @@ pub enum PackRestoreError {
 #[serde(rename_all = "camelCase")]
 pub enum RestoreMode {
     Add,
-    Replace,
+    Update,
 }
 
 impl RestoreMode {
     pub fn parse(value: &str) -> Result<Self, PackRestoreError> {
         match value.trim().to_ascii_lowercase().as_str() {
             "add" => Ok(Self::Add),
-            "replace" => Ok(Self::Replace),
+            "update" => Ok(Self::Update),
             other => Err(PackRestoreError::Message(format!(
                 "Unknown restore mode: {other}"
             ))),
@@ -58,9 +66,13 @@ impl RestoreMode {
 #[serde(rename_all = "camelCase")]
 pub enum RestoreItemStatus {
     WillAdd,
-    WillReplace,
+    WillUpdate,
     SkipExists,
     SkipMissing,
+    /// Live object matches and settings/script content are the same.
+    Identical,
+    /// Live object matches by identity, but settings/script content differ.
+    SettingsDiffer,
     Unsupported,
     Applied,
     Failed,
@@ -110,7 +122,7 @@ pub struct RestoreApplyResult {
     pub snapshot_id: String,
     pub items: Vec<RestorePlanItem>,
     pub added: u32,
-    pub replaced: u32,
+    pub updated: u32,
     pub skipped: u32,
     pub failed: u32,
     pub warnings: Vec<String>,
@@ -242,15 +254,11 @@ pub async fn plan_restore(
         selected_keys.iter().map(String::as_str).collect();
     let live = load_live_index(access_token).await?;
     let mut warnings = Vec::new();
-    let mut items = Vec::new();
-
-    for payload in payloads {
-        let key = payload.key();
-        if !selected.is_empty() && !selected.contains(key.as_str()) {
-            continue;
-        }
-        items.push(plan_item(&payload, mode, &live, &mut warnings));
-    }
+    let targets: Vec<_> = payloads
+        .into_iter()
+        .filter(|payload| selected.is_empty() || selected.contains(payload.key().as_str()))
+        .collect();
+    let items = plan_items(access_token, &targets, mode, &live, &mut warnings).await;
 
     Ok(RestorePlan {
         mode,
@@ -275,7 +283,7 @@ pub async fn apply_restore(
     let mut warnings = Vec::new();
     let mut items = Vec::new();
     let mut added = 0u32;
-    let mut replaced = 0u32;
+    let mut updated = 0u32;
     let mut skipped = 0u32;
     let mut failed = 0u32;
 
@@ -286,12 +294,12 @@ pub async fn apply_restore(
     let total = targets.len();
 
     for (index, payload) in targets.into_iter().enumerate() {
-        let planned = plan_item(&payload, mode, &live, &mut warnings);
+        let planned = plan_item(access_token, &payload, mode, &live, &mut warnings).await;
         on_progress(format!(
             "{} {} ({}/{})…",
             match planned.status {
                 RestoreItemStatus::WillAdd => "Adding",
-                RestoreItemStatus::WillReplace => "Replacing",
+                RestoreItemStatus::WillUpdate => "Updating",
                 _ => "Skipping",
             },
             payload.display_name(),
@@ -319,22 +327,22 @@ pub async fn apply_restore(
                     });
                 }
             },
-            RestoreItemStatus::WillReplace => {
+            RestoreItemStatus::WillUpdate => {
                 let Some(live_id) = planned.live_id.clone() else {
                     failed += 1;
                     items.push(RestorePlanItem {
                         status: RestoreItemStatus::Failed,
-                        message: Some("Missing live id for replace.".into()),
+                        message: Some("Missing live id for update.".into()),
                         ..planned
                     });
                     continue;
                 };
-                match apply_replace(access_token, &payload, &live_id).await {
+                match apply_update(access_token, &payload, &live_id).await {
                     Ok(()) => {
-                        replaced += 1;
+                        updated += 1;
                         items.push(RestorePlanItem {
                             status: RestoreItemStatus::Applied,
-                            message: Some("Replaced".into()),
+                            message: Some("Updated".into()),
                             ..planned
                         });
                     }
@@ -350,6 +358,8 @@ pub async fn apply_restore(
             }
             RestoreItemStatus::SkipExists
             | RestoreItemStatus::SkipMissing
+            | RestoreItemStatus::Identical
+            | RestoreItemStatus::SettingsDiffer
             | RestoreItemStatus::Unsupported
             | RestoreItemStatus::Skipped => {
                 skipped += 1;
@@ -367,13 +377,362 @@ pub async fn apply_restore(
         snapshot_id: snapshot_id.to_string(),
         items,
         added,
-        replaced,
+        updated,
         skipped,
         failed,
         warnings,
     })
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KitApplyPlan {
+    pub mode: RestoreMode,
+    pub kit_id: String,
+    pub kit_name: String,
+    pub kit_rel_path: String,
+    pub items: Vec<RestorePlanItem>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KitApplyResult {
+    pub mode: RestoreMode,
+    pub kit_id: String,
+    pub kit_name: String,
+    pub kit_rel_path: String,
+    pub items: Vec<RestorePlanItem>,
+    pub added: u32,
+    pub updated: u32,
+    pub skipped: u32,
+    pub failed: u32,
+    pub warnings: Vec<String>,
+}
+
+struct KitApplySelection {
+    kit_id: String,
+    kit_name: String,
+    kit_rel_path: String,
+    payloads: Vec<RestorePayload>,
+    unsupported: Vec<RestorePlanItem>,
+    warnings: Vec<String>,
+}
+
+fn normalize_include_path(value: &str) -> String {
+    value.replace('\\', "/").trim().trim_matches('/').to_string()
+}
+
+fn join_pack_rel(root: &Path, rel: &str) -> PathBuf {
+    let mut path = root.to_path_buf();
+    for part in normalize_include_path(rel).split('/') {
+        if !part.is_empty() {
+            path.push(part);
+        }
+    }
+    path
+}
+
+fn unsupported_reason_for_include(pack_root: &Path, rel: &str) -> String {
+    let lower = rel.to_ascii_lowercase();
+    if lower.starts_with("kits/") {
+        return "Kit membership files are selections, not Intune objects.".into();
+    }
+    let path = join_pack_rel(pack_root, rel);
+    if !path.is_file() {
+        return "File is missing from the pack.".into();
+    }
+    if lower.contains("/compliance/") {
+        return "Compliance policies are not applied from kits in this version.".into();
+    }
+    if lower.contains("/endpoint-security/") {
+        return "Endpoint security intents are not applied from kits in this version.".into();
+    }
+    if lower.contains("/enrollment/") || lower.contains("/autopilot/") {
+        return "Enrolment / Autopilot objects are not applied from kits in this version.".into();
+    }
+    if lower.contains("/applications/") {
+        return "Applications are not applied from kits in this version.".into();
+    }
+    if lower.contains("/windows-update/") || lower.contains("/group-policy/") {
+        return "This artifact type is not applied from kits in this version.".into();
+    }
+    if lower.ends_with(".json") && lower.contains("/policies/") {
+        return "Not a Settings Catalog export (missing settings / catalogPolicy).".into();
+    }
+    if lower.ends_with(".ps1") || lower.ends_with(".sh") {
+        return "Script could not be loaded for apply.".into();
+    }
+    "Not a supported Settings Catalog policy or script for kit apply.".into()
+}
+
+fn read_kit_for_apply(pack_root: &Path, kit_rel_path: &str) -> Result<(String, String, String, Vec<String>), PackRestoreError> {
+    let rel = normalize_include_path(kit_rel_path);
+    if rel.is_empty() {
+        return Err(PackRestoreError::Message("Kit path is required.".into()));
+    }
+    let path = join_pack_rel(pack_root, &rel);
+    if !path.is_file() {
+        return Err(PackRestoreError::Message(format!(
+            "Kit file not found: {rel}"
+        )));
+    }
+    let text = fs::read_to_string(&path)?;
+    let value: Value = serde_json::from_str(text.trim_start_matches('\u{FEFF}'))?;
+    let includes: Vec<String> = value
+        .get("includes")
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .filter_map(Value::as_str)
+                .map(normalize_include_path)
+                .filter(|row| !row.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    let id = value
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            Path::new(&rel)
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "kit".into())
+        });
+    let name = value
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| id.clone());
+    Ok((id, name, rel, includes))
+}
+
+fn select_kit_apply_targets(
+    pack_root: &Path,
+    kit_rel_path: &str,
+) -> Result<KitApplySelection, PackRestoreError> {
+    let (kit_id, kit_name, kit_rel_path, includes) = read_kit_for_apply(pack_root, kit_rel_path)?;
+    let mut warnings = Vec::new();
+    if includes.is_empty() {
+        warnings.push("This kit has no includes to apply.".into());
+    }
+    let include_set: std::collections::HashSet<String> = includes.iter().cloned().collect();
+    let payloads = load_restore_payloads(pack_root)?;
+    let mut matched = Vec::new();
+    let mut covered: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for payload in payloads {
+        let hit: Vec<String> = payload
+            .rel_paths()
+            .iter()
+            .map(|p| normalize_include_path(p))
+            .filter(|p| include_set.contains(p))
+            .collect();
+        if hit.is_empty() {
+            continue;
+        }
+        for path in &hit {
+            covered.insert(path.clone());
+        }
+        matched.push(payload);
+    }
+
+    let mut unsupported = Vec::new();
+    for rel in &includes {
+        if covered.contains(rel) {
+            continue;
+        }
+        let reason = unsupported_reason_for_include(pack_root, rel);
+        unsupported.push(RestorePlanItem {
+            key: format!("unsupported::{rel}"),
+            kind: "unsupported".into(),
+            display_name: rel.clone(),
+            status: RestoreItemStatus::Unsupported,
+            live_id: None,
+            message: Some(reason),
+        });
+    }
+
+    Ok(KitApplySelection {
+        kit_id,
+        kit_name,
+        kit_rel_path,
+        payloads: matched,
+        unsupported,
+        warnings,
+    })
+}
+
+/// Plan applying a kit's `includes` into the signed-in tenant (catalog + scripts v1).
+pub async fn plan_kit_apply(
+    access_token: &str,
+    pack_root: &Path,
+    kit_rel_path: &str,
+    mode: RestoreMode,
+) -> Result<KitApplyPlan, PackRestoreError> {
+    let selection = select_kit_apply_targets(pack_root, kit_rel_path)?;
+    let live = load_live_index(access_token).await?;
+    let mut warnings = selection.warnings;
+    let mut items =
+        plan_items(access_token, &selection.payloads, mode, &live, &mut warnings).await;
+    items.extend(selection.unsupported);
+    Ok(KitApplyPlan {
+        mode,
+        kit_id: selection.kit_id,
+        kit_name: selection.kit_name,
+        kit_rel_path: selection.kit_rel_path,
+        items,
+        warnings,
+    })
+}
+
+/// Apply selected kit plan keys (or all restorable kit payloads when `selected_keys` is empty).
+pub async fn apply_kit_apply(
+    access_token: &str,
+    pack_root: &Path,
+    kit_rel_path: &str,
+    mode: RestoreMode,
+    selected_keys: &[String],
+    mut on_progress: impl FnMut(String),
+) -> Result<KitApplyResult, PackRestoreError> {
+    let selection = select_kit_apply_targets(pack_root, kit_rel_path)?;
+    let selected: std::collections::HashSet<&str> =
+        selected_keys.iter().map(String::as_str).collect();
+    let live = load_live_index(access_token).await?;
+    let mut warnings = selection.warnings;
+    let mut items = Vec::new();
+    let mut added = 0u32;
+    let mut updated = 0u32;
+    let mut skipped = 0u32;
+    let mut failed = 0u32;
+
+    let targets: Vec<_> = selection
+        .payloads
+        .into_iter()
+        .filter(|payload| selected.is_empty() || selected.contains(payload.key().as_str()))
+        .collect();
+    let total = targets.len();
+
+    for (index, payload) in targets.into_iter().enumerate() {
+        let planned = plan_item(access_token, &payload, mode, &live, &mut warnings).await;
+        on_progress(format!(
+            "{} {} ({}/{})…",
+            match planned.status {
+                RestoreItemStatus::WillAdd => "Adding",
+                RestoreItemStatus::WillUpdate => "Updating",
+                _ => "Skipping",
+            },
+            payload.display_name(),
+            index + 1,
+            total
+        ));
+
+        match planned.status {
+            RestoreItemStatus::WillAdd => match apply_add(access_token, &payload).await {
+                Ok(live_id) => {
+                    added += 1;
+                    items.push(RestorePlanItem {
+                        status: RestoreItemStatus::Applied,
+                        live_id: Some(live_id),
+                        message: Some("Created".into()),
+                        ..planned
+                    });
+                }
+                Err(error) => {
+                    failed += 1;
+                    items.push(RestorePlanItem {
+                        status: RestoreItemStatus::Failed,
+                        message: Some(error.to_string()),
+                        ..planned
+                    });
+                }
+            },
+            RestoreItemStatus::WillUpdate => {
+                let Some(live_id) = planned.live_id.clone() else {
+                    failed += 1;
+                    items.push(RestorePlanItem {
+                        status: RestoreItemStatus::Failed,
+                        message: Some("Missing live id for update.".into()),
+                        ..planned
+                    });
+                    continue;
+                };
+                match apply_update(access_token, &payload, &live_id).await {
+                    Ok(()) => {
+                        updated += 1;
+                        items.push(RestorePlanItem {
+                            status: RestoreItemStatus::Applied,
+                            message: Some("Updated".into()),
+                            ..planned
+                        });
+                    }
+                    Err(error) => {
+                        failed += 1;
+                        items.push(RestorePlanItem {
+                            status: RestoreItemStatus::Failed,
+                            message: Some(error.to_string()),
+                            ..planned
+                        });
+                    }
+                }
+            }
+            RestoreItemStatus::SkipExists
+            | RestoreItemStatus::SkipMissing
+            | RestoreItemStatus::Identical
+            | RestoreItemStatus::SettingsDiffer
+            | RestoreItemStatus::Unsupported
+            | RestoreItemStatus::Skipped => {
+                skipped += 1;
+                items.push(RestorePlanItem {
+                    status: RestoreItemStatus::Skipped,
+                    ..planned
+                });
+            }
+            RestoreItemStatus::Applied | RestoreItemStatus::Failed => items.push(planned),
+        }
+    }
+
+    for row in selection.unsupported {
+        skipped += 1;
+        items.push(RestorePlanItem {
+            status: RestoreItemStatus::Skipped,
+            ..row
+        });
+    }
+
+    Ok(KitApplyResult {
+        mode,
+        kit_id: selection.kit_id,
+        kit_name: selection.kit_name,
+        kit_rel_path: selection.kit_rel_path,
+        items,
+        added,
+        updated,
+        skipped,
+        failed,
+        warnings,
+    })
+}
+
+/// Offline helper for tests: which includes map to restorable payloads vs unsupported.
+pub fn kit_apply_selection_preview(
+    pack_root: &Path,
+    kit_rel_path: &str,
+) -> Result<(Vec<String>, Vec<RestorePlanItem>), PackRestoreError> {
+    let selection = select_kit_apply_targets(pack_root, kit_rel_path)?;
+    let keys = selection
+        .payloads
+        .iter()
+        .map(|payload| payload.key())
+        .collect();
+    Ok((keys, selection.unsupported))
+}
+
+#[derive(Clone)]
 struct LiveIndex {
     catalog_by_id: HashMap<String, CatalogPolicySummary>,
     catalog_by_name: HashMap<String, CatalogPolicySummary>,
@@ -407,7 +766,59 @@ async fn load_live_index(access_token: &str) -> Result<LiveIndex, PackRestoreErr
     })
 }
 
-fn plan_item(
+const COMPARE_STRIP_KEYS: &[&str] = &[
+    "@odata.type",
+    "@odata.id",
+    "@odata.context",
+    "@odata.editLink",
+    "@odata.associationLink",
+    "@odata.navigationLink",
+    "@odata.count",
+    "id",
+    "settingDefinitions",
+    "settingDefinition",
+    "settingInstanceTemplateReference",
+    "settingValueTemplateReference",
+];
+
+const PLAN_COMPARE_CONCURRENCY: usize = 8;
+
+async fn plan_items(
+    access_token: &str,
+    payloads: &[RestorePayload],
+    mode: RestoreMode,
+    live: &LiveIndex,
+    warnings: &mut Vec<String>,
+) -> Vec<RestorePlanItem> {
+    let live = live.clone();
+    let planned: Vec<(usize, RestorePlanItem, Vec<String>)> =
+        stream::iter(payloads.iter().cloned().enumerate())
+            .map(|(index, payload)| {
+                let token = access_token.to_string();
+                let live = live.clone();
+                async move {
+                    let mut local_warnings = Vec::new();
+                    let item =
+                        plan_item(&token, &payload, mode, &live, &mut local_warnings).await;
+                    (index, item, local_warnings)
+                }
+            })
+            .buffer_unordered(PLAN_COMPARE_CONCURRENCY)
+            .collect()
+            .await;
+
+    let mut ordered = planned;
+    ordered.sort_by_key(|(index, _, _)| *index);
+    let mut out = Vec::with_capacity(ordered.len());
+    for (_, item, local_warnings) in ordered {
+        warnings.extend(local_warnings);
+        out.push(item);
+    }
+    out
+}
+
+async fn plan_item(
+    access_token: &str,
     payload: &RestorePayload,
     mode: RestoreMode,
     live: &LiveIndex,
@@ -425,19 +836,50 @@ fn plan_item(
         } => resolve_script_match(live, kind, source_id.as_deref(), display_name, warnings),
     };
 
-    let (status, message) = match (mode, match_live.as_ref()) {
-        (RestoreMode::Add, Some(_)) => (
+    let content = match match_live.as_ref() {
+        Some((live_id, _)) => {
+            match compare_payload_to_live(access_token, payload, live_id).await {
+                Ok(equal) => Some(equal),
+                Err(error) => {
+                    warnings.push(format!(
+                        "{}: could not compare content ({error}); using identity only.",
+                        payload.display_name()
+                    ));
+                    None
+                }
+            }
+        }
+        None => None,
+    };
+
+    let (status, message) = match (mode, match_live.as_ref(), content) {
+        (RestoreMode::Add, None, _) => (
+            RestoreItemStatus::WillAdd,
+            Some("Will create.".into()),
+        ),
+        (RestoreMode::Update, None, _) => (
+            RestoreItemStatus::SkipMissing,
+            Some("No live match — skipped for Update.".into()),
+        ),
+        (_, Some(_), Some(true)) => (
+            RestoreItemStatus::Identical,
+            Some("Already present with the same settings.".into()),
+        ),
+        (RestoreMode::Add, Some(_), Some(false)) => (
+            RestoreItemStatus::SettingsDiffer,
+            Some("Exists with different settings — switch to Update to align.".into()),
+        ),
+        (RestoreMode::Update, Some(_), Some(false)) => (
+            RestoreItemStatus::WillUpdate,
+            Some("Will update live object settings in place.".into()),
+        ),
+        (RestoreMode::Add, Some(_), None) => (
             RestoreItemStatus::SkipExists,
             Some("Already present in tenant — skipped for Add.".into()),
         ),
-        (RestoreMode::Add, None) => (RestoreItemStatus::WillAdd, Some("Will create.".into())),
-        (RestoreMode::Replace, Some(_)) => (
-            RestoreItemStatus::WillReplace,
-            Some("Will overwrite live object.".into()),
-        ),
-        (RestoreMode::Replace, None) => (
-            RestoreItemStatus::SkipMissing,
-            Some("No live match — skipped for Replace.".into()),
+        (RestoreMode::Update, Some(_), None) => (
+            RestoreItemStatus::WillUpdate,
+            Some("Will update live object in place.".into()),
         ),
     };
 
@@ -449,6 +891,85 @@ fn plan_item(
         live_id: match_live.map(|(id, _)| id),
         message,
     }
+}
+
+async fn compare_payload_to_live(
+    access_token: &str,
+    payload: &RestorePayload,
+    live_id: &str,
+) -> Result<bool, PackRestoreError> {
+    match payload {
+        RestorePayload::Catalog { settings, .. } => {
+            let detail =
+                fetch_graph_object_detail(access_token, "configurationPolicy", live_id).await?;
+            let live_settings = detail.settings.unwrap_or_default();
+            Ok(catalog_settings_equivalent(settings, &live_settings))
+        }
+        RestorePayload::Script {
+            kind,
+            script_text,
+            detection_script_text,
+            remediation_script_text,
+            ..
+        } => {
+            let detail =
+                fetch_graph_object_detail(access_token, &normalize_script_kind(kind), live_id)
+                    .await?;
+            Ok(script_content_equivalent(
+                script_text.as_deref(),
+                detection_script_text.as_deref(),
+                remediation_script_text.as_deref(),
+                detail.script_text.as_deref(),
+                detail.detection_script_text.as_deref(),
+                detail.remediation_script_text.as_deref(),
+            ))
+        }
+    }
+}
+
+fn normalize_script_body(value: Option<&str>) -> String {
+    value.unwrap_or("").replace("\r\n", "\n").trim().to_string()
+}
+
+fn script_content_equivalent(
+    pack_script: Option<&str>,
+    pack_detect: Option<&str>,
+    pack_remediate: Option<&str>,
+    live_script: Option<&str>,
+    live_detect: Option<&str>,
+    live_remediate: Option<&str>,
+) -> bool {
+    normalize_script_body(pack_script) == normalize_script_body(live_script)
+        && normalize_script_body(pack_detect) == normalize_script_body(live_detect)
+        && normalize_script_body(pack_remediate) == normalize_script_body(live_remediate)
+}
+
+fn setting_instance_for_compare(row: &Value) -> Value {
+    let instance = row
+        .get("settingInstance")
+        .cloned()
+        .unwrap_or_else(|| row.clone());
+    strip_keys(&instance, COMPARE_STRIP_KEYS)
+}
+
+fn catalog_settings_equivalent(pack: &[Value], live: &[Value]) -> bool {
+    let pack_map = settings_map_for_compare(pack);
+    let live_map = settings_map_for_compare(live);
+    pack_map == live_map
+}
+
+fn settings_map_for_compare(rows: &[Value]) -> BTreeMap<String, Value> {
+    let mut map = BTreeMap::new();
+    for (index, row) in rows.iter().enumerate() {
+        let cleaned = setting_instance_for_compare(row);
+        let id = cleaned
+            .get("settingDefinitionId")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("#{index}"));
+        map.insert(id, cleaned);
+    }
+    map
 }
 
 fn resolve_catalog_match(
@@ -576,7 +1097,7 @@ async fn apply_add(access_token: &str, payload: &RestorePayload) -> Result<Strin
     }
 }
 
-async fn apply_replace(
+async fn apply_update(
     access_token: &str,
     payload: &RestorePayload,
     live_id: &str,
@@ -677,7 +1198,7 @@ fn collect_files(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), 
             continue;
         }
         if path.is_dir() {
-            if name == "baselines" || name == "third-party" || name == ".git" {
+            if name == "baselines" || name == "kits" || name == "third-party" || name == ".git" {
                 continue;
             }
             collect_files(root, &path, out)?;
@@ -1008,3 +1529,139 @@ fn split_axis_pack_script(text: &str) -> (Option<Value>, &str) {
     }
     (None, trimmed)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use uuid::Uuid;
+
+    fn write_file(root: &Path, rel: &str, contents: &str) {
+        let path = join_pack_rel(root, rel);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, contents).unwrap();
+    }
+
+    #[test]
+    fn kit_apply_preview_splits_supported_and_unsupported() {
+        let root = std::env::temp_dir().join(format!("axis-kit-apply-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        write_file(
+            &root,
+            "windows/policies/demo.json",
+            &json!({
+                "name": "Demo Catalog",
+                "platforms": "windows10",
+                "technologies": "mdm",
+                "settings": [{
+                    "@odata.type": "#microsoft.graph.deviceManagementConfigurationSetting",
+                    "settingInstance": {
+                        "@odata.type": "#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance",
+                        "settingDefinitionId": "device_vendor_msft_demo",
+                        "choiceSettingValue": { "value": "device_vendor_msft_demo_1", "children": [] }
+                    }
+                }],
+                "axisExport": { "kind": "catalogPolicy" }
+            })
+            .to_string(),
+        );
+        write_file(
+            &root,
+            "windows/scripts/platform/Hello.ps1",
+            "# @axis-pack {\"displayName\":\"Hello\",\"kind\":\"platform-powershell\"}\nWrite-Host hi\n",
+        );
+        write_file(
+            &root,
+            "windows/compliance/placeholder.json",
+            &json!({ "name": "Compliance placeholder", "axisExport": { "kind": "compliancePolicy" } }).to_string(),
+        );
+        write_file(
+            &root,
+            "kits/basic.json",
+            &json!({
+                "id": "basic",
+                "name": "Basic",
+                "includes": [
+                    "windows/policies/demo.json",
+                    "windows/scripts/platform/Hello.ps1",
+                    "windows/compliance/placeholder.json",
+                    "windows/missing/nope.json"
+                ]
+            })
+            .to_string(),
+        );
+
+        let (keys, unsupported) = kit_apply_selection_preview(&root, "kits/basic.json").unwrap();
+        assert_eq!(keys.len(), 2, "expected catalog + script payloads, got {keys:?}");
+        assert_eq!(unsupported.len(), 2);
+        assert!(unsupported.iter().any(|row| row.display_name.contains("compliance")));
+        assert!(unsupported.iter().any(|row| {
+            row.display_name.contains("missing")
+                && row
+                    .message
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("missing")
+        }));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn kit_apply_preview_empty_includes() {
+        let root = std::env::temp_dir().join(format!("axis-kit-apply-empty-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        write_file(
+            &root,
+            "kits/empty.json",
+            &json!({ "id": "empty", "name": "Empty", "includes": [] }).to_string(),
+        );
+        let (keys, unsupported) = kit_apply_selection_preview(&root, "kits/empty.json").unwrap();
+        assert!(keys.is_empty());
+        assert!(unsupported.is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn catalog_settings_compare_ignores_odata_noise() {
+        let pack = vec![json!({
+            "settingInstance": {
+                "@odata.type": "#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance",
+                "settingDefinitionId": "device_vendor_msft_demo",
+                "choiceSettingValue": {
+                    "value": "device_vendor_msft_demo_1",
+                    "children": []
+                }
+            }
+        })];
+        let live = vec![json!({
+            "id": "0",
+            "@odata.id": "noise",
+            "settingInstance": {
+                "@odata.type": "#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance",
+                "settingDefinitionId": "device_vendor_msft_demo",
+                "settingInstanceTemplateReference": { "settingInstanceTemplateId": "tpl" },
+                "choiceSettingValue": {
+                    "value": "device_vendor_msft_demo_1",
+                    "settingValueTemplateReference": { "settingValueTemplateId": "v" },
+                    "children": []
+                }
+            },
+            "settingDefinitions": []
+        })];
+        assert!(catalog_settings_equivalent(&pack, &live));
+
+        let live_diff = vec![json!({
+            "settingInstance": {
+                "settingDefinitionId": "device_vendor_msft_demo",
+                "choiceSettingValue": {
+                    "value": "device_vendor_msft_demo_0",
+                    "children": []
+                }
+            }
+        })];
+        assert!(!catalog_settings_equivalent(&pack, &live_diff));
+    }
+}
+

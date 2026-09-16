@@ -111,13 +111,15 @@ export type PackDiffReport = {
   warnings: string[];
 };
 
-export type RestoreMode = "add" | "replace";
+export type RestoreMode = "add" | "update";
 
 export type RestoreItemStatus =
   | "willAdd"
-  | "willReplace"
+  | "willUpdate"
   | "skipExists"
   | "skipMissing"
+  | "identical"
+  | "settingsDiffer"
   | "unsupported"
   | "applied"
   | "failed"
@@ -154,7 +156,7 @@ export type RestoreApplyResult = {
   snapshotId: string;
   items: RestorePlanItem[];
   added: number;
-  replaced: number;
+  updated: number;
   skipped: number;
   failed: number;
   warnings: string[];

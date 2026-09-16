@@ -77,8 +77,8 @@ for command in git node npm npx cargo; do
 done
 
 node_major="$(node -p 'Number(process.versions.node.split(".")[0])')"
-if ((node_major != 24)); then
-  printf 'Node.js 24 is required; found %s.\n' "$(node --version)" >&2
+if ((node_major < 24)); then
+  printf 'Node.js 24 or newer is required; found %s.\n' "$(node --version)" >&2
   exit 1
 fi
 
@@ -224,7 +224,13 @@ if [[ "$version_only" == false ]]; then
 
   executable="$repository_root/target/release/axis.exe"
   if [[ ! -f "$executable" ]]; then
-    printf "Build completed but '%s' was not found.\n" "$executable" >&2
+    if [[ "$(uname -s)" == "Linux" ]]; then
+      printf '%s\n' \
+        "Build completed but '$executable' was not found." \
+        'On Linux use ./scripts/release-linux.sh instead (artifact is target/release/axis).' >&2
+    else
+      printf "Build completed but '%s' was not found.\n" "$executable" >&2
+    fi
     false
   fi
 

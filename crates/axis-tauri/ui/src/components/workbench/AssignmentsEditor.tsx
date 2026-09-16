@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   assignmentTargetLabel,
+  graphHasAllDevicesTarget,
+  graphHasAllUsersTarget,
   summarizeAssignmentDraft,
 } from "../../lib/assignmentSummary";
 import {
@@ -195,6 +197,8 @@ export function AssignmentsEditor({
   const [writable, setWritable] = useState(false);
   const [supportsIntent, setSupportsIntent] = useState(false);
   const [supportsSchedule, setSupportsSchedule] = useState(false);
+  const [supportsAllDevices, setSupportsAllDevices] = useState(true);
+  const [supportsAllUsers, setSupportsAllUsers] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [groupQuery, setGroupQuery] = useState("");
   const [groupHits, setGroupHits] = useState<DirectoryGroup[]>([]);
@@ -211,7 +215,11 @@ export function AssignmentsEditor({
     setLoadError(null);
     setSaveError(null);
     setSaveMessage(null);
-    void loadAssignmentWorkspace(kind, isBulk || draftMode ? [] : assignments)
+    void loadAssignmentWorkspace(
+      kind,
+      isBulk || draftMode ? [] : assignments,
+      objectOdataType,
+    )
       .then((response) => {
         if (cancelled) return;
         const nextRows = draftsToRows(
@@ -226,6 +234,8 @@ export function AssignmentsEditor({
         setWritable(response.capabilities.writable);
         setSupportsIntent(response.capabilities.supportsIntent);
         setSupportsSchedule(response.capabilities.supportsSchedule);
+        setSupportsAllDevices(response.capabilities.supportsAllDevices !== false);
+        setSupportsAllUsers(response.capabilities.supportsAllUsers !== false);
         setLoadError(response.error);
       })
       .catch((error: unknown) => {
@@ -238,7 +248,7 @@ export function AssignmentsEditor({
     return () => {
       cancelled = true;
     };
-  }, [kind, workspaceId, isBulk, draftMode, assignmentsKey]);
+  }, [kind, workspaceId, isBulk, draftMode, assignmentsKey, objectOdataType]);
 
   useEffect(() => {
     setGroupQuery("");
@@ -292,7 +302,19 @@ export function AssignmentsEditor({
     );
   }, [draftMode, filtersLoading, rows, writable]);
 
+  const hiddenDeviceAssignments = useMemo(() => {
+    if (supportsAllDevices || isBulk || draftMode) return false;
+    return graphHasAllDevicesTarget(assignments);
+  }, [assignments, supportsAllDevices, isBulk, draftMode]);
+
+  const hiddenUserAssignments = useMemo(() => {
+    if (supportsAllUsers || isBulk || draftMode) return false;
+    return graphHasAllUsersTarget(assignments);
+  }, [assignments, supportsAllUsers, isBulk, draftMode]);
+
   const addRow = (targetKind: AssignmentTargetKind, group?: DirectoryGroup) => {
+    if (targetKind === "allDevices" && !supportsAllDevices) return;
+    if (targetKind === "allUsers" && !supportsAllUsers) return;
     const intent = supportsIntent ? "required" : undefined;
     const key = rowKey(targetKind, group?.id, intent);
     setRows((current) => {
@@ -489,6 +511,17 @@ export function AssignmentsEditor({
         return;
       }
       const drafts: AssignmentDraft[] = rows.map(({ key: _key, ...draft }) => draft);
+      if (
+        !supportsAllDevices &&
+        drafts.some((draft) => draft.targetKind === "allDevices")
+      ) {
+        setSaveError("This enrollment configuration cannot be assigned to All devices.");
+        return;
+      }
+      if (!supportsAllUsers && drafts.some((draft) => draft.targetKind === "allUsers")) {
+        setSaveError("Device limit restrictions can only be assigned to groups.");
+        return;
+      }
       const failures: string[] = [];
       for (const target of resolvedTargets) {
         const response = await assignObjectAssignments({
@@ -585,18 +618,39 @@ export function AssignmentsEditor({
       ) : null}
       {saveError ? <div className="axis-alert axis-alert-danger">{saveError}</div> : null}
       {saveMessage ? <div className="axis-alert axis-alert-info">{saveMessage}</div> : null}
+      {!supportsAllUsers ? (
+        <div className="axis-alert axis-alert-info">
+          Device limit restrictions apply to <strong>groups</strong> only — not All users or All
+          devices.
+          {hiddenUserAssignments || hiddenDeviceAssignments
+            ? " Graph may still report a broad assignment on this object (often the tenant default); it is hidden here. Save to replace with group targets."
+            : null}
+        </div>
+      ) : !supportsAllDevices ? (
+        <div className="axis-alert axis-alert-info">
+          Enrollment restrictions apply to <strong>users and groups</strong> only — not All
+          devices.
+          {hiddenDeviceAssignments
+            ? " Graph reports an All devices assignment on this object (often the tenant default); it is hidden here. Save to replace with user or group targets."
+            : null}
+        </div>
+      ) : null}
 
       <div className="assignment-quick">
         <p className="muted" style={{ margin: 0 }}>
           Quick targets
         </p>
         <div className="assignment-actions">
-          <button type="button" className="axis-btn" onClick={() => addRow("allUsers")}>
-            All users
-          </button>
-          <button type="button" className="axis-btn" onClick={() => addRow("allDevices")}>
-            All devices
-          </button>
+          {supportsAllUsers ? (
+            <button type="button" className="axis-btn" onClick={() => addRow("allUsers")}>
+              All users
+            </button>
+          ) : null}
+          {supportsAllDevices ? (
+            <button type="button" className="axis-btn" onClick={() => addRow("allDevices")}>
+              All devices
+            </button>
+          ) : null}
           <IncludeExcludeToggle
             value={groupPickerMode}            includeLabel="Include"
             excludeLabel="Exclude"
@@ -700,8 +754,12 @@ export function AssignmentsEditor({
         <ul className="assignment-rows">
           {rows.length === 0 ? (
             <li className="muted">
-              No targets — save below to <strong>clear all assignments</strong>. Or add All users,
-              All devices, or include/exclude a group above.
+              No targets — save below to <strong>clear all assignments</strong>. Or{" "}
+              {supportsAllUsers
+                ? supportsAllDevices
+                  ? "add All users, All devices, or include/exclude a group above."
+                  : "add All users or include/exclude a group above."
+                : "include/exclude a group above."}
             </li>
           ) : (
             rows.map((row) => (
