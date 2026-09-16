@@ -387,7 +387,7 @@ export function ClientContainerDiffView({
     setApplyResult(null);
     try {
       let added = 0;
-      let replaced = 0;
+      let updated = 0;
       let skipped = 0;
       let failed = 0;
       const items: RestoreApplyResult["items"] = [];
@@ -395,14 +395,14 @@ export function ClientContainerDiffView({
 
       async function runBatch(
         snapshotId: string,
-        mode: "add" | "replace",
+        mode: "add" | "update",
         keys: string[],
       ) {
         if (!keys.length) return;
         setProgress(
           mode === "add"
             ? `Adding ${keys.length} from ${snapshotId === left ? "left" : "right"}…`
-            : `Replacing ${keys.length} from ${snapshotId === left ? "left" : "right"}…`,
+            : `Updating ${keys.length} from ${snapshotId === left ? "left" : "right"}…`,
         );
         const result = await clientContainerRestoreApply({
           snapshotId,
@@ -410,7 +410,7 @@ export function ClientContainerDiffView({
           keys,
         });
         added += result.added;
-        replaced += result.replaced;
+        updated += result.updated;
         skipped += result.skipped;
         failed += result.failed;
         items.push(...result.items);
@@ -419,19 +419,19 @@ export function ClientContainerDiffView({
 
       if (leftIsSnapshot) {
         await runBatch(left, "add", pendingTakes.leftAdd);
-        await runBatch(left, "replace", pendingTakes.leftReplace);
+        await runBatch(left, "update", pendingTakes.leftReplace);
       }
       if (rightIsSnapshot) {
         await runBatch(right, "add", pendingTakes.rightAdd);
-        await runBatch(right, "replace", pendingTakes.rightReplace);
+        await runBatch(right, "update", pendingTakes.rightReplace);
       }
 
       setApplyResult({
-        mode: "replace",
+        mode: "update",
         snapshotId: leftIsSnapshot ? left : right,
         items,
         added,
-        replaced,
+        updated,
         skipped,
         failed,
         warnings,
@@ -645,7 +645,7 @@ export function ClientContainerDiffView({
           {applyResult ? (
             <div className="client-diff-summary">
               <span className="axis-pill axis-pill-success">{applyResult.added} added</span>
-              <span className="axis-pill axis-pill-warning">{applyResult.replaced} replaced</span>
+              <span className="axis-pill axis-pill-warning">{applyResult.updated} updated</span>
               <span className="axis-pill">{applyResult.skipped} skipped</span>
               <span className="axis-pill axis-pill-danger">{applyResult.failed} failed</span>
             </div>

@@ -4,7 +4,9 @@ Starting layout for an **Axis** pack. Axis is a desktop Intune console that list
 
 Treat the pack as an **external source**. This template is **Windows-only** for now. Folders are grouped by platform, then by Intune object type. Only Settings Catalog exports under `windows/policies/` can be imported into Intune or used for device compare. Other folders are listings you can open; Axis does not push them to Graph in this version.
 
-A **baseline** is a JSON file that **selects** pack paths. It does not duplicate policy JSON.
+A **baseline** / **kit** is a JSON file that **selects** pack paths. It does not duplicate policy JSON.
+
+Windows enrolment process (Autopilot, ESP, Axis capability matrix): **[docs/windows-enrollment.md](../docs/windows-enrollment.md)**.
 
 Use this repository as a GitHub template, or copy the folders onto disk and add them in Axis under **Baselines → Manage sources**. Axis can also **export a tenant** into this layout (**Baselines → Export tenant pack**). Packs are **read-only** in Axis today. Import Settings Catalog JSON from Policies, and import scripts from the Scripts lists.
 
@@ -35,9 +37,14 @@ windows/
   compliance/
   endpoint-security/
   windows-update/
-  enrollment/autopilot/     Autopilot only for now
+  enrollment/
+    autopilot/          Autopilot deployment profiles (export today)
+    esp/                ESP (planned)
+    restrictions/       Enrolment restrictions (planned)
+    windows-hello/      WHfB enrolment (planned)
   group-policy/             ADMX / Group Policy (Windows)
-baselines/                  Named selections (`includes`), not copies of policies
+kits/                       Named selections (`includes`)
+baselines/                  Legacy selection folder (template samples)
 ```
 
 Axis ignores `.git`, `.github`, `.vscode`, `node_modules`, and `third-party` when walking catalog folders. Built-in ASD E8 uses an explicit GitHub path and does not scan this layout.

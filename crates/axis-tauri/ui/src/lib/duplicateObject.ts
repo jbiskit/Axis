@@ -24,7 +24,8 @@ export function canDeleteGraphKind(kind: string): boolean {
     kind === "compliancePolicy" ||
     kind === "groupPolicyConfiguration" ||
     kind === "deviceConfiguration" ||
-    kind === "appProtection"
+    kind === "appProtection" ||
+    kind === "autopilotDevice"
   );
 }
 

@@ -1,0 +1,10 @@
+{
+  "id": "standard-windows",
+  "name": "Standard Windows",
+  "description": "Example Windows kit that selects the BitLocker catalog policy and Auto Timezone platform script in this pack. Replace or extend includes as you add your own exports.",
+  "version": "0.1.0",
+  "includes": [
+    "windows/policies/Win - OIB - ES - Encryption - D - BitLocker (OS Disk) - v3.7.json",
+    "windows/scripts/platform/Enable-AutoTimezone.ps1"
+  ]
+}

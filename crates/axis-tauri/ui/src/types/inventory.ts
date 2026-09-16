@@ -53,6 +53,8 @@ export type CatalogPolicySummary = {
   templateId?: string | null;
   templateDisplayName?: string | null;
   odataType?: string | null;
+  /** Enrollment configs: Graph `priority` (lower applies first). */
+  priority?: number | null;
 };
 
 export type TenantScriptSummary = {
@@ -380,6 +382,10 @@ export type AssignmentCapabilities = {
   supportsIntent: boolean;
   supportsFilters: boolean;
   supportsSchedule: boolean;
+  /** When false, All devices is not offered (enrollment restrictions are user-scoped). */
+  supportsAllDevices?: boolean;
+  /** When false, All users is not offered (device limit restrictions are group-only). */
+  supportsAllUsers?: boolean;
 };
 
 export type DirectoryGroupsResponse = {
@@ -785,6 +791,40 @@ export type CreateCompliancePolicyInput = {
 };
 
 export type CreateCompliancePolicyResponse = {
+  policy: CatalogPolicySummary | null;
+  error: string | null;
+};
+
+export type CreateEnrollmentPlatformRestrictionInput = {
+  displayName: string;
+  description?: string | null;
+  platformType: string;
+  priority?: number | null;
+  roleScopeTagIds?: string[] | null;
+  platformRestriction: {
+    platformBlocked?: boolean | null;
+    personalDeviceEnrollmentBlocked?: boolean | null;
+    osMinimumVersion?: string | null;
+    osMaximumVersion?: string | null;
+    blockedManufacturers?: string[] | null;
+    blockedSkus?: string[] | null;
+  };
+};
+
+export type CreateEnrollmentPlatformRestrictionResponse = {
+  policy: CatalogPolicySummary | null;
+  error: string | null;
+};
+
+export type CreateEnrollmentLimitInput = {
+  displayName: string;
+  description?: string | null;
+  limit: number;
+  priority?: number | null;
+  roleScopeTagIds?: string[] | null;
+};
+
+export type CreateEnrollmentLimitResponse = {
   policy: CatalogPolicySummary | null;
   error: string | null;
 };

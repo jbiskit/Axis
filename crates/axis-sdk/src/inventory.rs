@@ -1,9 +1,24 @@
 use chrono::Utc;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Deserializer, Serialize};
 
 use crate::graph::{GraphClient, GraphError};
 
 pub const INVENTORY_LIST_MAX: usize = 500;
+
+/// Scripts expose `version` as a string; enrollment configs use a numeric `version`.
+fn deserialize_optional_stringish<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(s)) => Some(s),
+        Some(serde_json::Value::Number(n)) => Some(n.to_string()),
+        Some(serde_json::Value::Bool(b)) => Some(b.to_string()),
+        Some(other) => Some(other.to_string()),
+    })
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -93,6 +108,9 @@ pub struct CatalogPolicySummary {
     pub template_display_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub odata_type: Option<String>,
+    /// Enrollment configs: Graph `priority` (lower applies first).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub priority: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -231,7 +249,7 @@ struct GraphNamed {
     package_identifier: Option<String>,
     #[serde(default)]
     run_as_account: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_stringish")]
     version: Option<String>,
     #[serde(default)]
     is_global_script: Option<bool>,
@@ -263,6 +281,14 @@ struct GraphNamed {
     template_reference: Option<TemplateReference>,
     #[serde(default)]
     assignments: Option<Vec<serde_json::Value>>,
+    #[serde(default)]
+    priority: Option<i32>,
+    /// Present on `deviceEnrollmentPlatformRestrictionConfiguration` (singular).
+    #[serde(default)]
+    platform_type: Option<String>,
+    /// Present on `deviceEnrollmentLimitConfiguration`.
+    #[serde(default)]
+    limit: Option<i32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -332,12 +358,22 @@ fn assigned_from_row(row: &GraphNamed) -> Option<bool> {
 fn as_policy(row: GraphNamed) -> Option<CatalogPolicySummary> {
     let id = take_id(&row)?;
     let is_assigned = assigned_from_row(&row);
+    // Single-platform restriction rows expose `platformType` (e.g. windows) instead of
+    // Settings Catalog `platforms`. Surface it for list filters / search.
+    let platforms = row
+        .platforms
+        .clone()
+        .or_else(|| row.platform_type.clone());
+    // Device limit configs: surface Graph `limit` in setting_count for list columns.
+    let setting_count = row
+        .setting_count
+        .or_else(|| row.limit.and_then(|n| u32::try_from(n).ok()));
     Some(CatalogPolicySummary {
         name: title(&row),
         description: row.description,
-        platforms: row.platforms,
+        platforms,
         technologies: row.technologies,
-        setting_count: row.setting_count,
+        setting_count,
         created_date_time: row.created_date_time,
         last_modified_date_time: row.last_modified_date_time,
         is_assigned,
@@ -354,6 +390,7 @@ fn as_policy(row: GraphNamed) -> Option<CatalogPolicySummary> {
             .as_ref()
             .and_then(|value| value.template_display_name.clone()),
         odata_type: row.odata_type,
+        priority: row.priority,
         id,
     })
 }
@@ -396,12 +433,25 @@ fn as_autopilot_device(row: GraphNamed) -> Option<AutopilotDevice> {
 
 fn as_autopilot_profile(row: GraphNamed) -> Option<AutopilotProfile> {
     let id = take_id(&row)?;
+    let device_join_type = row.odata_type.as_deref().and_then(|odata| {
+        let lower = odata.to_ascii_lowercase();
+        if !lower.contains("windowsautopilotdeploymentprofile") {
+            return None;
+        }
+        if lower.contains("activedirectory") {
+            Some("hybrid".into())
+        } else if lower.contains("azuread") {
+            Some("entra".into())
+        } else {
+            Some("entra".into())
+        }
+    });
     Some(AutopilotProfile {
         display_name: title(&row),
         description: row.description,
         created_date_time: row.created_date_time,
         last_modified_date_time: row.last_modified_date_time,
-        device_join_type: None,
+        device_join_type,
         odata_type: row.odata_type,
         device_name_template: row.device_name_template,
         id,
@@ -897,13 +947,93 @@ pub async fn fetch_windows_update_policies(
 pub async fn fetch_enrollment_configurations(
     access_token: &str,
 ) -> Result<InventoryList<CatalogPolicySummary>, GraphError> {
-    let rows = list_named(
-        access_token,
-        "/deviceManagement/deviceEnrollmentConfigurations",
-    )
-    .await?;
+    fetch_enrollment_configurations_filtered(access_token, EnrollmentConfigQuery::All).await
+}
+
+/// Which enrollment configuration list to load from Graph.
+///
+/// Filters use `deviceEnrollmentConfigurationType` the same way the Intune portal does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnrollmentConfigQuery {
+    /// Unfiltered collection (environment report / broad scans).
+    All,
+    /// Device type / platform restrictions (default + single-platform).
+    /// Portal: `deviceEnrollmentConfigurationType eq 'SinglePlatformRestriction'`.
+    PlatformRestrictions,
+    /// Device limit restrictions (default + custom).
+    LimitRestrictions,
+    /// Windows Enrollment Status Page (ESP).
+    EnrollmentStatusPage,
+    /// Windows Hello for Business enrolment configuration.
+    WindowsHelloForBusiness,
+}
+
+impl EnrollmentConfigQuery {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "all" | "" => Some(Self::All),
+            "platformrestrictions" | "platform" | "singleplatformrestriction" => {
+                Some(Self::PlatformRestrictions)
+            }
+            "limitrestrictions" | "limit" => Some(Self::LimitRestrictions),
+            "esp" | "enrollmentstatuspage" | "windows10enrollmentcompletionpageconfiguration" => {
+                Some(Self::EnrollmentStatusPage)
+            }
+            "windowshello" | "windowshelloforbusiness" | "whfb" => {
+                Some(Self::WindowsHelloForBusiness)
+            }
+            _ => None,
+        }
+    }
+
+    fn filter_clause(self) -> Option<&'static str> {
+        match self {
+            Self::All => None,
+            // Matches Intune portal Device type restrictions query. Returns both the
+            // default multi-platform profile and per-platform SinglePlatformRestriction rows.
+            Self::PlatformRestrictions => {
+                // Same filter the Intune portal uses for Device type restrictions.
+                Some("deviceEnrollmentConfigurationType eq 'SinglePlatformRestriction'")
+            }
+            Self::LimitRestrictions => Some(
+                "(deviceEnrollmentConfigurationType eq 'Limit' or deviceEnrollmentConfigurationType eq 'DefaultLimit')",
+            ),
+            Self::EnrollmentStatusPage => Some(
+                "(deviceEnrollmentConfigurationType eq 'Windows10EnrollmentCompletionPageConfiguration' or deviceEnrollmentConfigurationType eq 'DefaultWindows10EnrollmentCompletionPageConfiguration')",
+            ),
+            Self::WindowsHelloForBusiness => Some(
+                "(deviceEnrollmentConfigurationType eq 'WindowsHelloForBusiness' or deviceEnrollmentConfigurationType eq 'DefaultWindowsHelloForBusiness')",
+            ),
+        }
+    }
+
+    fn list_path(self) -> String {
+        let mut query = String::from("$expand=assignments&$orderby=priority");
+        if let Some(filter) = self.filter_clause() {
+            query.push_str("&$filter=");
+            query.push_str(&urlencoding::encode(filter));
+        }
+        format!("/deviceManagement/deviceEnrollmentConfigurations?{query}")
+    }
+}
+
+pub async fn fetch_enrollment_configurations_filtered(
+    access_token: &str,
+    query: EnrollmentConfigQuery,
+) -> Result<InventoryList<CatalogPolicySummary>, GraphError> {
+    let rows = list_named(access_token, &query.list_path()).await?;
     let mut items: Vec<_> = rows.into_iter().filter_map(as_policy).collect();
-    items.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    // Match portal: $orderby=priority (then name for ties / missing priority).
+    items.sort_by(|a, b| {
+        match (a.priority, b.priority) {
+            (Some(pa), Some(pb)) => pa.cmp(&pb).then_with(|| {
+                a.name.to_lowercase().cmp(&b.name.to_lowercase())
+            }),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+        }
+    });
     Ok(InventoryList::from_items(items))
 }
 
@@ -948,5 +1078,84 @@ mod tests {
         )
         .unwrap();
         assert_eq!(assigned_from_row(&row), Some(true));
+    }
+
+    #[test]
+    fn platform_restrictions_list_path_matches_portal() {
+        let path = EnrollmentConfigQuery::PlatformRestrictions.list_path();
+        assert!(path.starts_with("/deviceManagement/deviceEnrollmentConfigurations?"));
+        assert!(path.contains("$expand=assignments"));
+        assert!(path.contains("$orderby=priority"));
+        assert!(path.contains(&*urlencoding::encode(
+            "deviceEnrollmentConfigurationType eq 'SinglePlatformRestriction'"
+        )));
+    }
+
+    #[test]
+    fn as_policy_maps_platform_type_and_priority() {
+        let row: GraphNamed = serde_json::from_str(
+            r##"{
+                "id": "4b02792c-400f-4fdd-b76b-6e1204353565_SinglePlatformRestriction",
+                "displayName": "Restrict Personal Device Enrolment (Windows)",
+                "priority": 1,
+                "platformType": "windows",
+                "@odata.type": "#microsoft.graph.deviceEnrollmentPlatformRestrictionConfiguration",
+                "assignments": []
+            }"##,
+        )
+        .unwrap();
+        let policy = as_policy(row).unwrap();
+        assert_eq!(policy.priority, Some(1));
+        assert_eq!(policy.platforms.as_deref(), Some("windows"));
+        assert_eq!(policy.is_assigned, Some(false));
+    }
+
+    #[test]
+    fn as_autopilot_profile_derives_join_type_from_odata() {
+        let entra: GraphNamed = serde_json::from_str(
+            r##"{
+                "id": "p1",
+                "displayName": "User driven",
+                "@odata.type": "#microsoft.graph.azureADWindowsAutopilotDeploymentProfile"
+            }"##,
+        )
+        .unwrap();
+        assert_eq!(as_autopilot_profile(entra).unwrap().device_join_type.as_deref(), Some("entra"));
+
+        let hybrid: GraphNamed = serde_json::from_str(
+            r##"{
+                "id": "p2",
+                "displayName": "Hybrid",
+                "@odata.type": "#microsoft.graph.activeDirectoryWindowsAutopilotDeploymentProfile"
+            }"##,
+        )
+        .unwrap();
+        assert_eq!(
+            as_autopilot_profile(hybrid).unwrap().device_join_type.as_deref(),
+            Some("hybrid")
+        );
+    }
+
+    #[test]
+    fn enrollment_restriction_row_accepts_numeric_version() {
+        // Graph deviceEnrollmentConfigurations return version as an integer.
+        // Scripts use a string — GraphNamed must accept both or the list decode fails.
+        let row: GraphNamed = serde_json::from_str(
+            r##"{
+                "id": "7e03d235-eec0-4d7d-9a6a-061d54f90bd4_DefaultPlatformRestrictions",
+                "displayName": "All users and all devices",
+                "description": "Default",
+                "priority": 0,
+                "version": 0,
+                "deviceEnrollmentConfigurationType": "singlePlatformRestriction",
+                "@odata.type": "#microsoft.graph.deviceEnrollmentPlatformRestrictionsConfiguration",
+                "assignments": [{ "id": "a1" }]
+            }"##,
+        )
+        .unwrap();
+        assert_eq!(row.version.as_deref(), Some("0"));
+        let policy = as_policy(row).unwrap();
+        assert_eq!(policy.priority, Some(0));
+        assert_eq!(policy.is_assigned, Some(true));
     }
 }

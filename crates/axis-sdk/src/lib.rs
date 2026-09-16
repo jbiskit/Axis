@@ -1,5 +1,6 @@
 mod assignments;
 mod auth;
+mod autopilot_profiles;
 mod catalog_index;
 mod client_container;
 mod compliance_docs;
@@ -12,6 +13,8 @@ mod device_policies;
 mod device_recovery;
 mod devices;
 mod e8_baselines;
+mod enrollment_limits;
+mod enrollment_restrictions;
 mod environment_report;
 mod glance;
 mod graph;
@@ -21,6 +24,7 @@ mod object_metadata;
 mod object_duplicate;
 mod pack_diff;
 mod pack_export;
+mod pack_kits;
 mod pack_restore;
 mod policy_health;
 mod script_status;
@@ -30,7 +34,8 @@ mod types;
 
 pub use assignments::{
     apply_filter_names, apply_group_metadata, assign_object_assignments, assignment_capabilities,
-    classify_group_membership, create_directory_group, drafts_from_graph_assignments,
+    assignment_capabilities_for, classify_group_membership, create_directory_group,
+    drafts_from_graph_assignments, normalize_assignment_drafts, normalize_assignment_drafts_for,
     list_assignment_filters, mail_nickname_from_display_name, resolve_directory_groups,
     search_directory_groups, AssignmentCapabilities, AssignmentDraft, AssignmentFilter,
     AssignmentFilterMode, AssignmentIntent, AssignmentTargetKind, CreateDirectoryGroupInput,
@@ -43,6 +48,11 @@ pub use auth::{
     is_graph_command_line_tools_client, is_write_or_privileged_scope, parse_extra_scopes,
     scopes_for_mode, scopes_for_mode_with_extras, token_scp_has_write_scopes, AuthManager,
     DeviceCodePrompt, DeviceCodeTokens, PollResult, TokenClaims,
+};
+pub use autopilot_profiles::{
+    create_autopilot_profile, create_autopilot_profile_body, update_autopilot_profile,
+    update_autopilot_profile_body, AutopilotEspDraft, AutopilotJoinKind, AutopilotOobeDraft,
+    CreateAutopilotProfileInput, UpdateAutopilotProfileInput,
 };
 pub use catalog_index::*;
 pub use client_container::{
@@ -88,6 +98,15 @@ pub use device_recovery::{
 };
 pub use devices::fetch_managed_device_list;
 pub use e8_baselines::*;
+pub use enrollment_limits::{
+    create_enrollment_limit, update_enrollment_limit, CreateEnrollmentLimitInput,
+    UpdateEnrollmentLimitInput, DEVICE_LIMIT_MAX, DEVICE_LIMIT_MIN,
+};
+pub use enrollment_restrictions::{
+    create_enrollment_platform_restriction, CreateEnrollmentPlatformRestrictionInput,
+    update_enrollment_platform_restrictions, PlatformRestrictionPatch,
+    UpdateEnrollmentPlatformRestrictionsInput,
+};
 pub use environment_report::{
     generate_environment_report, EnvironmentReport, EnvironmentReportProgress,
     EnvironmentReportSelection,
@@ -102,7 +121,10 @@ pub use object_detail::{
 };
 pub use object_metadata::{
     can_delete_graph_object, can_update_object_metadata, delete_graph_object,
+    fetch_windows_autopilot_settings, sync_windows_autopilot_devices,
+    update_autopilot_device_properties, AUTOPILOT_SYNC_COOLDOWN_SECS,
     update_object_metadata, UpdateObjectMetadataInput, UpdatedObjectMetadata,
+    WindowsAutopilotSettings,
 };
 pub use object_duplicate::{
     can_duplicate_kind, duplicate_graph_object, copy_display_name, strip_keys,
@@ -117,9 +139,15 @@ pub use pack_export::{
     pretty_json, PackExportError, PackExportObject, PackExportOptions, PackExportProgress,
     PackExportResult, SelectedExportResult,
 };
+pub use pack_kits::{
+    create_empty_kit, create_local_pack, open_pack_workspace, open_pack_workspace_from_source,
+    write_pack_kit, CreateLocalPackInput, PackArtifactRow, PackKitSummary, PackKitWriteInput,
+    PackKitsError, PackManifestView, PackWorkspace,
+};
 pub use pack_restore::{
-    apply_restore, list_restore_candidates, plan_restore, PackRestoreError, RestoreApplyResult,
-    RestoreCandidate, RestoreMode, RestorePlan, RestorePlanItem, RestoreItemStatus,
+    apply_kit_apply, apply_restore, kit_apply_selection_preview, list_restore_candidates,
+    plan_kit_apply, plan_restore, KitApplyPlan, KitApplyResult, PackRestoreError, RestoreApplyResult,
+    RestoreCandidate, RestoreItemStatus, RestoreMode, RestorePlan, RestorePlanItem,
 };
 pub use policy_health::{
     fetch_app_install_health, fetch_configuration_policy_health, index_app_install,

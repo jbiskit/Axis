@@ -435,6 +435,32 @@ select:disabled {
   border-color: transparent;
 }
 
+.axis-btn-success {
+  border-color: transparent;
+  background: var(--axis-success);
+  color: var(--axis-on-accent);
+  font-weight: 600;
+}
+
+.axis-btn-success:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--axis-success) 82%, white);
+  color: var(--axis-on-accent);
+  border-color: transparent;
+}
+
+.axis-btn-warning {
+  border-color: transparent;
+  background: var(--axis-warning);
+  color: var(--axis-on-accent);
+  font-weight: 600;
+}
+
+.axis-btn-warning:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--axis-warning) 82%, white);
+  color: var(--axis-on-accent);
+  border-color: transparent;
+}
+
 .axis-btn-ghost {
   border-color: transparent;
   background: transparent;

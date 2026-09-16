@@ -123,6 +123,87 @@ const WINDOWS_UPDATE_BLADES: NavItem[] = [
   { href: "/intune/windows-update/deployment-status", label: "Deployment status", section: "Monitor", status: "planned" },
 ];
 
+function enrollmentNavChildren(): NavItem[] {
+  return [
+    {
+      href: "/intune/enrollment/windows",
+      label: "Windows",
+      section: "Platform",
+      children: [
+        {
+          href: "/intune/enrollment/windows/autopilot",
+          label: "Autopilot",
+          icon: "enrollment",
+          section: "Configure",
+          children: [
+            {
+              href: "/intune/enrollment/windows/autopilot/devices",
+              label: "Devices",
+              icon: "enrollment",
+              section: "Configure",
+            },
+            {
+              href: "/intune/enrollment/windows/autopilot/profiles",
+              label: "Deployment profiles",
+              icon: "enrollment",
+              section: "Configure",
+            },
+          ],
+        },
+        {
+          href: "/intune/enrollment/windows/esp",
+          label: "Enrollment Status Page",
+          icon: "enrollment",
+          section: "Configure",
+        },
+        {
+          href: "/intune/enrollment/windows/windows-hello",
+          label: "Windows Hello for Business",
+          icon: "enrollment",
+          section: "Configure",
+        },
+      ],
+    },
+    {
+      href: "/intune/enrollment/macos",
+      label: "macOS",
+      section: "Platform",
+      status: "planned",
+    },
+    {
+      href: "/intune/enrollment/ios",
+      label: "iOS / iPadOS",
+      section: "Platform",
+      status: "planned",
+    },
+    {
+      href: "/intune/enrollment/android",
+      label: "Android",
+      section: "Platform",
+      status: "planned",
+    },
+    {
+      href: "/intune/enrollment/restrictions",
+      label: "Restrictions",
+      section: "Tenant",
+      children: [
+        {
+          href: "/intune/enrollment/restrictions/platform",
+          label: "Device platform restrictions",
+          icon: "enrollment",
+          section: "Configure",
+        },
+        {
+          href: "/intune/enrollment/restrictions/limit",
+          label: "Device limit restrictions",
+          icon: "enrollment",
+          section: "Configure",
+        },
+      ],
+    },
+  ];
+}
+
 export const INTUNE_NAV: NavItem[] = [
   { href: "/intune", label: "Overview", icon: "overview", section: "Workspace" },
   { href: "/intune/activity", label: "Write activity", icon: "overview", section: "Workspace" },
@@ -146,10 +227,7 @@ export const INTUNE_NAV: NavItem[] = [
     label: "Enrollment",
     icon: "enrollment",
     section: "Manage",
-    children: [
-      { href: "/intune/enrollment/autopilot", label: "Autopilot", icon: "enrollment" },
-      { href: "/intune/enrollment/windows", label: "Windows enrollment", icon: "enrollment" },
-    ],
+    children: enrollmentNavChildren(),
   },
   {
     href: "/intune/policies",
@@ -183,6 +261,7 @@ export const INTUNE_NAV: NavItem[] = [
     children: WINDOWS_UPDATE_BLADES,
   },
   { href: "/intune/baselines", label: "Baselines", icon: "baselines", section: "Manage" },
+  { href: "/intune/packs", label: "Packs", icon: "templates", section: "Manage" },
   { href: "/intune/templates", label: "Templates", icon: "templates", section: "Manage" },
   {
     href: "/intune/apps",

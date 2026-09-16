@@ -197,6 +197,7 @@ export type CatalogPolicySortKey =
   | "name"
   | "platform"
   | "settings"
+  | "priority"
   | "assigned"
   | "family"
   | "profile"
@@ -215,6 +216,8 @@ export function compareCatalogPolicy(
       return compareText(a.platforms, b.platforms) || compareText(a.name, b.name);
     case "settings":
       return compareNumber(a.settingCount, b.settingCount) || compareText(a.name, b.name);
+    case "priority":
+      return compareNumber(a.priority, b.priority) || compareText(a.name, b.name);
     case "assigned":
       return compareBool(a.isAssigned, b.isAssigned) || compareText(a.name, b.name);
     case "family":

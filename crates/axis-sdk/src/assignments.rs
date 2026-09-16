@@ -140,6 +140,26 @@ pub struct AssignmentCapabilities {
     pub supports_intent: bool,
     pub supports_filters: bool,
     pub supports_schedule: bool,
+    /// When false, UI must not offer All devices (enrollment restrictions are user-scoped).
+    #[serde(default = "default_true")]
+    pub supports_all_devices: bool,
+    /// When false, UI must not offer All users (device limit restrictions are group-only).
+    #[serde(default = "default_true")]
+    pub supports_all_users: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn is_enrollment_limit_odata(object_odata_type: Option<&str>) -> bool {
+    object_odata_type
+        .map(|value| {
+            value
+                .to_ascii_lowercase()
+                .contains("deviceenrollmentlimitconfiguration")
+        })
+        .unwrap_or(false)
 }
 
 pub fn default_remediation_schedule() -> RemediationScheduleDraft {
@@ -323,7 +343,16 @@ pub fn classify_group_membership(
 }
 
 pub fn assignment_capabilities(kind: &str) -> AssignmentCapabilities {
-    match kind {
+    assignment_capabilities_for(kind, None)
+}
+
+/// Refine assignment UI/write rules using Graph `@odata.type` when kinds share a bucket
+/// (e.g. enrollment platform vs device-limit configurations).
+pub fn assignment_capabilities_for(
+    kind: &str,
+    object_odata_type: Option<&str>,
+) -> AssignmentCapabilities {
+    let mut caps = match kind {
         "configurationPolicy"
         | "compliancePolicy"
         | "deviceConfiguration"
@@ -335,26 +364,71 @@ pub fn assignment_capabilities(kind: &str) -> AssignmentCapabilities {
             supports_intent: false,
             supports_filters: true,
             supports_schedule: false,
+            supports_all_devices: true,
+            supports_all_users: true,
         },
         "script:remediation" => AssignmentCapabilities {
             writable: true,
             supports_intent: false,
             supports_filters: true,
             supports_schedule: true,
+            supports_all_devices: true,
+            supports_all_users: true,
         },
         "mobileApp" => AssignmentCapabilities {
             writable: true,
             supports_intent: true,
             supports_filters: true,
             supports_schedule: false,
+            supports_all_devices: true,
+            supports_all_users: true,
+        },
+        // Platform enrolment restrictions: users/groups only — not All devices.
+        "enrollmentConfiguration" => AssignmentCapabilities {
+            writable: true,
+            supports_intent: false,
+            supports_filters: true,
+            supports_schedule: false,
+            supports_all_devices: false,
+            supports_all_users: true,
         },
         _ => AssignmentCapabilities {
             writable: false,
             supports_intent: false,
             supports_filters: true,
             supports_schedule: false,
+            supports_all_devices: true,
+            supports_all_users: true,
         },
+    };
+    if kind == "enrollmentConfiguration" && is_enrollment_limit_odata(object_odata_type) {
+        // Device limit restrictions: include/exclude groups only.
+        caps.supports_all_users = false;
+        caps.supports_all_devices = false;
     }
+    caps
+}
+
+pub fn normalize_assignment_drafts(
+    kind: &str,
+    drafts: &mut Vec<AssignmentDraft>,
+) {
+    normalize_assignment_drafts_for(kind, None, drafts);
+}
+
+pub fn normalize_assignment_drafts_for(
+    kind: &str,
+    object_odata_type: Option<&str>,
+    drafts: &mut Vec<AssignmentDraft>,
+) {
+    let caps = assignment_capabilities_for(kind, object_odata_type);
+    drafts.retain(|draft| {
+        match draft.target_kind {
+            AssignmentTargetKind::AllDevices => caps.supports_all_devices,
+            AssignmentTargetKind::AllUsers => caps.supports_all_users,
+            _ => true,
+        }
+    });
 }
 
 pub fn drafts_from_graph_assignments(rows: &[Value], include_intent: bool) -> Vec<AssignmentDraft> {
@@ -740,6 +814,31 @@ pub async fn assign_object_assignments(
     drafts: &[AssignmentDraft],
     object_odata_type: Option<&str>,
 ) -> Result<(), GraphError> {
+    let caps = assignment_capabilities_for(kind, object_odata_type);
+    if !caps.supports_all_devices
+        && drafts
+            .iter()
+            .any(|draft| draft.target_kind == AssignmentTargetKind::AllDevices)
+    {
+        return Err(GraphError::Request {
+            status: 400,
+            code: None,
+            message: "This enrollment configuration cannot be assigned to All devices.".into(),
+            permission_related: false,
+        });
+    }
+    if !caps.supports_all_users
+        && drafts
+            .iter()
+            .any(|draft| draft.target_kind == AssignmentTargetKind::AllUsers)
+    {
+        return Err(GraphError::Request {
+            status: 400,
+            code: None,
+            message: "Device limit restrictions can only be assigned to groups.".into(),
+            permission_related: false,
+        });
+    }
     let spec = assign_spec(kind, id, object_odata_type)?;
     let assignments: Vec<Value> = drafts
         .iter()
@@ -836,6 +935,14 @@ fn assign_spec(
             assignment_odata: "#microsoft.graph.deviceHealthScriptAssignment",
             include_intent: false,
             remediation: true,
+            app_settings_kind: None,
+        },
+        "enrollmentConfiguration" => AssignSpec {
+            path: format!("/deviceManagement/deviceEnrollmentConfigurations/{enc}/assign"),
+            collection_name: "enrollmentConfigurationAssignments",
+            assignment_odata: "#microsoft.graph.enrollmentConfigurationAssignment",
+            include_intent: false,
+            remediation: false,
             app_settings_kind: None,
         },
         other => {
@@ -1075,6 +1182,133 @@ mod tests {
         let caps = assignment_capabilities("configurationPolicy");
         assert!(caps.writable);
         assert!(!caps.supports_intent);
+        assert!(caps.supports_all_devices);
+    }
+
+    #[test]
+    fn enrollment_configuration_assignments_are_user_scoped() {
+        let caps = assignment_capabilities("enrollmentConfiguration");
+        assert!(caps.writable);
+        assert!(!caps.supports_all_devices);
+        assert!(caps.supports_all_users);
+        let spec = assign_spec("enrollmentConfiguration", "x_SinglePlatformRestriction", None)
+            .unwrap();
+        assert_eq!(spec.collection_name, "enrollmentConfigurationAssignments");
+        assert!(spec.path.contains("/deviceEnrollmentConfigurations/"));
+        let body = build_assignment_body(
+            &AssignmentDraft {
+                target_kind: AssignmentTargetKind::AllUsers,
+                group_id: None,
+                group_name: None,
+                group_membership: None,
+                filter_id: None,
+                filter_name: None,
+                filter_mode: None,
+                intent: None,
+                run_remediation_script: None,
+                run_schedule: None,
+            },
+            &spec,
+        )
+        .unwrap();
+        assert_eq!(
+            body["@odata.type"],
+            "#microsoft.graph.enrollmentConfigurationAssignment"
+        );
+        assert_eq!(
+            body["target"]["@odata.type"],
+            "#microsoft.graph.allLicensedUsersAssignmentTarget"
+        );
+    }
+
+    #[test]
+    fn enrollment_limit_assignments_are_group_only() {
+        let caps = assignment_capabilities_for(
+            "enrollmentConfiguration",
+            Some("#microsoft.graph.deviceEnrollmentLimitConfiguration"),
+        );
+        assert!(caps.writable);
+        assert!(!caps.supports_all_devices);
+        assert!(!caps.supports_all_users);
+
+        let mut drafts = vec![
+            AssignmentDraft {
+                target_kind: AssignmentTargetKind::AllUsers,
+                group_id: None,
+                group_name: None,
+                group_membership: None,
+                filter_id: None,
+                filter_name: None,
+                filter_mode: None,
+                intent: None,
+                run_remediation_script: None,
+                run_schedule: None,
+            },
+            AssignmentDraft {
+                target_kind: AssignmentTargetKind::AllDevices,
+                group_id: None,
+                group_name: None,
+                group_membership: None,
+                filter_id: None,
+                filter_name: None,
+                filter_mode: None,
+                intent: None,
+                run_remediation_script: None,
+                run_schedule: None,
+            },
+            AssignmentDraft {
+                target_kind: AssignmentTargetKind::Group,
+                group_id: Some("g1".into()),
+                group_name: Some("Pilots".into()),
+                group_membership: None,
+                filter_id: None,
+                filter_name: None,
+                filter_mode: None,
+                intent: None,
+                run_remediation_script: None,
+                run_schedule: None,
+            },
+        ];
+        normalize_assignment_drafts_for(
+            "enrollmentConfiguration",
+            Some("#microsoft.graph.deviceEnrollmentLimitConfiguration"),
+            &mut drafts,
+        );
+        assert_eq!(drafts.len(), 1);
+        assert_eq!(drafts[0].target_kind, AssignmentTargetKind::Group);
+    }
+
+    #[test]
+    fn normalize_assignment_drafts_strips_all_devices_for_enrollment() {
+        let mut drafts = vec![
+            AssignmentDraft {
+                target_kind: AssignmentTargetKind::AllDevices,
+                group_id: None,
+                group_name: None,
+                group_membership: None,
+                filter_id: None,
+                filter_name: None,
+                filter_mode: None,
+                intent: None,
+                run_remediation_script: None,
+                run_schedule: None,
+            },
+            AssignmentDraft {
+                target_kind: AssignmentTargetKind::AllUsers,
+                group_id: None,
+                group_name: None,
+                group_membership: None,
+                filter_id: None,
+                filter_name: None,
+                filter_mode: None,
+                intent: None,
+                run_remediation_script: None,
+                run_schedule: None,
+            },
+        ];
+        normalize_assignment_drafts("enrollmentConfiguration", &mut drafts);
+        assert_eq!(drafts.len(), 1);
+        assert_eq!(drafts[0].target_kind, AssignmentTargetKind::AllUsers);
     }
 
     #[test]

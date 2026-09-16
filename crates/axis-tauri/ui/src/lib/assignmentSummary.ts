@@ -3,6 +3,22 @@ import type { AssignmentDraft, AssignmentIntent } from "../types/inventory";
 
 const NULL_ASSIGNMENT_FILTER_ID = "00000000-0000-0000-0000-000000000000";
 
+export function graphHasAllDevicesTarget(assignments: Record<string, unknown>[]): boolean {
+  return assignments.some((row) => {
+    const target = row.target as Record<string, unknown> | undefined;
+    const odata = typeof target?.["@odata.type"] === "string" ? target["@odata.type"] : "";
+    return odata.includes("allDevicesAssignmentTarget");
+  });
+}
+
+export function graphHasAllUsersTarget(assignments: Record<string, unknown>[]): boolean {
+  return assignments.some((row) => {
+    const target = row.target as Record<string, unknown> | undefined;
+    const odata = typeof target?.["@odata.type"] === "string" ? target["@odata.type"] : "";
+    return odata.includes("allLicensedUsersAssignmentTarget");
+  });
+}
+
 export function isRealAssignmentFilterId(value: string | null | undefined): boolean {
   if (!value) return false;
   const trimmed = value.trim();

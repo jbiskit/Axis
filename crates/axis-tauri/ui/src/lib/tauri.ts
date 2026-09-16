@@ -23,6 +23,10 @@ import type {
   CreateCatalogPolicyResponse,
   CreateCompliancePolicyInput,
   CreateCompliancePolicyResponse,
+  CreateEnrollmentLimitInput,
+  CreateEnrollmentLimitResponse,
+  CreateEnrollmentPlatformRestrictionInput,
+  CreateEnrollmentPlatformRestrictionResponse,
   CompliancePolicyStatusResponse,
   CompliancePropertyDocsResponse,
   CreateTenantScriptInput,
@@ -247,8 +251,12 @@ export async function fetchWindowsUpdatePolicies(): Promise<InventoryResponse<Wi
   return invoke("fetch_windows_update_policies_cmd");
 }
 
-export async function fetchEnrollmentConfigurations(): Promise<InventoryResponse<CatalogPolicySummary>> {
-  return invoke("fetch_enrollment_configurations_cmd");
+export async function fetchEnrollmentConfigurations(
+  kind?: string | null,
+): Promise<InventoryResponse<CatalogPolicySummary>> {
+  return invoke("fetch_enrollment_configurations_cmd", {
+    kind: kind?.trim() ? kind : null,
+  });
 }
 
 export async function desktopCapability(name: string): Promise<CapabilityStatus> {
@@ -268,6 +276,66 @@ export async function fetchBaselineReferenceSources(
 export async function pickLocalPackFolder(title?: string): Promise<string | null> {
   return invoke<string | null>("pick_local_pack_folder_cmd", {
     title: title?.trim() ? title : null,
+  });
+}
+
+export async function openPackWorkspace(packRoot: string): Promise<
+  import("../types/packs").PackWorkspace
+> {
+  return invoke("open_pack_workspace_cmd", { packRoot });
+}
+
+export async function openPackWorkspaceFromSource(
+  source: import("../types/inventory").BaselineReferenceSourceInput,
+): Promise<import("../types/packs").PackWorkspace> {
+  return invoke("open_pack_workspace_from_source_cmd", { source });
+}
+
+export async function writePackKit(
+  input: import("../types/packs").PackKitWriteInput,
+): Promise<import("../types/packs").PackKitSummary> {
+  return invoke("write_pack_kit_cmd", { input });
+}
+
+export async function createPackKit(
+  packRoot: string,
+  name?: string,
+): Promise<import("../types/packs").PackKitSummary> {
+  return invoke("create_pack_kit_cmd", {
+    packRoot,
+    name: name?.trim() ? name : null,
+  });
+}
+
+export async function createLocalPack(
+  input: import("../types/packs").CreateLocalPackInput,
+): Promise<import("../types/packs").PackWorkspace> {
+  return invoke("create_local_pack_cmd", { input });
+}
+
+export async function planPackKitApply(input: {
+  packRoot: string;
+  kitRelPath: string;
+  mode: import("../types/packs").KitApplyMode;
+}): Promise<import("../types/packs").KitApplyPlan> {
+  return invoke("plan_pack_kit_apply_cmd", {
+    packRoot: input.packRoot,
+    kitRelPath: input.kitRelPath,
+    mode: input.mode,
+  });
+}
+
+export async function applyPackKit(input: {
+  packRoot: string;
+  kitRelPath: string;
+  mode: import("../types/packs").KitApplyMode;
+  keys: string[];
+}): Promise<import("../types/packs").KitApplyResult> {
+  return invoke("apply_pack_kit_cmd", {
+    packRoot: input.packRoot,
+    kitRelPath: input.kitRelPath,
+    mode: input.mode,
+    keys: input.keys,
   });
 }
 
@@ -513,12 +581,111 @@ export async function createCompliancePolicy(
   return invoke<CreateCompliancePolicyResponse>("create_compliance_policy_cmd", { input });
 }
 
+export async function createEnrollmentPlatformRestriction(
+  input: CreateEnrollmentPlatformRestrictionInput,
+): Promise<CreateEnrollmentPlatformRestrictionResponse> {
+  return invoke<CreateEnrollmentPlatformRestrictionResponse>(
+    "create_enrollment_platform_restriction_cmd",
+    { input },
+  );
+}
+
+export async function createEnrollmentLimit(
+  input: CreateEnrollmentLimitInput,
+): Promise<CreateEnrollmentLimitResponse> {
+  return invoke<CreateEnrollmentLimitResponse>("create_enrollment_limit_cmd", { input });
+}
+
+export type AutopilotJoinKind = "entra" | "hybrid";
+
+export type AutopilotOobeDraft = {
+  userType: string;
+  deviceUsageType: string;
+  privacySettingsHidden: boolean;
+  eulaHidden: boolean;
+  keyboardSelectionPageSkipped: boolean;
+  escapeLinkHidden: boolean;
+};
+
+export type AutopilotEspDraft = {
+  showInstallationProgress: boolean;
+  blockDeviceUseUntilRequiredAppsInstall: boolean;
+  allowDeviceUseOnInstallFailure: boolean;
+  blockDeviceSetupRetryByUser: boolean;
+  allowLogCollectionOnInstallFailure: boolean;
+  installProgressTimeoutInMinutes: number;
+  customErrorMessage?: string | null;
+};
+
+export type CreateAutopilotProfileInput = {
+  displayName: string;
+  description?: string | null;
+  joinKind: AutopilotJoinKind;
+  deviceType?: string | null;
+  deviceNameTemplate?: string | null;
+  locale?: string | null;
+  oobe: AutopilotOobeDraft;
+  preprovisioningAllowed?: boolean;
+  hardwareHashExtractionEnabled?: boolean;
+  hybridAzureAdJoinSkipConnectivityCheck?: boolean;
+  esp?: AutopilotEspDraft | null;
+};
+
+export type UpdateAutopilotProfileInput = {
+  id: string;
+  odataType: string;
+  displayName?: string | null;
+  description?: string | null;
+  deviceType?: string | null;
+  deviceNameTemplate?: string | null;
+  locale?: string | null;
+  oobe: AutopilotOobeDraft;
+  preprovisioningAllowed?: boolean;
+  hardwareHashExtractionEnabled?: boolean;
+  hybridAzureAdJoinSkipConnectivityCheck?: boolean | null;
+  esp?: AutopilotEspDraft | null;
+};
+
+export async function createAutopilotProfile(
+  input: CreateAutopilotProfileInput,
+): Promise<{ profile: AutopilotProfile | null; error: string | null }> {
+  return invoke("create_autopilot_profile_cmd", { input });
+}
+
+export async function updateAutopilotProfile(
+  input: UpdateAutopilotProfileInput,
+): Promise<ActionResponse> {
+  return invoke<ActionResponse>("update_autopilot_profile_cmd", { input });
+}
+
 export async function updateCompliancePolicy(input: {
   id: string;
   odataType: string;
   settings: Record<string, unknown>;
 }): Promise<ActionResponse> {
   return invoke<ActionResponse>("update_compliance_policy_cmd", { input });
+}
+
+export async function updateEnrollmentPlatformRestrictions(input: {
+  id: string;
+  odataType: string;
+  displayName?: string | null;
+  description?: string | null;
+  restrictions?: Record<string, unknown> | null;
+  platformRestriction?: Record<string, unknown> | null;
+  platformType?: string | null;
+}): Promise<ActionResponse> {
+  return invoke<ActionResponse>("update_enrollment_platform_restrictions_cmd", { input });
+}
+
+export async function updateEnrollmentLimit(input: {
+  id: string;
+  odataType: string;
+  displayName?: string | null;
+  description?: string | null;
+  limit: number;
+}): Promise<ActionResponse> {
+  return invoke<ActionResponse>("update_enrollment_limit_cmd", { input });
 }
 
 export async function fetchCompliancePropertyDocs(
@@ -576,6 +743,36 @@ export async function deleteGraphObject(kind: string, id: string): Promise<Actio
   return invoke<ActionResponse>("delete_graph_object_cmd", { kind, id });
 }
 
+export async function updateAutopilotDeviceGroupTag(
+  id: string,
+  groupTag: string,
+): Promise<ActionResponse> {
+  return invoke<ActionResponse>("update_autopilot_device_group_tag_cmd", { id, groupTag });
+}
+
+export type WindowsAutopilotSettings = {
+  id?: string | null;
+  lastSyncDateTime?: string | null;
+  lastManualSyncTriggerDateTime?: string | null;
+  syncStatus?: string | null;
+};
+
+export async function fetchWindowsAutopilotSettings(): Promise<{
+  settings: WindowsAutopilotSettings | null;
+  error: string | null;
+}> {
+  return invoke("fetch_windows_autopilot_settings_cmd");
+}
+
+export async function syncWindowsAutopilotDevices(): Promise<{
+  ok: boolean;
+  error: string | null;
+  status: number | null;
+  settings: WindowsAutopilotSettings | null;
+}> {
+  return invoke("sync_windows_autopilot_devices_cmd");
+}
+
 export async function lintScript(
   language: "powershell" | "bash" | "shell",
   source: string,
@@ -596,8 +793,13 @@ export async function createDirectoryGroup(
 export async function loadAssignmentWorkspace(
   kind: string,
   assignments: Record<string, unknown>[],
+  objectOdataType?: string | null,
 ): Promise<AssignmentWorkspaceResponse> {
-  return invoke("load_assignment_workspace_cmd", { kind, assignments });
+  return invoke("load_assignment_workspace_cmd", {
+    kind,
+    assignments,
+    objectOdataType: objectOdataType ?? null,
+  });
 }
 
 export async function assignObjectAssignments(input: {
