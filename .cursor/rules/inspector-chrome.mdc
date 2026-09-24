@@ -1,0 +1,29 @@
+---
+description: Every Graph object inspector must expose raw JSON, delete, and refresh
+alwaysApply: true
+---
+
+# Inspector chrome (all Graph objects)
+
+When adding or changing a Graph object workbench, inspector, or list reveal, ship these three controls. Do not gate them on “this kind is special” unless Graph truly cannot delete that resource.
+
+## Raw Graph JSON
+
+- Every object inspector must include **Export** (or equivalent) that shows the **raw Graph JSON** for the loaded object (path payload + related settings/scripts as already gathered).
+- Prefer the shared `ExportJsonDialog` / export payload helpers in `GraphObjectInspector`. Do not ship a policy reveal that only has a formatted summary with no JSON escape hatch.
+- When debugging Graph failures in chat, include the **request path** and the **raw JSON body** (or error payload), not only a paraphrased message.
+
+## Delete (trash)
+
+- List rows and the inspector chrome must show the **trash / Delete** control for every Graph object kind that has a DELETE path in `object_metadata` / `canDeleteGraphKind`.
+- Wire `listTargetProps` + `ObjectListMenuHost` / `ObjectDeleteButton` rather than inventing a one-off delete UI.
+- Before DELETE, clear blockers Graph requires (e.g. Autopilot profile **direct** assignments and **policy set** items). Opaque Intune proxy 400s usually mean leftovers, not a bad path.
+
+## Refresh
+
+- Every object list must pass `onRefresh` into `CompactObjectList` / list headers so the **Refresh** control is present.
+- Inspectors must support `requestObjectRefresh` (header context menu and/or document-tab refresh). Do not add a new object surface without a way to reload Graph state.
+
+## Out of scope
+
+Local-only surfaces (baselines, template store files, write-activity logs) are not Graph objects; do not force Intune trash/Export onto them.

@@ -391,7 +391,7 @@ export function DeviceDetailView({
     { id: "managed-apps", label: "Managed apps", count: device.managedApps?.length ?? 0 },
     { id: "detected-apps", label: "Detected apps", count: device.detectedApps?.length ?? 0 },
     { id: "groups", label: "Groups", count: allGroups.length },
-    { id: "baselines", label: "Baselines" },
+    { id: "baselines", label: "Policy packs" },
     {
       id: "policies",
       label: conflictCount > 0 ? `Policies (${conflictCount} conflict)` : "Policies",

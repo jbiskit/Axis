@@ -33,8 +33,12 @@ pub fn can_delete_graph_object(kind: &str) -> bool {
             | "compliancePolicy"
             | "groupPolicyConfiguration"
             | "deviceConfiguration"
+            | "enrollmentConfiguration"
             | "appProtection"
+            | "mobileApp"
+            | "policySet"
             | "autopilotDevice"
+            | "autopilotProfile"
             | "windowsUpdate:rings"
             | "windowsUpdate:feature"
             | "windowsUpdate:quality"
@@ -55,6 +59,8 @@ fn object_path(kind: &str, id: &str) -> Result<String, GraphError> {
         "deviceConfiguration" | "windowsUpdate:rings" => "deviceManagement/deviceConfigurations",
         "enrollmentConfiguration" => "deviceManagement/deviceEnrollmentConfigurations",
         "appProtection" => "deviceAppManagement/managedAppPolicies",
+        "mobileApp" => "deviceAppManagement/mobileApps",
+        "policySet" => "deviceAppManagement/policySets",
         "autopilotProfile" => "deviceManagement/windowsAutopilotDeploymentProfiles",
         "autopilotDevice" => "deviceManagement/windowsAutopilotDeviceIdentities",
         "windowsUpdate:feature" => "deviceManagement/windowsFeatureUpdateProfiles",
@@ -150,8 +156,171 @@ pub async fn delete_graph_object(
             permission_related: false,
         });
     }
+    // Autopilot profiles cannot be deleted while group assignments remain
+    // (Graph returns an opaque 400 from DeviceEnrollmentFE). Clear direct
+    // assignments and policy-set membership first.
+    // https://learn.microsoft.com/en-us/troubleshoot/mem/intune/device-enrollment/cannot-delete-autopilot-deployment-profile
+    if kind == "autopilotProfile" {
+        clear_autopilot_profile_blockers(access_token, id).await?;
+    }
     GraphClient::new()
         .delete(access_token, &object_path(kind, id)?, "beta")
+        .await
+}
+
+async fn clear_autopilot_profile_blockers(
+    access_token: &str,
+    profile_id: &str,
+) -> Result<(), GraphError> {
+    let client = GraphClient::new();
+    let enc = urlencoding::encode(profile_id);
+    let assignments_path =
+        format!("/deviceManagement/windowsAutopilotDeploymentProfiles/{enc}/assignments");
+    let rows: Vec<Value> = client
+        .fetch_all_pages(access_token, &assignments_path, "beta", 500)
+        .await?;
+
+    // Policy-set–sourced rows cannot be removed via assignment DELETE; drop the
+    // profile from each policy set first (sourceId = policy set id).
+    let mut policy_set_ids = Vec::new();
+    for row in &rows {
+        let source = row
+            .get("source")
+            .and_then(|v| v.as_str())
+            .unwrap_or("direct");
+        if !source.eq_ignore_ascii_case("policySets") {
+            continue;
+        }
+        if let Some(set_id) = row
+            .get("sourceId")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            if !policy_set_ids.iter().any(|existing: &String| existing == set_id) {
+                policy_set_ids.push(set_id.to_string());
+            }
+        }
+    }
+    for set_id in &policy_set_ids {
+        remove_profile_from_policy_set(&client, access_token, set_id, profile_id).await?;
+    }
+
+    // Re-read after policy-set cleanup; delete remaining direct assignments.
+    let remaining: Vec<Value> = client
+        .fetch_all_pages(access_token, &assignments_path, "beta", 500)
+        .await?;
+
+    // If policySets-sourced rows remain (missing/stale sourceId), scan every
+    // policy set for this profile payload and remove matching items.
+    let still_policy_set = remaining.iter().any(|row| {
+        row.get("source")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .eq_ignore_ascii_case("policySets")
+    });
+    if still_policy_set {
+        let sets: Vec<Value> = client
+            .fetch_all_pages(
+                access_token,
+                "/deviceAppManagement/policySets?$select=id",
+                "beta",
+                500,
+            )
+            .await?;
+        for set in sets {
+            let Some(set_id) = set.get("id").and_then(|v| v.as_str()).filter(|s| !s.is_empty())
+            else {
+                continue;
+            };
+            if policy_set_ids.iter().any(|known| known == set_id) {
+                continue;
+            }
+            remove_profile_from_policy_set(&client, access_token, set_id, profile_id).await?;
+        }
+    }
+
+    let remaining: Vec<Value> = if still_policy_set {
+        client
+            .fetch_all_pages(access_token, &assignments_path, "beta", 500)
+            .await?
+    } else {
+        remaining
+    };
+
+    for row in remaining {
+        let source = row
+            .get("source")
+            .and_then(|v| v.as_str())
+            .unwrap_or("direct");
+        if source.eq_ignore_ascii_case("policySets") {
+            // Owned by a policy set — leave alone; item removal above should clear them.
+            continue;
+        }
+        let Some(assignment_id) = row.get("id").and_then(|v| v.as_str()).filter(|s| !s.is_empty())
+        else {
+            continue;
+        };
+        let enc_id = urlencoding::encode(assignment_id);
+        client
+            .delete(
+                access_token,
+                &format!("{assignments_path}/{enc_id}"),
+                "beta",
+            )
+            .await?;
+    }
+    Ok(())
+}
+
+async fn remove_profile_from_policy_set(
+    client: &GraphClient,
+    access_token: &str,
+    policy_set_id: &str,
+    profile_id: &str,
+) -> Result<(), GraphError> {
+    // /items navigation GET is broken on Intune; load via $expand instead.
+    let enc_set = urlencoding::encode(policy_set_id);
+    let set: Value = client
+        .fetch_plain(
+            access_token,
+            &format!("/deviceAppManagement/policySets/{enc_set}?$expand=items"),
+            "beta",
+        )
+        .await?;
+    let items = set
+        .get("items")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut deleted: Vec<String> = Vec::new();
+    for item in items {
+        let payload = item
+            .get("payloadId")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if !payload.eq_ignore_ascii_case(profile_id) {
+            continue;
+        }
+        if let Some(item_id) = item.get("id").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            deleted.push(item_id.to_string());
+        }
+    }
+    if deleted.is_empty() {
+        return Ok(());
+    }
+    // DELETE …/items/{id} is also unavailable; use the update action.
+    // Omit `assignments` so we do not wipe the set's group targets.
+    client
+        .post_no_content(
+            access_token,
+            &format!("/deviceAppManagement/policySets/{enc_set}/update"),
+            "beta",
+            &json!({
+                "addedPolicySetItems": [],
+                "updatedPolicySetItems": [],
+                "deletedPolicySetItems": deleted,
+            }),
+        )
         .await
 }
 
@@ -217,13 +386,15 @@ mod tests {
     }
 
     #[test]
-    fn deletable_kinds_include_policies_and_scripts_but_not_apps() {
+    fn deletable_kinds_include_policies_scripts_and_apps() {
         assert!(can_delete_graph_object("configurationPolicy"));
         assert!(can_delete_graph_object("compliancePolicy"));
         assert!(can_delete_graph_object("script:remediation"));
         assert!(can_delete_graph_object("autopilotDevice"));
-        assert!(!can_delete_graph_object("mobileApp"));
-        assert!(!can_delete_graph_object("autopilotProfile"));
+        assert!(can_delete_graph_object("autopilotProfile"));
+        assert!(can_delete_graph_object("enrollmentConfiguration"));
+        assert!(can_delete_graph_object("mobileApp"));
+        assert!(can_delete_graph_object("policySet"));
     }
 
     #[test]

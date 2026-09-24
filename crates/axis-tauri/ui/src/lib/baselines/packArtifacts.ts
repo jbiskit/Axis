@@ -93,9 +93,76 @@ export function isBaselinePackArtifact(kind: string | undefined): boolean {
   return content === PACK_BASELINE_KIND || content === "baseline-checks";
 }
 
-/** `baselines/*.json` includes lists are policy sets, not ASD baselines. */
+/** `baselines/*.json` includes lists are policy sets within a pack. */
 export function isPolicySetPackArtifact(kind: string | undefined): boolean {
   return isBaselinePackArtifact(kind);
+}
+
+/** Artifact kinds that Policy Packs can create in the tenant (export/import parity). */
+export function isImportablePackArtifact(kind: string | undefined): boolean {
+  const content = packContentKind(kind);
+  return (
+    content === PACK_CATALOG_KIND ||
+    content === "compliance" ||
+    content === "endpoint-security" ||
+    content === "group-policy" ||
+    content === "windows-update" ||
+    content === "enrollment-autopilot" ||
+    content === "script-platform" ||
+    content === "script-remediation" ||
+    content === "script-compliance"
+  );
+}
+
+export function isScriptPackArtifact(kind: string | undefined): boolean {
+  const content = packContentKind(kind);
+  return (
+    content === "script-platform" ||
+    content === "script-remediation" ||
+    content === "script-compliance"
+  );
+}
+
+/** Deep-link after a successful pack import. */
+export function packImportNavigateHref(kind: string, id: string): string {
+  const enc = encodeURIComponent(id);
+  const label = kind.trim();
+  if (label === "catalogPolicy" || label.endsWith("/catalogPolicy")) {
+    return `/intune/policies/settings-catalog?policy=${enc}`;
+  }
+  if (label === "compliancePolicy" || label === "compliance" || label.endsWith("/compliance")) {
+    return `/intune/policies/compliance?policy=${enc}`;
+  }
+  if (
+    label === "endpointSecurityIntent" ||
+    label === "endpoint-security" ||
+    label.endsWith("/endpoint-security")
+  ) {
+    return `/intune/endpoint-security?policy=${enc}`;
+  }
+  if (label === "groupPolicyConfiguration" || label === "group-policy" || label.endsWith("/group-policy")) {
+    return `/intune/policies/admx-studio?policy=${enc}`;
+  }
+  if (label.startsWith("windowsUpdate:") || label === "windows-update" || label.endsWith("/windows-update")) {
+    return `/intune/windows-update?policy=${enc}`;
+  }
+  if (
+    label === "enrollment-autopilot" ||
+    label === "autopilotProfile" ||
+    label.endsWith("/enrollment-autopilot")
+  ) {
+    return `/intune/enrollment/windows/autopilot/profiles?profile=${enc}`;
+  }
+  if (label.includes("remediation")) {
+    return `/intune/devices/remediations?script=${enc}`;
+  }
+  if (label.includes("compliance") && label.includes("script")) {
+    return `/intune/devices/compliance?script=${enc}`;
+  }
+  if (label.includes("platform") || label.startsWith("script:")) {
+    return `/intune/devices/scripts?script=${enc}`;
+  }
+  return `/intune/packs?check=${enc}`;
 }
 
 export function groupPackArtifacts<T extends { artifactKind?: string }>(items: T[]): Array<{

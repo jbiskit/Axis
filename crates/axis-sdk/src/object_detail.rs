@@ -113,6 +113,18 @@ fn spec_for(kind: &str, id: &str) -> Result<KindSpec, GraphError> {
             extra_paths: vec![],
             decode_scripts: false,
         },
+        // Graph documents /items and /assignments navigation, but Intune's
+        // StatelessPayloadLinkingService returns "No OData route" for those GETs.
+        // Items + assignments only come back via $expand on the policy set.
+        "policySet" => KindSpec {
+            object_path: format!(
+                "/deviceAppManagement/policySets/{enc}?$expand=items,assignments"
+            ),
+            assignments_path: None,
+            settings_path: None,
+            extra_paths: vec![],
+            decode_scripts: false,
+        },
         "mobileApp" => KindSpec {
             object_path: format!("/deviceAppManagement/mobileApps/{enc}"),
             assignments_path: Some(format!(
@@ -257,6 +269,11 @@ fn take_embedded_assignments(object: &Value) -> Vec<Value> {
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default()
+}
+
+fn take_embedded_items(object: &mut Value) -> Option<Value> {
+    let items = object.as_object_mut()?.remove("items")?;
+    Some(normalize_extra(items))
 }
 
 fn normalize_extra(value: Value) -> Value {
@@ -524,18 +541,45 @@ pub async fn fetch_graph_object_detail(
                 .fetch_plain(access_token, &spec.object_path, "beta")
                 .await?
         }
+        Err(_) if kind == "policySet" => {
+            // Some tenants reject combined expand; try items then assignments separately.
+            let enc = urlencoding::encode(id);
+            let base = format!("/deviceAppManagement/policySets/{enc}");
+            let mut value: Value = match client
+                .fetch_plain(access_token, &format!("{base}?$expand=items"), "beta")
+                .await
+            {
+                Ok(value) => value,
+                Err(_) => client.fetch_plain(access_token, &base, "beta").await?,
+            };
+            if take_embedded_assignments(&value).is_empty() {
+                if let Ok(with_assignments) = client
+                    .fetch_plain::<Value>(
+                        access_token,
+                        &format!("{base}?$expand=assignments"),
+                        "beta",
+                    )
+                    .await
+                {
+                    if let Some(assignments) = with_assignments.get("assignments").cloned() {
+                        if let Some(map) = value.as_object_mut() {
+                            map.insert("assignments".into(), assignments);
+                        }
+                    }
+                }
+            }
+            value
+        }
         Err(error) => return Err(error),
     };
     let mut warnings = Vec::new();
 
-    let mut assignments = Vec::new();
-    if let Some(path) = &spec.assignments_path {
-        // Prefer assignments embedded via $expand=… when present (enrollment configs,
-        // scripts). Fall back to the /assignments collection if expand was empty/missing.
-        let embedded = take_embedded_assignments(&object);
-        if !embedded.is_empty() {
-            assignments = embedded;
-        } else {
+    let mut assignments = take_embedded_assignments(&object);
+    if assignments.is_empty() {
+        if let Some(path) = &spec.assignments_path {
+            // Prefer assignments embedded via $expand=… when present (enrollment configs,
+            // scripts, policy sets). Fall back to the /assignments collection if expand
+            // was empty/missing — skip when Graph documents a path that Intune rejects.
             match client
                 .fetch_all_pages::<Value>(access_token, path, "beta", ASSIGNMENTS_MAX)
                 .await
@@ -560,6 +604,9 @@ pub async fn fetch_graph_object_detail(
     let mut extras = serde_json::Map::new();
     if let Some(actions) = take_scheduled_actions(&mut object) {
         extras.insert("scheduledActions".into(), actions);
+    }
+    if let Some(items) = take_embedded_items(&mut object) {
+        extras.insert("items".into(), items);
     }
     for (name, path) in spec.extra_paths {
         match client

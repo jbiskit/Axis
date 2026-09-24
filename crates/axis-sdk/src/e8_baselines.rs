@@ -660,10 +660,6 @@ fn request_error(status: StatusCode, message: String) -> GraphError {
     }
 }
 
-fn is_baseline_source_file(name: &str) -> bool {
-    is_pack_list_file(name, false)
-}
-
 fn is_pack_list_file(name: &str, include_scripts: bool) -> bool {
     let lower = name.to_ascii_lowercase();
     if lower.starts_with('.') || lower == AXIS_PACK_MANIFEST || lower == "package.json" || lower == ".gitkeep" {
@@ -1425,7 +1421,7 @@ pub async fn fetch_baseline_reference_sources(
 #[cfg(test)]
 mod tests {
     use super::{
-        github_contents_url, github_tree_url, is_baseline_source_file, looks_like_axis_checks_document,
+        github_contents_url, github_tree_url, is_pack_list_file, looks_like_axis_checks_document,
         parse_github_repo_url, resolve_artifact_scans, resolve_policy_scan_roots, skip_pack_dir,
         AxisPackManifest, AxisPackPaths,
     };
@@ -1433,10 +1429,10 @@ mod tests {
 
     #[test]
     fn accepts_policy_exports_and_skips_pack_manifest() {
-        assert!(is_baseline_source_file("BitLocker.txt"));
-        assert!(is_baseline_source_file("defender.json"));
-        assert!(!is_baseline_source_file("axis-pack.json"));
-        assert!(!is_baseline_source_file("README.md"));
+        assert!(is_pack_list_file("BitLocker.txt", false));
+        assert!(is_pack_list_file("defender.json", false));
+        assert!(!is_pack_list_file("axis-pack.json", false));
+        assert!(!is_pack_list_file("README.md", false));
     }
 
     #[test]

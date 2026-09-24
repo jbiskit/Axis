@@ -211,6 +211,204 @@ fn device_type_or_default(device_type: Option<&str>) -> String {
     trimmed.to_string()
 }
 
+fn string_opt(value: &Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+fn bool_opt(value: &Value, key: &str) -> Option<bool> {
+    value.get(key).and_then(Value::as_bool)
+}
+
+fn bool_from_keys(value: &Value, keys: &[&str]) -> Option<bool> {
+    for key in keys {
+        if let Some(flag) = bool_opt(value, key) {
+            return Some(flag);
+        }
+    }
+    None
+}
+
+/// Map deprecated `outOfBoxExperienceSettings` (read-only) into the create/update property.
+/// Always rebuilds a whitelist body — cloning Graph GET blobs keeps legacy field names and
+/// causes opaque Intune DeviceEnrollmentFE 400s.
+fn normalize_oobe_setting(object: &Value) -> Option<Value> {
+    let source = object
+        .get("outOfBoxExperienceSetting")
+        .filter(|v| v.is_object())
+        .or_else(|| object.get("outOfBoxExperienceSettings").filter(|v| v.is_object()))?;
+    let user_type = string_opt(source, "userType").unwrap_or_else(|| "standard".into());
+    let device_usage = string_opt(source, "deviceUsageType").unwrap_or_else(|| "singleUser".into());
+    Some(json!({
+        "@odata.type": "#microsoft.graph.outOfBoxExperienceSetting",
+        "userType": user_type,
+        "deviceUsageType": device_usage,
+        "privacySettingsHidden": bool_from_keys(
+            source,
+            &["privacySettingsHidden", "hidePrivacySettings"],
+        )
+        .unwrap_or(false),
+        "eulaHidden": bool_from_keys(source, &["eulaHidden", "hideEULA"]).unwrap_or(false),
+        "keyboardSelectionPageSkipped": bool_from_keys(
+            source,
+            &["keyboardSelectionPageSkipped", "skipKeyboardSelectionPage"],
+        )
+        .unwrap_or(false),
+        "escapeLinkHidden": bool_from_keys(source, &["escapeLinkHidden", "hideEscapeLink"])
+            .unwrap_or(false),
+    }))
+}
+
+fn normalize_create_odata_type(raw: &str) -> Result<String, GraphError> {
+    let mut odata = if raw.trim().starts_with('#') {
+        raw.trim().to_string()
+    } else {
+        format!("#{}", raw.trim())
+    };
+    let lower = odata.to_ascii_lowercase();
+    // Abstract base type is not creatable — default to Entra join.
+    if lower.ends_with("windowsautopilotdeploymentprofile")
+        && !lower.contains("azuread")
+        && !lower.contains("activedirectory")
+    {
+        odata = ENTRA_ODATA.to_string();
+    }
+    if !odata.to_ascii_lowercase().contains("windowsautopilotdeploymentprofile") {
+        return Err(GraphError::Request {
+            status: 400,
+            code: None,
+            message: format!("Unsupported Autopilot profile @odata.type: {odata}"),
+            permission_related: false,
+        });
+    }
+    Ok(odata)
+}
+
+/// Build a Graph create body from an exported Autopilot profile object.
+///
+/// Matches the minimal payload Intune accepts for New profile / hydration imports:
+/// whitelist OOBE fields only, no deprecated plural OOBE, no ESP on create, no
+/// managementServiceAppId / foreign role scope tags.
+pub fn autopilot_profile_create_body_from_export(
+    object: &Value,
+    display_name: &str,
+    description: Option<&str>,
+) -> Result<Value, GraphError> {
+    let display_name = validate_display_name(display_name)?;
+    let odata = object
+        .get("@odata.type")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(normalize_create_odata_type)
+        .transpose()?
+        .unwrap_or_else(|| ENTRA_ODATA.to_string());
+    let oobe = normalize_oobe_setting(object).ok_or_else(|| GraphError::Request {
+        status: 400,
+        code: None,
+        message: "Autopilot export is missing out-of-box experience settings.".into(),
+        permission_related: false,
+    })?;
+
+    let locale = string_opt(object, "locale")
+        .or_else(|| string_opt(object, "language"))
+        .unwrap_or_else(|| "os-default".into());
+    let device_type = string_opt(object, "deviceType").unwrap_or_else(|| "windowsPc".into());
+    let preprovisioning = bool_from_keys(object, &["preprovisioningAllowed", "enableWhiteGlove"])
+        .unwrap_or(false);
+    let hardware_hash =
+        bool_opt(object, "hardwareHashExtractionEnabled")
+            .or_else(|| bool_opt(object, "extractHardwareHash"))
+            .unwrap_or(false);
+
+    let mut body = json!({
+        "@odata.type": odata,
+        "displayName": display_name,
+        "locale": locale,
+        "deviceType": device_type,
+        "outOfBoxExperienceSetting": oobe,
+        "preprovisioningAllowed": preprovisioning,
+        "hardwareHashExtractionEnabled": hardware_hash,
+    });
+
+    let desc = description
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| string_opt(object, "description"));
+    if let Some(description) = desc {
+        if description.len() > 1500 {
+            return Err(GraphError::Request {
+                status: 400,
+                code: None,
+                message: "Description must be 1500 characters or fewer.".into(),
+                permission_related: false,
+            });
+        }
+        body["description"] = Value::String(description);
+    }
+    if let Some(template) = string_opt(object, "deviceNameTemplate") {
+        // Graph caps generated names at 15 chars; keep the template but reject obvious junk.
+        if template.len() > 64 {
+            return Err(GraphError::Request {
+                status: 400,
+                code: None,
+                message: "Device name template is too long for Autopilot create.".into(),
+                permission_related: false,
+            });
+        }
+        body["deviceNameTemplate"] = Value::String(template);
+    }
+    if is_hybrid_odata(&odata) {
+        body["hybridAzureADJoinSkipConnectivityCheck"] =
+            json!(bool_opt(object, "hybridAzureADJoinSkipConnectivityCheck").unwrap_or(false));
+    }
+    // Skip enrollmentStatusScreenSettings on create — ESP blobs from GET often 400;
+    // Axis New profile also creates without ESP unless the form opts in.
+    Ok(body)
+}
+
+/// POST a profile; on opaque Intune 400, retry once with licensing-sensitive flags off.
+pub async fn create_autopilot_profile_from_export(
+    access_token: &str,
+    object: &Value,
+    display_name: &str,
+    description: Option<&str>,
+) -> Result<AutopilotProfile, GraphError> {
+    let mut body = autopilot_profile_create_body_from_export(object, display_name, description)?;
+    let client = GraphClient::new();
+    match client
+        .post::<Value>(
+            access_token,
+            "/deviceManagement/windowsAutopilotDeploymentProfiles",
+            "beta",
+            &body,
+        )
+        .await
+    {
+        Ok(created) => summary_from_created(&created),
+        Err(error) if error.status() == Some(400) => {
+            body["preprovisioningAllowed"] = json!(false);
+            body["hardwareHashExtractionEnabled"] = json!(false);
+            let created: Value = client
+                .post(
+                    access_token,
+                    "/deviceManagement/windowsAutopilotDeploymentProfiles",
+                    "beta",
+                    &body,
+                )
+                .await
+                .map_err(|_| error)?;
+            summary_from_created(&created)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 pub fn create_autopilot_profile_body(input: &CreateAutopilotProfileInput) -> Result<Value, GraphError> {
     let display_name = validate_display_name(&input.display_name)?;
     validate_oobe(&input.oobe)?;
@@ -455,6 +653,64 @@ mod tests {
         assert_eq!(body["@odata.type"], HYBRID_ODATA);
         assert_eq!(body["hybridAzureADJoinSkipConnectivityCheck"], true);
         assert_eq!(body["locale"], "os-default");
+    }
+
+    #[test]
+    fn export_body_converts_legacy_oobe_settings() {
+        let object = json!({
+            "@odata.type": "#microsoft.graph.azureADWindowsAutopilotDeploymentProfile",
+            "displayName": "PolicyForge - Import",
+            "description": "from pack",
+            "locale": "en-AU",
+            "deviceType": "windowsPc",
+            "managementServiceAppId": "should-drop",
+            "outOfBoxExperienceSettings": {
+                "@odata.type": "#microsoft.graph.outOfBoxExperienceSettings",
+                "hidePrivacySettings": true,
+                "hideEULA": true,
+                "userType": "standard",
+                "deviceUsageType": "singleUser",
+                "skipKeyboardSelectionPage": true,
+                "hideEscapeLink": true
+            },
+            "enableWhiteGlove": true,
+            "hardwareHashExtractionEnabled": false
+        });
+        let body = autopilot_profile_create_body_from_export(&object, "PolicyForge - Import", None)
+            .unwrap();
+        assert!(body.get("outOfBoxExperienceSettings").is_none());
+        assert!(body.get("managementServiceAppId").is_none());
+        assert_eq!(
+            body["outOfBoxExperienceSetting"]["privacySettingsHidden"],
+            true
+        );
+        assert_eq!(body["outOfBoxExperienceSetting"]["eulaHidden"], true);
+        assert_eq!(
+            body["outOfBoxExperienceSetting"]["@odata.type"],
+            "#microsoft.graph.outOfBoxExperienceSetting"
+        );
+        assert_eq!(body["preprovisioningAllowed"], true);
+        assert_eq!(body["locale"], "en-AU");
+        assert!(body.get("enrollmentStatusScreenSettings").is_none());
+        assert!(body.get("roleScopeTagIds").is_none());
+        assert!(body.get("outOfBoxExperienceSetting").unwrap().get("hidePrivacySettings").is_none());
+    }
+
+    #[test]
+    fn abstract_odata_type_defaults_to_entra() {
+        let object = json!({
+            "@odata.type": "#microsoft.graph.windowsAutopilotDeploymentProfile",
+            "outOfBoxExperienceSetting": {
+                "userType": "standard",
+                "deviceUsageType": "singleUser",
+                "privacySettingsHidden": true,
+                "eulaHidden": true,
+                "keyboardSelectionPageSkipped": true,
+                "escapeLinkHidden": true
+            }
+        });
+        let body = autopilot_profile_create_body_from_export(&object, "Base", None).unwrap();
+        assert_eq!(body["@odata.type"], ENTRA_ODATA);
     }
 
     #[test]

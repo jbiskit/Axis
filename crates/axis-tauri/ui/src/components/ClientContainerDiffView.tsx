@@ -23,6 +23,7 @@ import {
 } from "../lib/clientCompareCache";
 import { WriteActionButton, useWriteGate } from "../lib/readOnly";
 import type { PackExportProgress } from "../types/inventory";
+import { SelectCheckbox, useCheckedIds } from "./workbench/PolicyBulkAssign";
 
 const LIVE = "live";
 
@@ -69,8 +70,31 @@ function isRestorableKind(kind: string): boolean {
     value === "platform-powershell" ||
     value === "platform-shell" ||
     value === "remediation" ||
-    value === "compliance"
+    value === "compliance" ||
+    value === "compliancepolicy" ||
+    value === "grouppolicyconfiguration" ||
+    value === "group-policy" ||
+    value === "autopilotprofile" ||
+    value === "enrollment-autopilot" ||
+    value === "enrollmentconfiguration" ||
+    value.startsWith("windowsupdate:") ||
+    value === "endpointsecurityintent"
   );
+}
+
+function resolutionForRow(
+  row: PackObjectDiff,
+  value: "keep" | "take-left" | "take-right",
+): Resolution {
+  if (value === "take-left") {
+    if (row.change === "added") return "keep";
+    return isRestorableKind(row.kind) ? "take-left" : "keep";
+  }
+  if (value === "take-right") {
+    if (row.change === "removed") return "keep";
+    return isRestorableKind(row.kind) ? "take-right" : "keep";
+  }
+  return "keep";
 }
 
 function defaultResolutions(objects: PackObjectDiff[]): Record<string, Resolution> {
@@ -244,6 +268,13 @@ export function ClientContainerDiffView({
     });
   }, [filter, query, report, resolutions]);
 
+  const filteredKeys = useMemo(() => filtered.map((row) => row.key), [filtered]);
+  const selection = useCheckedIds(filteredKeys);
+  const checkedRows = useMemo(
+    () => filtered.filter((row) => selection.checkedIds.has(row.key)),
+    [filtered, selection.checkedIds],
+  );
+
   const selected: PackObjectDiff | null =
     filtered.find((row) => row.key === selectedKey) ?? filtered[0] ?? null;
 
@@ -292,25 +323,26 @@ export function ClientContainerDiffView({
     setApplyResult(null);
   }
 
-  function resolveAll(value: "keep" | "take-left" | "take-right") {
-    if (!report) return;
+  function resolveRows(rows: PackObjectDiff[], value: "keep" | "take-left" | "take-right") {
+    if (rows.length === 0) return;
     setResolutions((current) => {
       const next = { ...current };
-      for (const row of report.objects) {
-        if (value === "take-left") {
-          // Only meaningful when left has content for this object.
-          if (row.change === "added") next[row.key] = "keep";
-          else next[row.key] = isRestorableKind(row.kind) ? "take-left" : "keep";
-        } else if (value === "take-right") {
-          if (row.change === "removed") next[row.key] = "keep";
-          else next[row.key] = isRestorableKind(row.kind) ? "take-right" : "keep";
-        } else {
-          next[row.key] = "keep";
-        }
+      for (const row of rows) {
+        next[row.key] = resolutionForRow(row, value);
       }
       return next;
     });
     setApplyResult(null);
+  }
+
+  function resolveAll(value: "keep" | "take-left" | "take-right") {
+    if (!report) return;
+    resolveRows(report.objects, value);
+  }
+
+  function resolveSelected(value: "keep" | "take-left" | "take-right") {
+    resolveRows(checkedRows, value);
+    selection.clear();
   }
 
   async function runCompare() {
@@ -680,16 +712,80 @@ export function ClientContainerDiffView({
                   </select>
                 </label>
               </div>
+              {checkedRows.length > 0 ? (
+                <div className="bulk-assign-bar client-merge-bulk">
+                  <span className="bulk-assign-count">
+                    {checkedRows.length} selected
+                  </span>
+                  <div className="device-actions">
+                    <button
+                      type="button"
+                      className="axis-btn"
+                      disabled={busy}
+                      onClick={() => resolveSelected("keep")}
+                    >
+                      {rightIsLive ? "Keep live" : "Keep right"}
+                    </button>
+                    {leftIsSnapshot ? (
+                      <button
+                        type="button"
+                        className="axis-btn axis-btn-primary"
+                        disabled={busy}
+                        onClick={() => resolveSelected("take-left")}
+                      >
+                        Accept left
+                      </button>
+                    ) : null}
+                    {rightIsSnapshot ? (
+                      <button
+                        type="button"
+                        className="axis-btn axis-btn-primary"
+                        disabled={busy}
+                        onClick={() => resolveSelected("take-right")}
+                      >
+                        Accept right
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="axis-btn axis-btn-ghost"
+                      disabled={busy}
+                      onClick={() => selection.clear()}
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+              <div className="client-merge-list-head">
+                <SelectCheckbox
+                  checked={selection.allSelected && filteredKeys.length > 0}
+                  indeterminate={
+                    checkedRows.length > 0 && checkedRows.length < filteredKeys.length
+                  }
+                  disabled={filteredKeys.length === 0 || busy}
+                  label="Select all filtered objects"
+                  onChange={() => selection.toggleAll()}
+                />
+                <span className="muted">Select objects, then keep live or accept left</span>
+              </div>
               <ul className="device-card-list" style={{ border: 0, borderRadius: 0 }}>
                 {filtered.map((row) => {
                   const resolution = resolutions[row.key] ?? "unresolved";
+                  const checked = selection.checkedIds.has(row.key);
                   return (
-                    <li key={row.key}>
+                    <li key={row.key} className="client-merge-list-row">
+                      <SelectCheckbox
+                        checked={checked}
+                        disabled={busy}
+                        label={`Select ${row.displayName}`}
+                        onChange={() => selection.toggle(row.key)}
+                      />
                       <button
                         type="button"
                         className={`device-card client-merge-file${
                           selected?.key === row.key ? " selected" : ""
-                        } is-${resolution}`}
+                        }${checked ? " is-checked" : ""} is-${resolution}`}
                         onClick={() => setSelectedKey(row.key)}
                       >
                         <p className="device-card-name">{row.displayName}</p>

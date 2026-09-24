@@ -15,7 +15,7 @@ import { WriteActionButton } from "../lib/readOnly";
 import {
   applyGitHubRepoInput,
   GITHUB_FINE_GRAINED_TOKEN_URL,
-  isBuiltinSource,
+  isKitPackSource,
   isLocalSource,
   isSourceReady,
   loadStoredSources,
@@ -58,7 +58,9 @@ const CORE_CATEGORIES: Array<{ category: string; label: string }> = [
 const ACTIVE_PACK_KEY = "axis-packs-active-source-id";
 
 function packSourcesOnly(sources: BaselineReferenceSourceInput[]): BaselineReferenceSourceInput[] {
-  return sources.map(sanitizeSource).filter((source) => !isBuiltinSource(source) && isSourceReady(source));
+  return sources
+    .map(sanitizeSource)
+    .filter((source) => isSourceReady(source) && isKitPackSource(source));
 }
 
 function groupArtifacts(
@@ -123,11 +125,18 @@ function sourceLabel(source: BaselineReferenceSourceInput): string {
   return isLocalSource(source) ? `${title} (local)` : `${title} (GitHub)`;
 }
 
-export function PacksKitsView() {
+export function PacksKitsView({
+  preferredSourceId = null,
+  onBack,
+}: {
+  preferredSourceId?: string | null;
+  onBack?: () => void;
+} = {}) {
   const [sources, setSources] = useState<BaselineReferenceSourceInput[]>(() =>
     packSourcesOnly(loadStoredSources()),
   );
   const [activeSourceId, setActiveSourceId] = useState<string | null>(() => {
+    if (preferredSourceId?.trim()) return preferredSourceId.trim();
     try {
       return window.localStorage.getItem(ACTIVE_PACK_KEY);
     } catch {
@@ -179,8 +188,9 @@ export function PacksKitsView() {
 
   function persistSources(next: BaselineReferenceSourceInput[]) {
     const all = loadStoredSources();
-    const builtin = all.filter(isBuiltinSource);
-    const merged = [...builtin, ...next.map(sanitizeSource)];
+    const kits = next.map(sanitizeSource);
+    const others = all.filter((row) => !isKitPackSource(row));
+    const merged = [...others, ...kits];
     saveStoredSources(merged);
     setSources(packSourcesOnly(merged));
   }
@@ -253,7 +263,7 @@ export function PacksKitsView() {
     const source = sanitizeSource({
       ...newLocalSource(),
       localPath: root,
-      name: root.split(/[\\/]/).filter(Boolean).at(-1) || "Local pack",
+      name: root.split(/[\\/]/).filter(Boolean).slice(-1)[0] || "Local pack",
       storeKind: "axisTemplated",
     });
     const next = [source, ...sources.filter((row) => row.localPath !== root)];
@@ -401,7 +411,9 @@ export function PacksKitsView() {
 
   useEffect(() => {
     const preferred =
-      sources.find((row) => row.id === activeSourceId) ?? sources[0] ?? null;
+      sources.find((row) => row.id === (preferredSourceId?.trim() || activeSourceId)) ??
+      sources[0] ??
+      null;
     if (preferred && !workspace) {
       void loadSource(preferred);
     }
@@ -412,16 +424,21 @@ export function PacksKitsView() {
   return (
     <div className="stack packs-kits">
       <PageHeader
-        title={workspace?.pack.name ?? "Packs"}
+        title={workspace?.pack.name ?? "Manage kits"}
         description={
           workspace
             ? workspace.writable
-              ? "Kits are named selections of paths inside this pack. Saving updates kit membership only — files stay where they are."
-              : "GitHub packs are read-only in Axis. Browse kits and membership here; edit kits on a local clone."
-            : "Create a local pack, open an existing folder, or add a GitHub pack (axis-pack.json at the repo root)."
+              ? "Kits are named selections of paths inside this policy pack. Saving updates kit membership only — files stay where they are."
+              : "GitHub kit packs are read-only in Axis. Browse kits and membership here; edit kits on a local clone."
+            : "Open a kit-shaped policy pack (axis-pack.json at the root). Flat JSON packs stay on the Policy Packs list."
         }
         actions={
           <div className="axis-btn-row packs-kits-toolbar">
+            {onBack ? (
+              <button type="button" className="axis-btn axis-btn-ghost" onClick={onBack} disabled={busy}>
+                Back to packs
+              </button>
+            ) : null}
             {sources.length > 0 ? (
               <label className="packs-kits-source-select">
                 <span className="visually-hidden">Pack source</span>

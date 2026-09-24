@@ -14,3 +14,13 @@ Resolve display names and help text in this order. Do not invent labels when an 
 3. **Inference** — `titleCaseKey` / `humanizeSettingToken` only if both sources are missing or return unusable text (`l_*` keys).
 
 Keep local catalogs for structure (Graph keys, control types, `dependsOn`, option *values*). Do not treat hand-written labels as the source of truth when step 1 or 2 returns copy.
+
+## Inspector chrome
+
+For every Graph object workbench / inspector / list reveal:
+
+1. **Raw JSON** — Export (or equivalent) must expose the loaded Graph JSON; when debugging, include request path + raw error/body.
+2. **Delete** — Trash control on list + inspector for every kind with a Graph DELETE path (`canDeleteGraphKind` / `object_metadata`). Clear assignment / policy-set blockers before delete when Graph requires it.
+3. **Refresh** — List `onRefresh` and inspector/`requestObjectRefresh` on every Graph object surface.
+
+Local-only surfaces (baselines, template files) are exempt.

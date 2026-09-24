@@ -163,6 +163,16 @@ export type AppProtectionPolicy = {
   lastModifiedDateTime?: string | null;
 };
 
+export type PolicySetSummary = {
+  id: string;
+  displayName: string;
+  description?: string | null;
+  status?: string | null;
+  errorCode?: string | null;
+  createdDateTime?: string | null;
+  lastModifiedDateTime?: string | null;
+};
+
 export type WindowsUpdatePolicy = {
   id: string;
   family: string;
@@ -510,14 +520,7 @@ export type E8BaselineReference = {
   artifactKind?: string;
 };
 
-export type E8BaselineReferencesResponse = {
-  source: E8BaselineSource;
-  references: E8BaselineReference[];
-  warnings: string[];
-  error: string | null;
-};
-
-/** Axis Templated pack root (`axis-pack.json`) or an explicit folder of policy JSON. */
+/** Kit pack root (`axis-pack.json`) or an explicit Flat JSON folder of policy exports. */
 export type TemplateStoreKind = "axisTemplated" | "flatJson";
 
 export type BaselineReferenceSourceInput = {
@@ -534,7 +537,7 @@ export type BaselineReferenceSourceInput = {
   gitRef: string;
   path: string;
   /**
-   * How to read a user template store. Built-in ASD ignores this.
+   * How to read a policy pack.
    * `axisTemplated` uses an empty path and `axis-pack.json`. `flatJson` scans `path` (or the local folder).
    */
   storeKind?: TemplateStoreKind;
@@ -558,6 +561,23 @@ export type BaselineReferenceSourcesResponse = {
 export type BaselineExportResponse = {
   document: Record<string, unknown> | unknown[] | null;
   error: string | null;
+};
+
+export type PackArtifactTextResponse = {
+  text: string | null;
+  error: string | null;
+};
+
+export type PackImportResult = {
+  id: string;
+  kind: string;
+  displayName: string;
+};
+
+export type PackImportResponse = {
+  result: PackImportResult | null;
+  error: string | null;
+  mode: string;
 };
 
 export type PackExportProgress = {

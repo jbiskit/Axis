@@ -355,6 +355,35 @@
   gap: 0.75rem;
 }
 
+.client-merge-bulk {
+  margin: 0 0.65rem 0.5rem;
+}
+
+.client-merge-list-head {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.35rem 0.85rem 0.55rem;
+  font-size: 0.75rem;
+}
+
+.client-merge-list-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  padding: 0.15rem 0.55rem 0.15rem 0.65rem;
+}
+
+.client-merge-list-row .device-card {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+}
+
+.client-merge-list-row .client-merge-file.is-checked {
+  outline: 1px solid color-mix(in srgb, var(--axis-accent, #3b82f6) 45%, transparent);
+}
+
 .client-merge-actions {
   display: flex;
   flex-wrap: wrap;

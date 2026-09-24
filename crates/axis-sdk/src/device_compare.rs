@@ -117,22 +117,34 @@ pub async fn fetch_baseline_export_json(
     download_url: &str,
     token: Option<&str>,
 ) -> Result<Value, GraphError> {
+    let text = fetch_pack_artifact_text(download_url, token).await?;
+    parse_export_json(&text)
+}
+
+/// Fetch a pack artifact as raw text (JSON or `@axis-pack` scripts).
+pub async fn fetch_pack_artifact_text(
+    download_url: &str,
+    token: Option<&str>,
+) -> Result<String, GraphError> {
     let url = download_url.trim();
     if url.starts_with("https://") {
-        return fetch_https_baseline_export(url, token).await;
+        return fetch_https_pack_artifact_text(url, token).await;
     }
     if url.starts_with("http://") {
         return Err(GraphError::Request {
             status: 400,
             code: None,
-            message: "Remote baseline downloads must use https.".into(),
+            message: "Remote pack downloads must use https.".into(),
             permission_related: false,
         });
     }
-    fetch_local_baseline_export(url)
+    fetch_local_pack_artifact_text(url)
 }
 
-async fn fetch_https_baseline_export(url: &str, token: Option<&str>) -> Result<Value, GraphError> {
+async fn fetch_https_pack_artifact_text(
+    url: &str,
+    token: Option<&str>,
+) -> Result<String, GraphError> {
     let token = token.map(str::trim).filter(|value| !value.is_empty());
     let client = reqwest::Client::new();
     let response = apply_github_auth(client.get(url), token).send().await?;
@@ -150,23 +162,21 @@ async fn fetch_https_baseline_export(url: &str, token: Option<&str>) -> Result<V
         return Err(GraphError::Request {
             status: status.as_u16(),
             code: None,
-            message: format!("HTTP {status} while downloading baseline export.{hint}"),
+            message: format!("HTTP {status} while downloading pack artifact.{hint}"),
             permission_related: status == reqwest::StatusCode::FORBIDDEN,
         });
     }
-    let text = response.text().await?;
-    parse_export_json(&text)
+    Ok(response.text().await?)
 }
 
-fn fetch_local_baseline_export(path: &str) -> Result<Value, GraphError> {
+fn fetch_local_pack_artifact_text(path: &str) -> Result<String, GraphError> {
     let file = local_export_path(path);
-    let text = std::fs::read_to_string(&file).map_err(|error| GraphError::Request {
+    std::fs::read_to_string(&file).map_err(|error| GraphError::Request {
         status: 400,
         code: None,
         message: format!("Could not read local pack file {}: {error}", file.display()),
         permission_related: false,
-    })?;
-    parse_export_json(&text)
+    })
 }
 
 fn local_export_path(key: &str) -> PathBuf {
@@ -217,7 +227,8 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("edge.json");
         std::fs::write(&path, "{\"name\":\"Edge\",\"settings\":[]}").unwrap();
-        let parsed = fetch_local_baseline_export(&path.to_string_lossy()).unwrap();
+        let text = fetch_local_pack_artifact_text(&path.to_string_lossy()).unwrap();
+        let parsed = parse_export_json(&text).unwrap();
         assert_eq!(parsed["name"], "Edge");
         let _ = std::fs::remove_dir_all(&dir);
     }

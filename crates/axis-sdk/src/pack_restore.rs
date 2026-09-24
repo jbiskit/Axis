@@ -1,23 +1,29 @@
 //! Selective restore of snapshot pack artifacts into the live tenant.
 //!
-//! v1 supports Settings Catalog policies and scripts (platform / remediation / compliance).
+//! Supports Settings Catalog policies, scripts, compliance, group policy,
+//! Windows Update profiles, endpoint security intents, and enrolment objects
+//! (e.g. Autopilot deployment profiles) as exported into packs.
 //! Modes:
 //! - **Add** — create when missing; skip when a live match exists (identical or settings differ)
 //! - **Update** — patch matching live objects' settings/script content in place when content
 //!   differs; skip identical / missing
 //!
 //! After an identity match (Graph id or display name), Axis compares settings / script text
-//! so the plan can show **Identical** vs **Settings differ**.
+//! (or enrolment Graph payload) so the plan can show **Identical** vs **Settings differ**.
 //! Update is not delete+create — it patches the existing Graph object.
 
 use crate::inventory::{
-    fetch_configuration_policies, fetch_tenant_scripts, CatalogPolicySummary, TenantScriptSummary,
+    fetch_autopilot_profiles, fetch_configuration_policies, fetch_enrollment_configurations,
+    fetch_tenant_scripts, AutopilotProfile, CatalogPolicySummary, TenantScriptSummary,
 };
+use crate::graph::GraphClient;
 use crate::object_detail::{
     create_tenant_script, fetch_graph_object_detail, update_script_content, CreateTenantScriptInput,
     UpdateScriptContentInput,
 };
-use crate::object_duplicate::strip_keys;
+use crate::object_duplicate::{
+    copy_gpo_definition_values, strip_for_graph_create, strip_keys, strip_setting_definitions,
+};
 use crate::settings_catalog::{
     create_policy_with_settings, create_policy_with_template, replace_catalog_policy_settings,
     SettingsCatalogPlatform,
@@ -128,6 +134,14 @@ pub struct RestoreApplyResult {
     pub warnings: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackImportResult {
+    pub id: String,
+    pub kind: String,
+    pub display_name: String,
+}
+
 #[derive(Debug, Clone)]
 enum RestorePayload {
     Catalog {
@@ -156,7 +170,43 @@ enum RestorePayload {
         source_id: Option<String>,
         rel_paths: Vec<String>,
     },
+    /// Pack JSON with `axisExport` + `object` (compliance, GPO, WU, Autopilot, enrolment).
+    Named {
+        graph_kind: String,
+        axis_kind: String,
+        display_name: String,
+        description: Option<String>,
+        source_id: Option<String>,
+        object: Value,
+        /// GPO definition values (and similar) exported at the document root.
+        settings: Vec<Value>,
+        rel_paths: Vec<String>,
+    },
+    /// Endpoint security intent export (`displayName` / `templateId` / `settings` / `intent`).
+    EndpointSecurity {
+        display_name: String,
+        description: Option<String>,
+        template_id: String,
+        settings: Vec<Value>,
+        source_id: Option<String>,
+        rel_paths: Vec<String>,
+    },
 }
+
+const NAMED_STRIP_KEYS: &[&str] = &[
+    "id",
+    "@odata.context",
+    "@odata.etag",
+    "@odata.id",
+    "@odata.editLink",
+    "createdDateTime",
+    "lastModifiedDateTime",
+    "modifiedDateTime",
+    "version",
+    "assignments",
+    "isAssigned",
+    "priority",
+];
 
 impl RestorePayload {
     fn key(&self) -> String {
@@ -170,6 +220,17 @@ impl RestorePayload {
                 display_name,
                 ..
             } => identity_key(kind, source_id.as_deref(), display_name),
+            Self::Named {
+                graph_kind,
+                source_id,
+                display_name,
+                ..
+            } => identity_key(graph_kind, source_id.as_deref(), display_name),
+            Self::EndpointSecurity {
+                source_id,
+                display_name,
+                ..
+            } => identity_key("endpointSecurityIntent", source_id.as_deref(), display_name),
         }
     }
 
@@ -177,27 +238,85 @@ impl RestorePayload {
         match self {
             Self::Catalog { .. } => "catalogPolicy",
             Self::Script { kind, .. } => kind.as_str(),
+            Self::Named { axis_kind, .. } => axis_kind.as_str(),
+            Self::EndpointSecurity { .. } => "endpointSecurityIntent",
         }
     }
 
     fn display_name(&self) -> &str {
         match self {
             Self::Catalog { name, .. } => name.as_str(),
-            Self::Script { display_name, .. } => display_name.as_str(),
+            Self::Script { display_name, .. }
+            | Self::Named { display_name, .. }
+            | Self::EndpointSecurity { display_name, .. } => display_name.as_str(),
         }
     }
 
     fn source_id(&self) -> Option<&str> {
         match self {
-            Self::Catalog { source_id, .. } => source_id.as_deref(),
-            Self::Script { source_id, .. } => source_id.as_deref(),
+            Self::Catalog { source_id, .. }
+            | Self::Script { source_id, .. }
+            | Self::Named { source_id, .. }
+            | Self::EndpointSecurity { source_id, .. } => source_id.as_deref(),
         }
     }
 
     fn rel_paths(&self) -> &[String] {
         match self {
-            Self::Catalog { rel_paths, .. } | Self::Script { rel_paths, .. } => rel_paths,
+            Self::Catalog { rel_paths, .. }
+            | Self::Script { rel_paths, .. }
+            | Self::Named { rel_paths, .. }
+            | Self::EndpointSecurity { rel_paths, .. } => rel_paths,
         }
+    }
+
+    fn with_display_overrides(
+        mut self,
+        display_name: Option<&str>,
+        description: Option<&str>,
+    ) -> Self {
+        let name = display_name
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string);
+        let desc = description.map(|v| v.to_string());
+        match &mut self {
+            Self::Catalog {
+                name: n,
+                description: d,
+                ..
+            } => {
+                if let Some(name) = name {
+                    *n = name;
+                }
+                if let Some(desc) = desc {
+                    *d = Some(desc);
+                }
+            }
+            Self::Script {
+                display_name: n,
+                description: d,
+                ..
+            }
+            | Self::Named {
+                display_name: n,
+                description: d,
+                ..
+            }
+            | Self::EndpointSecurity {
+                display_name: n,
+                description: d,
+                ..
+            } => {
+                if let Some(name) = name {
+                    *n = name;
+                }
+                if let Some(desc) = desc {
+                    *d = Some(desc);
+                }
+            }
+        }
+        self
     }
 }
 
@@ -208,23 +327,40 @@ fn identity_key(kind: &str, source_id: Option<&str>, name: &str) -> String {
     format!("{kind}::name:{}", name.trim().to_ascii_lowercase())
 }
 
+fn is_restorable_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "catalogPolicy"
+            | "script:platform-powershell"
+            | "script:platform-shell"
+            | "platform-powershell"
+            | "platform-shell"
+            | "script:remediation"
+            | "remediation"
+            | "script:compliance"
+            | "compliance"
+            | "enrollment-autopilot"
+            | "enrollmentConfiguration"
+            | "autopilotProfile"
+            | "compliancePolicy"
+            | "group-policy"
+            | "groupPolicyConfiguration"
+            | "endpointSecurityIntent"
+            | "windowsUpdate:rings"
+            | "windowsUpdate:feature"
+            | "windowsUpdate:quality"
+            | "windowsUpdate:drivers"
+    ) || kind.starts_with("enrollment-")
+        || kind.starts_with("windowsUpdate:")
+        || kind.starts_with("script:")
+}
+
 pub fn list_restore_candidates(pack_root: &Path) -> Result<Vec<RestoreCandidate>, PackRestoreError> {
     let payloads = load_restore_payloads(pack_root)?;
     Ok(payloads
         .into_iter()
         .map(|payload| {
-            let restorable = matches!(
-                payload.kind_label(),
-                "catalogPolicy"
-                    | "script:platform-powershell"
-                    | "script:platform-shell"
-                    | "platform-powershell"
-                    | "platform-shell"
-                    | "script:remediation"
-                    | "remediation"
-                    | "script:compliance"
-                    | "compliance"
-            );
+            let restorable = is_restorable_kind(payload.kind_label());
             RestoreCandidate {
                 key: payload.key(),
                 kind: payload.kind_label().to_string(),
@@ -443,19 +579,23 @@ fn unsupported_reason_for_include(pack_root: &Path, rel: &str) -> String {
         return "File is missing from the pack.".into();
     }
     if lower.contains("/compliance/") {
-        return "Compliance policies are not applied from kits in this version.".into();
+        return "Compliance policy could not be loaded for apply (expected axisExport + object)."
+            .into();
     }
     if lower.contains("/endpoint-security/") {
-        return "Endpoint security intents are not applied from kits in this version.".into();
+        return "Endpoint security intent could not be loaded for apply (expected axisExport + templateId + settings).".into();
     }
     if lower.contains("/enrollment/") || lower.contains("/autopilot/") {
-        return "Enrolment / Autopilot objects are not applied from kits in this version.".into();
+        return "Enrolment object could not be loaded for apply (expected axisExport + object).".into();
     }
     if lower.contains("/applications/") {
         return "Applications are not applied from kits in this version.".into();
     }
-    if lower.contains("/windows-update/") || lower.contains("/group-policy/") {
-        return "This artifact type is not applied from kits in this version.".into();
+    if lower.contains("/windows-update/") {
+        return "Windows Update profile could not be loaded for apply (expected axisExport + object).".into();
+    }
+    if lower.contains("/group-policy/") {
+        return "Group Policy configuration could not be loaded for apply (expected axisExport + object + settings).".into();
     }
     if lower.ends_with(".json") && lower.contains("/policies/") {
         return "Not a Settings Catalog export (missing settings / catalogPolicy).".into();
@@ -463,7 +603,7 @@ fn unsupported_reason_for_include(pack_root: &Path, rel: &str) -> String {
     if lower.ends_with(".ps1") || lower.ends_with(".sh") {
         return "Script could not be loaded for apply.".into();
     }
-    "Not a supported Settings Catalog policy or script for kit apply.".into()
+    "Not a supported pack artifact for kit apply.".into()
 }
 
 fn read_kit_for_apply(pack_root: &Path, kit_rel_path: &str) -> Result<(String, String, String, Vec<String>), PackRestoreError> {
@@ -567,7 +707,7 @@ fn select_kit_apply_targets(
     })
 }
 
-/// Plan applying a kit's `includes` into the signed-in tenant (catalog + scripts v1).
+/// Plan applying a kit's `includes` into the signed-in tenant (catalog, scripts, enrolment).
 pub async fn plan_kit_apply(
     access_token: &str,
     pack_root: &Path,
@@ -738,11 +878,17 @@ struct LiveIndex {
     catalog_by_name: HashMap<String, CatalogPolicySummary>,
     scripts_by_id: HashMap<String, TenantScriptSummary>,
     scripts_by_name: HashMap<String, Vec<TenantScriptSummary>>,
+    autopilot_by_id: HashMap<String, AutopilotProfile>,
+    autopilot_by_name: HashMap<String, AutopilotProfile>,
+    enrollment_by_id: HashMap<String, CatalogPolicySummary>,
+    enrollment_by_name: HashMap<String, CatalogPolicySummary>,
 }
 
 async fn load_live_index(access_token: &str) -> Result<LiveIndex, PackRestoreError> {
     let catalog = fetch_configuration_policies(access_token).await?;
     let scripts = fetch_tenant_scripts(access_token).await?;
+    let autopilot = fetch_autopilot_profiles(access_token).await?;
+    let enrollment = fetch_enrollment_configurations(access_token).await?;
     let mut catalog_by_id = HashMap::new();
     let mut catalog_by_name = HashMap::new();
     for item in catalog.items {
@@ -758,11 +904,27 @@ async fn load_live_index(access_token: &str) -> Result<LiveIndex, PackRestoreErr
             .or_default()
             .push(item);
     }
+    let mut autopilot_by_id = HashMap::new();
+    let mut autopilot_by_name = HashMap::new();
+    for item in autopilot.items {
+        autopilot_by_id.insert(item.id.clone(), item.clone());
+        autopilot_by_name.insert(item.display_name.trim().to_ascii_lowercase(), item);
+    }
+    let mut enrollment_by_id = HashMap::new();
+    let mut enrollment_by_name = HashMap::new();
+    for item in enrollment.items {
+        enrollment_by_id.insert(item.id.clone(), item.clone());
+        enrollment_by_name.insert(item.name.trim().to_ascii_lowercase(), item);
+    }
     Ok(LiveIndex {
         catalog_by_id,
         catalog_by_name,
         scripts_by_id,
         scripts_by_name,
+        autopilot_by_id,
+        autopilot_by_name,
+        enrollment_by_id,
+        enrollment_by_name,
     })
 }
 
@@ -834,6 +996,13 @@ async fn plan_item(
             display_name,
             ..
         } => resolve_script_match(live, kind, source_id.as_deref(), display_name, warnings),
+        RestorePayload::Named {
+            graph_kind,
+            source_id,
+            display_name,
+            ..
+        } => resolve_named_match(live, graph_kind, source_id.as_deref(), display_name, warnings),
+        RestorePayload::EndpointSecurity { .. } => None,
     };
 
     let content = match match_live.as_ref() {
@@ -924,6 +1093,13 @@ async fn compare_payload_to_live(
                 detail.remediation_script_text.as_deref(),
             ))
         }
+        RestorePayload::Named {
+            graph_kind, object, ..
+        } => {
+            let detail = fetch_graph_object_detail(access_token, graph_kind, live_id).await?;
+            Ok(named_object_equivalent(object, &detail.object))
+        }
+        RestorePayload::EndpointSecurity { .. } => Ok(false),
     }
 }
 
@@ -1023,6 +1199,90 @@ fn normalize_script_kind(kind: &str) -> String {
         .to_ascii_lowercase()
 }
 
+fn resolve_named_match(
+    live: &LiveIndex,
+    graph_kind: &str,
+    source_id: Option<&str>,
+    display_name: &str,
+    warnings: &mut Vec<String>,
+) -> Option<(String, String)> {
+    match graph_kind {
+        "autopilotProfile" => {
+            if let Some(id) = source_id.map(str::trim).filter(|v| !v.is_empty()) {
+                if let Some(item) = live.autopilot_by_id.get(id) {
+                    return Some((item.id.clone(), item.display_name.clone()));
+                }
+            }
+            live.autopilot_by_name
+                .get(&display_name.trim().to_ascii_lowercase())
+                .map(|item| (item.id.clone(), item.display_name.clone()))
+        }
+        "enrollmentConfiguration" => {
+            if let Some(id) = source_id.map(str::trim).filter(|v| !v.is_empty()) {
+                if let Some(item) = live.enrollment_by_id.get(id) {
+                    return Some((item.id.clone(), item.name.clone()));
+                }
+            }
+            let key = display_name.trim().to_ascii_lowercase();
+            if let Some(item) = live.enrollment_by_name.get(&key) {
+                return Some((item.id.clone(), item.name.clone()));
+            }
+            let collisions: Vec<_> = live
+                .enrollment_by_name
+                .values()
+                .filter(|item| item.name.trim().eq_ignore_ascii_case(display_name))
+                .collect();
+            if collisions.len() > 1 {
+                warnings.push(format!(
+                    "Multiple live enrolment configs named {display_name:?}; using the first."
+                ));
+            }
+            collisions
+                .first()
+                .map(|item| (item.id.clone(), item.name.clone()))
+        }
+        _ => None,
+    }
+}
+
+fn named_collection_path(graph_kind: &str) -> Result<&'static str, PackRestoreError> {
+    Ok(match graph_kind {
+        "autopilotProfile" => "/deviceManagement/windowsAutopilotDeploymentProfiles",
+        "enrollmentConfiguration" => "/deviceManagement/deviceEnrollmentConfigurations",
+        "compliancePolicy" => "/deviceManagement/deviceCompliancePolicies",
+        "groupPolicyConfiguration" => "/deviceManagement/groupPolicyConfigurations",
+        "deviceConfiguration" | "windowsUpdate:rings" => "/deviceManagement/deviceConfigurations",
+        "windowsUpdate:feature" => "/deviceManagement/windowsFeatureUpdateProfiles",
+        "windowsUpdate:quality" => "/deviceManagement/windowsQualityUpdateProfiles",
+        "windowsUpdate:drivers" => "/deviceManagement/windowsDriverUpdateProfiles",
+        other => {
+            return Err(PackRestoreError::Message(format!(
+                "Restore does not create {other} objects yet."
+            )));
+        }
+    })
+}
+
+fn named_object_path(graph_kind: &str, id: &str) -> Result<String, PackRestoreError> {
+    let enc = urlencoding::encode(id);
+    Ok(format!("{}/{enc}", named_collection_path(graph_kind)?))
+}
+
+fn named_create_body(object: &Value, display_name: &str, description: Option<&str>) -> Value {
+    let mut body = strip_for_graph_create(&strip_keys(object, NAMED_STRIP_KEYS));
+    if let Some(map) = body.as_object_mut() {
+        map.insert("displayName".into(), Value::String(display_name.to_string()));
+        if let Some(description) = description {
+            map.insert("description".into(), Value::String(description.to_string()));
+        }
+    }
+    body
+}
+
+fn named_object_equivalent(pack: &Value, live: &Value) -> bool {
+    strip_keys(pack, NAMED_STRIP_KEYS) == strip_keys(live, NAMED_STRIP_KEYS)
+}
+
 async fn apply_add(access_token: &str, payload: &RestorePayload) -> Result<String, PackRestoreError> {
     match payload {
         RestorePayload::Catalog {
@@ -1094,6 +1354,105 @@ async fn apply_add(access_token: &str, payload: &RestorePayload) -> Result<Strin
             .await?;
             Ok(created.id)
         }
+        RestorePayload::Named {
+            graph_kind,
+            display_name,
+            description,
+            object,
+            settings,
+            ..
+        } => {
+            let body = if graph_kind == "groupPolicyConfiguration" {
+                // GPO: create empty-ish config, then copy definition values separately.
+                let mut lean = serde_json::Map::new();
+                lean.insert(
+                    "displayName".into(),
+                    Value::String(display_name.clone()),
+                );
+                if let Some(description) = description.as_deref() {
+                    lean.insert("description".into(), Value::String(description.to_string()));
+                }
+                if let Some(tags) = object.get("roleScopeTagIds").cloned() {
+                    lean.insert("roleScopeTagIds".into(), tags);
+                }
+                Value::Object(lean)
+            } else if graph_kind == "autopilotProfile" {
+                let created = crate::autopilot_profiles::create_autopilot_profile_from_export(
+                    access_token,
+                    object,
+                    display_name,
+                    description.as_deref(),
+                )
+                .await?;
+                return Ok(created.id);
+            } else {
+                named_create_body(object, display_name, description.as_deref())
+            };
+            let created: Value = GraphClient::new()
+                .post(
+                    access_token,
+                    named_collection_path(graph_kind)?,
+                    "beta",
+                    &body,
+                )
+                .await?;
+            let id = created
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    PackRestoreError::Message(format!(
+                        "Graph create for {display_name} returned no id."
+                    ))
+                })?;
+            if graph_kind == "groupPolicyConfiguration" && !settings.is_empty() {
+                copy_gpo_definition_values(access_token, &id, settings).await;
+            }
+            Ok(id)
+        }
+        RestorePayload::EndpointSecurity {
+            display_name,
+            description,
+            template_id,
+            settings,
+            ..
+        } => {
+            let template_id = template_id.trim();
+            if template_id.is_empty() {
+                return Err(PackRestoreError::Message(
+                    "Endpoint security intent is missing templateId.".into(),
+                ));
+            }
+            let mut settings_delta = settings.clone();
+            for row in &mut settings_delta {
+                strip_setting_definitions(row);
+            }
+            let mut body = serde_json::Map::new();
+            body.insert(
+                "displayName".into(),
+                Value::String(display_name.clone()),
+            );
+            if let Some(description) = description.as_deref() {
+                body.insert("description".into(), Value::String(description.to_string()));
+            }
+            body.insert("settingsDelta".into(), Value::Array(settings_delta));
+            let path = format!(
+                "/deviceManagement/templates/{}/createInstance",
+                urlencoding::encode(template_id)
+            );
+            let created: Value = GraphClient::new()
+                .post(access_token, &path, "beta", &Value::Object(body))
+                .await?;
+            created
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    PackRestoreError::Message(format!(
+                        "Graph createInstance for {display_name} returned no id."
+                    ))
+                })
+        }
     }
 }
 
@@ -1139,6 +1498,27 @@ async fn apply_update(
             .await?;
             Ok(())
         }
+        RestorePayload::Named {
+            graph_kind,
+            display_name,
+            description,
+            object,
+            ..
+        } => {
+            let body = named_create_body(object, display_name, description.as_deref());
+            GraphClient::new()
+                .patch_no_content(
+                    access_token,
+                    &named_object_path(graph_kind, live_id)?,
+                    "beta",
+                    &body,
+                )
+                .await?;
+            Ok(())
+        }
+        RestorePayload::EndpointSecurity { .. } => Err(PackRestoreError::Message(
+            "Endpoint security intents cannot be updated in place from restore.".into(),
+        )),
     }
 }
 
@@ -1164,6 +1544,10 @@ fn load_restore_payloads(pack_root: &Path) -> Result<Vec<RestorePayload>, PackRe
             .to_ascii_lowercase();
         if ext == "json" {
             if let Some(payload) = load_catalog_payload(&path, &rel)? {
+                catalog.push(payload);
+            } else if let Some(payload) = load_endpoint_security_payload(&path, &rel)? {
+                catalog.push(payload);
+            } else if let Some(payload) = load_named_payload(&path, &rel)? {
                 catalog.push(payload);
             }
             continue;
@@ -1222,6 +1606,14 @@ fn load_catalog_payload(
 ) -> Result<Option<RestorePayload>, PackRestoreError> {
     let text = fs::read_to_string(path)?;
     let value: Value = serde_json::from_str(text.trim_start_matches('\u{FEFF}'))?;
+    catalog_payload_from_value(&value, path, rel)
+}
+
+fn catalog_payload_from_value(
+    value: &Value,
+    path: &Path,
+    rel: &str,
+) -> Result<Option<RestorePayload>, PackRestoreError> {
     let axis_kind = value
         .pointer("/axisExport/kind")
         .and_then(Value::as_str)
@@ -1235,7 +1627,7 @@ fn load_catalog_payload(
         return Ok(None);
     }
     if !axis_kind.is_empty() && axis_kind != "catalogPolicy" {
-        // Other JSON types (compliance etc.) — not in v1.
+        // Other JSON types (compliance / ES / GPO etc.) — handled elsewhere.
         return Ok(None);
     }
     if !rel.to_ascii_lowercase().contains("/policies/") && axis_kind != "catalogPolicy" {
@@ -1293,6 +1685,321 @@ fn load_catalog_payload(
     }))
 }
 
+fn named_graph_kind_for_axis(axis_kind: &str) -> Option<&'static str> {
+    match axis_kind {
+        "enrollment-autopilot" | "autopilotProfile" => Some("autopilotProfile"),
+        "enrollmentConfiguration" => Some("enrollmentConfiguration"),
+        "compliancePolicy" => Some("compliancePolicy"),
+        "group-policy" | "groupPolicyConfiguration" => Some("groupPolicyConfiguration"),
+        "windowsUpdate:rings" => Some("windowsUpdate:rings"),
+        "windowsUpdate:feature" => Some("windowsUpdate:feature"),
+        "windowsUpdate:quality" => Some("windowsUpdate:quality"),
+        "windowsUpdate:drivers" => Some("windowsUpdate:drivers"),
+        _ => None,
+    }
+}
+
+/// Map a live Graph `@odata.type` (Axis Export / inspector JSON) to pack restore kinds.
+fn named_kinds_from_odata_type(odata: &str) -> Option<(&'static str, &'static str)> {
+    let lower = odata.trim().trim_start_matches('#').to_ascii_lowercase();
+    if lower.contains("windowsautopilotdeploymentprofile") {
+        return Some(("autopilotProfile", "enrollment-autopilot"));
+    }
+    if lower.contains("grouppolicyconfiguration") {
+        return Some(("groupPolicyConfiguration", "group-policy"));
+    }
+    if lower.contains("compliancepolicy") {
+        return Some(("compliancePolicy", "compliancePolicy"));
+    }
+    if lower.contains("windowsupdateforbusinessconfiguration") {
+        return Some(("windowsUpdate:rings", "windowsUpdate:rings"));
+    }
+    if lower.contains("windowsfeatureupdateprofile") {
+        return Some(("windowsUpdate:feature", "windowsUpdate:feature"));
+    }
+    if lower.contains("windowsqualityupdateprofile") {
+        return Some(("windowsUpdate:quality", "windowsUpdate:quality"));
+    }
+    if lower.contains("windowsdriverupdateprofile") {
+        return Some(("windowsUpdate:drivers", "windowsUpdate:drivers"));
+    }
+    if lower.contains("deviceenrollment") && lower.contains("configuration") {
+        return Some(("enrollmentConfiguration", "enrollmentConfiguration"));
+    }
+    None
+}
+
+fn load_endpoint_security_payload(
+    path: &Path,
+    rel: &str,
+) -> Result<Option<RestorePayload>, PackRestoreError> {
+    let text = fs::read_to_string(path)?;
+    let value: Value = serde_json::from_str(text.trim_start_matches('\u{FEFF}'))?;
+    endpoint_security_payload_from_value(&value, path, rel)
+}
+
+fn endpoint_security_payload_from_value(
+    value: &Value,
+    path: &Path,
+    rel: &str,
+) -> Result<Option<RestorePayload>, PackRestoreError> {
+    let axis_kind = value
+        .pointer("/axisExport/kind")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("");
+    if axis_kind != "endpointSecurityIntent" {
+        return Ok(None);
+    }
+    let template_id = value
+        .get("templateId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
+        .unwrap_or_default();
+    if template_id.is_empty() {
+        return Ok(None);
+    }
+    let display_name = value
+        .get("displayName")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            path.file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "Imported intent".into())
+        });
+    let description = value
+        .get("description")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let settings = value
+        .get("settings")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let source_id = value
+        .pointer("/axisExport/sourceId")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+
+    Ok(Some(RestorePayload::EndpointSecurity {
+        display_name,
+        description,
+        template_id,
+        settings,
+        source_id,
+        rel_paths: vec![rel.to_string()],
+    }))
+}
+
+fn load_named_payload(
+    path: &Path,
+    rel: &str,
+) -> Result<Option<RestorePayload>, PackRestoreError> {
+    let text = fs::read_to_string(path)?;
+    let value: Value = serde_json::from_str(text.trim_start_matches('\u{FEFF}'))?;
+    named_payload_from_value(&value, path, rel)
+}
+
+fn named_payload_from_value(
+    value: &Value,
+    path: &Path,
+    rel: &str,
+) -> Result<Option<RestorePayload>, PackRestoreError> {
+    if let Some(payload) = named_payload_from_pack_document(value, path, rel)? {
+        return Ok(Some(payload));
+    }
+    Ok(named_payload_from_graph_export(value, path, rel))
+}
+
+fn named_payload_from_pack_document(
+    value: &Value,
+    path: &Path,
+    rel: &str,
+) -> Result<Option<RestorePayload>, PackRestoreError> {
+    let Some(object) = value.get("object").filter(|v| v.is_object()).cloned() else {
+        return Ok(None);
+    };
+    let axis = value.get("axisExport");
+    let axis_kind = axis
+        .and_then(|a| a.get("kind"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .unwrap_or("")
+        .to_string();
+    if axis_kind.is_empty() {
+        return Ok(None);
+    }
+    let Some(graph_kind) = named_graph_kind_for_axis(&axis_kind) else {
+        return Ok(None);
+    };
+    Ok(Some(named_payload_parts(
+        graph_kind,
+        &axis_kind,
+        object,
+        value.get("settings"),
+        axis.and_then(|a| a.get("sourceId")).and_then(Value::as_str),
+        path,
+        rel,
+    )))
+}
+
+/// Axis inspector **Export** copies the live Graph object (+ optional settings/extras),
+/// not an `axisExport` pack wrapper. Accept that shape for one-off import.
+fn named_payload_from_graph_export(
+    value: &Value,
+    path: &Path,
+    rel: &str,
+) -> Option<RestorePayload> {
+    let odata = value.get("@odata.type").and_then(Value::as_str)?;
+    let (graph_kind, axis_kind) = named_kinds_from_odata_type(odata)?;
+    let mut object = value.clone();
+    let settings = object
+        .as_object_mut()
+        .and_then(|map| map.remove("settings"));
+    if let Some(map) = object.as_object_mut() {
+        map.remove("extras");
+        map.remove("scriptText");
+        map.remove("detectionScriptText");
+        map.remove("remediationScriptText");
+        map.remove("assignments");
+    }
+    // Compliance: inspector stores scheduled actions under extras.
+    if graph_kind == "compliancePolicy" {
+        if let Some(actions) = value.pointer("/extras/scheduledActions") {
+            if let Some(map) = object.as_object_mut() {
+                map.insert("scheduledActionsForRule".into(), actions.clone());
+            }
+        }
+    }
+    Some(named_payload_parts(
+        graph_kind,
+        axis_kind,
+        object,
+        settings.as_ref(),
+        value.get("id").and_then(Value::as_str),
+        path,
+        rel,
+    ))
+}
+
+fn named_payload_parts(
+    graph_kind: &str,
+    axis_kind: &str,
+    object: Value,
+    settings: Option<&Value>,
+    source_id: Option<&str>,
+    path: &Path,
+    rel: &str,
+) -> RestorePayload {
+    let display_name = object
+        .get("displayName")
+        .or_else(|| object.get("name"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            path.file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "Imported object".into())
+        });
+    let description = object
+        .get("description")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let settings = settings
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    RestorePayload::Named {
+        graph_kind: graph_kind.to_string(),
+        axis_kind: axis_kind.to_string(),
+        display_name,
+        description,
+        source_id: source_id.map(str::to_string),
+        object,
+        settings,
+        rel_paths: vec![rel.to_string()],
+    }
+}
+
+fn restore_payload_from_json_document(
+    document: &Value,
+) -> Result<RestorePayload, PackRestoreError> {
+    let path = Path::new("import.json");
+    // Prefer a policies-shaped rel so catalog detection matches pack-folder heuristics.
+    if let Some(payload) = catalog_payload_from_value(document, path, "windows/policies/import.json")?
+    {
+        return Ok(payload);
+    }
+    if let Some(payload) = endpoint_security_payload_from_value(document, path, "import.json")? {
+        return Ok(payload);
+    }
+    if let Some(payload) = named_payload_from_value(document, path, "import.json")? {
+        return Ok(payload);
+    }
+    Err(PackRestoreError::Message(
+        "Document is not a supported pack export or Graph Export JSON (catalog, endpoint security, Autopilot, compliance, GPO, or Windows Update)."
+            .into(),
+    ))
+}
+
+fn restore_payload_from_script_text(text: &str) -> Result<RestorePayload, PackRestoreError> {
+    let path = Path::new("import.ps1");
+    let rel = "import.ps1";
+    let Some((_group_key, piece)) = parse_script_piece_text(text, path, rel)? else {
+        return Err(PackRestoreError::Message(
+            "Script text could not be parsed as an @axis-pack script.".into(),
+        ));
+    };
+    merge_script_pieces(ScriptPieces {
+        pieces: vec![piece],
+    })
+    .ok_or_else(|| {
+        PackRestoreError::Message("Script text is empty or incomplete for create.".into())
+    })
+}
+
+/// Create a tenant object from an in-memory pack JSON export document.
+pub async fn import_pack_json_document(
+    access_token: &str,
+    document: &Value,
+    display_name: Option<&str>,
+    description: Option<&str>,
+) -> Result<PackImportResult, PackRestoreError> {
+    let payload =
+        restore_payload_from_json_document(document)?.with_display_overrides(display_name, description);
+    let id = apply_add(access_token, &payload).await?;
+    Ok(PackImportResult {
+        id,
+        kind: payload.kind_label().to_string(),
+        display_name: payload.display_name().to_string(),
+    })
+}
+
+/// Create a tenant script from in-memory `@axis-pack` script text.
+pub async fn import_pack_script_text(
+    access_token: &str,
+    text: &str,
+    display_name: Option<&str>,
+    description: Option<&str>,
+) -> Result<PackImportResult, PackRestoreError> {
+    let payload =
+        restore_payload_from_script_text(text)?.with_display_overrides(display_name, description);
+    let id = apply_add(access_token, &payload).await?;
+    Ok(PackImportResult {
+        id,
+        kind: payload.kind_label().to_string(),
+        display_name: payload.display_name().to_string(),
+    })
+}
+
 #[derive(Default)]
 struct ScriptPieces {
     pieces: Vec<ScriptPiece>,
@@ -1330,7 +2037,15 @@ fn load_script_piece(
     rel: &str,
 ) -> Result<Option<(String, ScriptPiece)>, PackRestoreError> {
     let text = fs::read_to_string(path)?;
-    let (meta, body) = split_axis_pack_script(&text);
+    parse_script_piece_text(&text, path, rel)
+}
+
+fn parse_script_piece_text(
+    text: &str,
+    path: &Path,
+    rel: &str,
+) -> Result<Option<(String, ScriptPiece)>, PackRestoreError> {
+    let (meta, body) = split_axis_pack_script(text);
     let kind_raw = meta
         .as_ref()
         .and_then(|m| m.get("kind"))
@@ -1662,6 +2377,195 @@ mod tests {
             }
         })];
         assert!(!catalog_settings_equivalent(&pack, &live_diff));
+    }
+
+    #[test]
+    fn named_graph_kind_maps_export_axis_kinds() {
+        assert_eq!(
+            named_graph_kind_for_axis("compliancePolicy"),
+            Some("compliancePolicy")
+        );
+        assert_eq!(
+            named_graph_kind_for_axis("group-policy"),
+            Some("groupPolicyConfiguration")
+        );
+        assert_eq!(
+            named_graph_kind_for_axis("groupPolicyConfiguration"),
+            Some("groupPolicyConfiguration")
+        );
+        assert_eq!(
+            named_graph_kind_for_axis("windowsUpdate:rings"),
+            Some("windowsUpdate:rings")
+        );
+        assert_eq!(
+            named_graph_kind_for_axis("windowsUpdate:feature"),
+            Some("windowsUpdate:feature")
+        );
+        assert_eq!(
+            named_graph_kind_for_axis("enrollment-autopilot"),
+            Some("autopilotProfile")
+        );
+        assert_eq!(named_graph_kind_for_axis("endpointSecurityIntent"), None);
+        assert_eq!(
+            named_kinds_from_odata_type(
+                "#microsoft.graph.azureADWindowsAutopilotDeploymentProfile"
+            ),
+            Some(("autopilotProfile", "enrollment-autopilot"))
+        );
+        assert_eq!(
+            named_collection_path("compliancePolicy").unwrap(),
+            "/deviceManagement/deviceCompliancePolicies"
+        );
+        assert_eq!(
+            named_collection_path("groupPolicyConfiguration").unwrap(),
+            "/deviceManagement/groupPolicyConfigurations"
+        );
+    }
+
+    #[test]
+    fn named_create_body_strips_scheduled_action_odata_annotations() {
+        let object = json!({
+            "@odata.type": "#microsoft.graph.windows10CompliancePolicy",
+            "displayName": "Defender",
+            "passwordRequired": true,
+            "scheduledActionsForRule@odata.context": "https://graph.microsoft.com/beta/$metadata#…",
+            "scheduledActionsForRule": [{
+                "@odata.type": "#microsoft.graph.deviceComplianceScheduledActionForRule",
+                "id": "rule-id",
+                "ruleName": "PasswordRequired",
+                "scheduledActionConfigurations@odata.context": "https://graph.microsoft.com/beta/$metadata#…",
+                "scheduledActionConfigurations": [{
+                    "@odata.type": "#microsoft.graph.deviceComplianceActionItem",
+                    "id": "action-id",
+                    "actionType": "block",
+                    "gracePeriodHours": 12
+                }]
+            }]
+        });
+        let body = named_create_body(&object, "Defender imported", Some("desc"));
+        assert_eq!(body["displayName"], "Defender imported");
+        assert_eq!(body["description"], "desc");
+        assert!(body.get("scheduledActionsForRule@odata.context").is_none());
+        let rule = &body["scheduledActionsForRule"][0];
+        assert!(rule.get("scheduledActionConfigurations@odata.context").is_none());
+        assert!(rule.get("id").is_none());
+        assert_eq!(rule["scheduledActionConfigurations"][0]["gracePeriodHours"], 12);
+        assert!(rule["scheduledActionConfigurations"][0].get("id").is_none());
+    }
+
+    #[test]
+    fn accepts_axis_inspector_export_json_for_autopilot() {
+        let document = json!({
+            "@odata.type": "#microsoft.graph.azureADWindowsAutopilotDeploymentProfile",
+            "id": "live-id",
+            "displayName": "Windows Test Provisioning Profile - abcd",
+            "description": "",
+            "locale": "os-default",
+            "deviceType": "windowsPc",
+            "preprovisioningAllowed": false,
+            "hardwareHashExtractionEnabled": false,
+            "outOfBoxExperienceSettings": {
+                "deviceUsageType": "singleUser",
+                "hideEULA": true,
+                "hideEscapeLink": true,
+                "hidePrivacySettings": true,
+                "skipKeyboardSelectionPage": true,
+                "userType": "standard"
+            },
+            "roleScopeTagIds": ["0"],
+            "extras": {}
+        });
+        let loaded = restore_payload_from_json_document(&document).unwrap();
+        assert_eq!(loaded.kind_label(), "enrollment-autopilot");
+        assert_eq!(loaded.display_name(), "Windows Test Provisioning Profile - abcd");
+        match &loaded {
+            RestorePayload::Named { graph_kind, object, .. } => {
+                assert_eq!(graph_kind, "autopilotProfile");
+                assert!(object.get("extras").is_none());
+                assert!(object.get("outOfBoxExperienceSettings").is_some());
+            }
+            other => panic!("expected Named, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn detects_compliance_gpo_and_endpoint_security_payloads() {
+        let path = Path::new("sample.json");
+        let compliance = json!({
+            "axisExport": { "kind": "compliancePolicy", "sourceId": "c1" },
+            "object": {
+                "displayName": "BitLocker",
+                "description": "Require BitLocker",
+                "@odata.type": "#microsoft.graph.windows10CompliancePolicy",
+                "passwordRequired": true,
+                "scheduledActionsForRule": []
+            }
+        });
+        let loaded = named_payload_from_value(&compliance, path, "windows/compliance/bitlocker.json")
+            .unwrap()
+            .expect("compliance");
+        assert_eq!(loaded.kind_label(), "compliancePolicy");
+        assert_eq!(loaded.display_name(), "BitLocker");
+        match &loaded {
+            RestorePayload::Named { graph_kind, .. } => {
+                assert_eq!(graph_kind, "compliancePolicy");
+            }
+            other => panic!("expected Named, got {other:?}"),
+        }
+
+        let gpo = json!({
+            "axisExport": { "kind": "group-policy", "sourceId": "g1" },
+            "object": { "displayName": "Chrome ADMX", "description": "" },
+            "settings": [{
+                "enabled": true,
+                "definition": { "id": "def-1" }
+            }]
+        });
+        let loaded = named_payload_from_value(&gpo, path, "windows/group-policy/chrome.json")
+            .unwrap()
+            .expect("gpo");
+        match &loaded {
+            RestorePayload::Named {
+                graph_kind,
+                settings,
+                ..
+            } => {
+                assert_eq!(graph_kind, "groupPolicyConfiguration");
+                assert_eq!(settings.len(), 1);
+            }
+            other => panic!("expected Named GPO, got {other:?}"),
+        }
+
+        let es = json!({
+            "axisExport": { "kind": "endpointSecurityIntent", "sourceId": "e1" },
+            "displayName": "ASR",
+            "description": "Attack surface",
+            "templateId": "template-asr",
+            "intent": { "displayName": "ASR", "templateId": "template-asr" },
+            "settings": [{ "id": "s1", "definitionId": "d1", "valueJson": "{}" }]
+        });
+        let loaded =
+            endpoint_security_payload_from_value(&es, path, "windows/endpoint-security/asr.json")
+                .unwrap()
+                .expect("es");
+        assert_eq!(loaded.kind_label(), "endpointSecurityIntent");
+        assert_eq!(loaded.display_name(), "ASR");
+        match &loaded {
+            RestorePayload::EndpointSecurity {
+                template_id,
+                settings,
+                ..
+            } => {
+                assert_eq!(template_id, "template-asr");
+                assert_eq!(settings.len(), 1);
+            }
+            other => panic!("expected EndpointSecurity, got {other:?}"),
+        }
+
+        let from_doc = restore_payload_from_json_document(&es).unwrap();
+        assert_eq!(from_doc.kind_label(), "endpointSecurityIntent");
+        let from_compliance = restore_payload_from_json_document(&compliance).unwrap();
+        assert_eq!(from_compliance.kind_label(), "compliancePolicy");
     }
 }
 
