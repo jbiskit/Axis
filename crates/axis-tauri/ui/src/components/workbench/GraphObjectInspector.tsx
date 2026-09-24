@@ -213,6 +213,8 @@ function overviewRows(detail: GraphObjectDetail): Array<{ label: string; value: 
   const object = asRecord(detail.object) ?? {};
   const keys = [
     ["Description", "description"],
+    ["Status", "status"],
+    ["Error code", "errorCode"],
     ["Priority", "priority"],
     ["Platform", "platformType"],
     ["Enrollment type", "deviceEnrollmentConfigurationType"],
@@ -516,7 +518,15 @@ export function GraphObjectInspector({
   const scriptInfo = parseScriptInspectorKind(kind);
   const language = scriptInfo?.language ?? "powershell";
   const portalHref = intunePortalUrlForKind(kind, id, asRecord(detail?.object) ?? null);
-  const payloadLabel = detail && hasScript(detail) ? "Scripts" : "Settings";
+  const extras = detail?.extras ?? null;
+  const extrasRecord = asRecord(extras);
+  const policySetItems = Array.isArray(extrasRecord?.items) ? extrasRecord.items : [];
+  const payloadLabel =
+    kind === "policySet"
+      ? "Items"
+      : detail && hasScript(detail)
+        ? "Scripts"
+        : "Settings";
   const settings = Array.isArray(detail?.settings) ? detail.settings : [];
   const objectRecord = asRecord(detail?.object);
   const templateReference =
@@ -528,15 +538,20 @@ export function GraphObjectInspector({
       typeof templateReference.templateId === "string" &&
       templateReference.templateId.trim(),
   );
-  const extras = detail?.extras ?? null;
   const rows = useMemo(() => {
     if (!detail) return [];
-    const all = overviewRows(detail);
+    const all = [...overviewRows(detail)];
+    if (kind === "policySet" && policySetItems.length) {
+      all.push({
+        label: "Items",
+        value: String(policySetItems.length),
+      });
+    }
     if (kind !== "autopilotProfile" && kind !== "autopilotDevice") return all;
     // Structured Autopilot sections own join / OOBE / identity fields — keep a slim header.
     const keep = new Set(["Id", "Kind", "Assigned", "Description", "Created", "Modified"]);
     return all.filter((row) => keep.has(row.label));
-  }, [detail, kind]);
+  }, [detail, kind, policySetItems.length]);
   const showRestrictionEditor =
     kind === "enrollmentConfiguration" &&
     isEnrollmentPlatformRestrictionsObject(asRecord(detail?.object));
@@ -568,13 +583,21 @@ export function GraphObjectInspector({
       : ([
           [
             "payload",
-            `${payloadLabel}${settings.length ? ` (${settings.length})` : ""}`,
+            `${payloadLabel}${
+              kind === "policySet"
+                ? policySetItems.length
+                  ? ` (${policySetItems.length})`
+                  : ""
+                : settings.length
+                  ? ` (${settings.length})`
+                  : ""
+            }`,
           ],
         ] as Array<[InspectorTab, string]>)),
   ];
   const supportsRemediationSchedule = kind === "script:remediation";
   const canEditScripts = Boolean(scriptInfo);
-  const canAssign = kind !== "autopilotDevice";
+  const canAssign = kind !== "autopilotDevice" && kind !== "policySet";
   const exportJson = detail ? pretty(exportPayload(detail)) : "";
   const savedMeta = scriptMetaFromDetail(detail);
   const dirty =

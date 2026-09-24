@@ -75,9 +75,7 @@ import {
   fetchDeviceConfigurations,
   fetchEnrollmentConfigurations,
   fetchBaselineReferenceSources,
-  fetchBaselineExport,
   fetchGroupPolicyConfigurations,
-  createSettingsCatalogPolicy,
   exportTenantPack,
   fetchWindowsAutopilotSettings,
   openExternalUrl,
@@ -93,10 +91,9 @@ import {
 import { catalogPolicyProfileName } from "../lib/catalogPolicyProfile";
 import {
   applyGitHubRepoInput,
-  DEFAULT_E8_SOURCE,
   GITHUB_FINE_GRAINED_TOKEN_DOCS_URL,
   GITHUB_FINE_GRAINED_TOKEN_URL,
-  isBuiltinSource,
+  isKitPackSource,
   isLocalSource,
   isSourceReady,
   loadStoredSources,
@@ -108,12 +105,11 @@ import {
   saveStoredSources,
   sourceOpenUrl,
   templateKicker,
-  tokenForSource,
 } from "../lib/baselines/sources";
-import { normalizeIntunePolicyExport, catalogDescriptionFromPolicy, catalogPlatformFromPolicy, catalogSettingsFromPolicy } from "../lib/baselines/policyExport";
 import {
   groupPackArtifacts,
   isCatalogPackArtifact,
+  isImportablePackArtifact,
   isPolicySettingsExportArtifact,
   packArtifactKindLabel,
 } from "../lib/baselines/packArtifacts";
@@ -122,6 +118,7 @@ import {
   type PolicyExportResolved,
 } from "./workbench/PolicyExportInspect";
 import { BaselineMergeDialog } from "./workbench/BaselineMergeDialog";
+import { BaselineBulkImportDialog, BaselineImportDialog } from "./PackImportDialogs";
 import { ClientContainerDiffView } from "./ClientContainerDiffView";
 import { DevicesList } from "./DevicesList";
 import { DeviceDetailView, type DeviceDetailCacheEntry } from "./DeviceDetailView";
@@ -140,8 +137,8 @@ import { CreateAutopilotProfileDialog } from "./workbench/CreateAutopilotProfile
 import { CreateEndpointSecurityPolicyDialog } from "./workbench/CreateEndpointSecurityPolicyDialog";
 import { CreateScriptDialog, type ScriptFamily } from "./workbench/CreateScriptDialog";
 import { DocumentTabs, InspectorWithDocumentTabs } from "./workbench/DocumentTabs";
-import { useCatalogFileImport } from "./workbench/CatalogFileImportDialog";
 import { useScriptFileImport } from "./workbench/ScriptFileImportDialog";
+import { useNativeJsonImport } from "./workbench/NativeJsonImportDialog";
 import {
   BulkListActions,
   listTargetProps,
@@ -254,7 +251,7 @@ export function IntuneWorkspace({
     signedIn &&
       (pathname.startsWith("/intune/policies") ||
         pathname.startsWith("/intune/endpoint-security") ||
-        pathname === "/intune/baselines"),
+        pathname === "/intune/packs"),
     signedIn,
   );
   const compliance = useInventory(
@@ -755,18 +752,33 @@ export function IntuneWorkspace({
     );
   }
 
-  if (pathname === "/intune/packs") {
-    return <PacksKitsView />;
-  }
-
-  if (pathname === "/intune/baselines" || pathname === "/intune/templates") {
+  if (
+    pathname === "/intune/packs" ||
+    pathname === "/intune/baselines" ||
+    pathname === "/intune/templates"
+  ) {
+    const kitsSourceId = search.get("kits");
+    if (pathname === "/intune/packs" && kitsSourceId != null) {
+      return (
+        <PacksKitsView
+          preferredSourceId={kitsSourceId.trim() || null}
+          onBack={() => navigate("/intune/packs")}
+        />
+      );
+    }
     return (
-      <BaselinesWorkbench
-        surface={pathname === "/intune/templates" ? "templates" : "baselines"}
+      <PolicyPacksWorkbench
         selectedId={search.get("check")}
-        onSelect={(id) => navigate(hrefWithParam(pathname, search, "check", id))}
+        onSelect={(id) => navigate(hrefWithParam("/intune/packs", search, "check", id))}
         signedIn={signedIn}
         organizationName={glance?.organizationName ?? null}
+        onManageKits={(sourceId) =>
+          navigate(
+            sourceId
+              ? `/intune/packs?kits=${encodeURIComponent(sourceId)}`
+              : "/intune/packs?kits=",
+          )
+        }
       />
     );
   }
@@ -936,6 +948,36 @@ function WindowsUpdateWorkbench({
 }) {
   const [overlay, setOverlay] = useState<WindowsUpdatePolicy | null>(null);
   const listed = useMemo(() => withTransientItem(items, overlay), [items, overlay]);
+  const selectPolicy = (id: string) => navigate(hrefWithParam(pathname, search, "policy", id || null));
+  const packImport = useNativeJsonImport({
+    title: "Windows Update",
+    description:
+      "Import Axis pack JSON for update rings or feature/quality/driver profiles. Created unassigned.",
+    acceptKinds: [
+      "windowsUpdate",
+      "windowsUpdate:rings",
+      "windowsUpdate:feature",
+      "windowsUpdate:quality",
+      "windowsUpdate:drivers",
+    ],
+    onImported: (created) => {
+      const sourceFamily = created.kind.startsWith("windowsUpdate:")
+        ? created.kind.slice("windowsUpdate:".length)
+        : family ?? "rings";
+      setOverlay({
+        id: created.id,
+        family: sourceFamily,
+        name: created.displayName,
+      });
+      selectPolicy(created.id);
+      window.setTimeout(() => onRefresh(), 0);
+    },
+  });
+  const importButton = (
+    <WriteActionButton type="button" className="axis-btn" onClick={() => packImport.openDialog()}>
+      Import
+    </WriteActionButton>
+  );
   const { sort, toggle: toggleSort } = useColumnSort<"name" | "family" | "modified">("name");
   const sorted = useMemo(
     () =>
@@ -953,7 +995,6 @@ function WindowsUpdateWorkbench({
     (id: string) => listed.find((item) => item.id === id)?.name ?? id,
     [listed],
   );
-  const selectPolicy = (id: string) => navigate(hrefWithParam(pathname, search, "policy", id || null));
   const menu = (
     <ObjectListMenuHost
       onDuplicated={(created, source) => {
@@ -996,6 +1037,7 @@ function WindowsUpdateWorkbench({
             onRefresh={onRefresh}
             loading={loading}
             error={error}
+            actions={importButton}
           />
         ) : (
           <div className="stack">
@@ -1006,9 +1048,12 @@ function WindowsUpdateWorkbench({
               onRefresh={onRefresh}
               refreshing={loading}
               actions={
-                <button type="button" className="axis-btn" onClick={onRefresh} disabled={loading}>
-                  {loading ? "Refreshing…" : "Refresh"}
-                </button>
+                <>
+                  {importButton}
+                  <button type="button" className="axis-btn" onClick={onRefresh} disabled={loading}>
+                    {loading ? "Refreshing…" : "Refresh"}
+                  </button>
+                </>
               }
             />
             {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
@@ -1043,6 +1088,7 @@ function WindowsUpdateWorkbench({
     </ObjectListMenuHost>
   );
   return (
+    <>
     <WorkspaceSplit
       inspectorPrimary={Boolean(selected)}
       master={menu}
@@ -1071,6 +1117,8 @@ function WindowsUpdateWorkbench({
         </InspectorWithDocumentTabs>
       }
     />
+    {packImport.dialog}
+    </>
   );
 }
 
@@ -1292,22 +1340,25 @@ function PoliciesHub({
       id,
     [items, scoped],
   );
-  const catalogImport = useCatalogFileImport((created) => {
-    const first = created[0];
-    if (first) {
+  const catalogImport = useNativeJsonImport({
+    title: "Settings Catalog",
+    description:
+      "Import Axis pack JSON (file or paste). Settings Catalog policies are created unassigned in this tenant.",
+    acceptKinds: ["catalogPolicy"],
+    onImported: (created) => {
       setOverlay({
-        id: first.id,
-        name: first.name,
+        id: created.id,
+        name: created.displayName,
         isAssigned: false,
       });
-    }
-    window.setTimeout(() => onRefresh(), 0);
-  }, platform === "macos" ? "macos" : "windows");
+      window.setTimeout(() => onRefresh(), 0);
+    },
+  });
   const importButton = (
     <WriteActionButton
       type="button"
       className="axis-btn"
-      onClick={() => void catalogImport.openPicker()}
+      onClick={() => catalogImport.openDialog()}
     >
       Import
     </WriteActionButton>
@@ -1581,6 +1632,40 @@ function EnrollmentPathRedirect({ to }: { to: string }) {
   );
 }
 
+function packImportAcceptKinds(objectKind: string): string[] | null {
+  switch (objectKind) {
+    case "configurationPolicy":
+      return ["catalogPolicy", "endpointSecurityIntent"];
+    case "compliancePolicy":
+      return ["compliancePolicy", "compliance"];
+    case "groupPolicyConfiguration":
+      return ["groupPolicyConfiguration", "group-policy"];
+    case "autopilotProfile":
+      return ["autopilotProfile", "enrollment-autopilot"];
+    case "enrollmentConfiguration":
+      return ["enrollmentConfiguration", "enrollment-"];
+    default:
+      return null;
+  }
+}
+
+function packImportTitle(objectKind: string, title: string): string {
+  switch (objectKind) {
+    case "configurationPolicy":
+      return title;
+    case "compliancePolicy":
+      return "Compliance policy";
+    case "groupPolicyConfiguration":
+      return "ADMX / Group Policy";
+    case "autopilotProfile":
+      return "Autopilot profile";
+    case "enrollmentConfiguration":
+      return "Enrollment configuration";
+    default:
+      return title;
+  }
+}
+
 function NamedPolicyList({
   eyebrow,
   title,
@@ -1632,6 +1717,18 @@ function NamedPolicyList({
   const [creating, setCreating] = useState(false);
   const [templates, setTemplates] = useState<ConfigurationPolicyTemplateSummary[] | null>(null);
   const showProfile = Boolean(templateFamily);
+  const packAcceptKinds = packImportAcceptKinds(objectKind);
+  const packImport = useNativeJsonImport({
+    title: packImportTitle(objectKind, title),
+    description:
+      "Import Axis pack JSON from a file or by pasting. The object is created unassigned in this tenant.",
+    acceptKinds: packAcceptKinds ?? undefined,
+    onImported: (created) => {
+      setOverlay({ id: created.id, name: created.displayName, isAssigned: false });
+      onSelect(created.id);
+      window.setTimeout(() => onRefresh(), 0);
+    },
+  });
 
   useEffect(() => {
     if (!templateFamily) {
@@ -1657,6 +1754,11 @@ function NamedPolicyList({
     [templates],
   );
   const canCreate = objectKind === "compliancePolicy";
+  const importButton = packAcceptKinds ? (
+    <WriteActionButton type="button" className="axis-btn" onClick={() => packImport.openDialog()}>
+      Import
+    </WriteActionButton>
+  ) : null;
   const createButton = canCreate ? (
     <WriteActionButton
       type="button"
@@ -1764,7 +1866,12 @@ function NamedPolicyList({
               onRefresh={onRefresh}
               loading={loading}
               error={error}
-              actions={createButton}
+              actions={
+                <>
+                  {createButton}
+                  {importButton}
+                </>
+              }
               checkedIds={selection.checkedIds}
               onToggleChecked={selection.toggle}
               query={query}
@@ -1795,6 +1902,7 @@ function NamedPolicyList({
               actions={
                 <>
                   {createButton}
+                  {importButton}
                   <button type="button" className="axis-btn" onClick={onRefresh} disabled={loading}>
                     {loading ? "Refreshing…" : "Refresh"}
                   </button>
@@ -1943,6 +2051,7 @@ function NamedPolicyList({
         }}
       />
     ) : null}
+    {packImport.dialog}
     </>
   );
 }
@@ -3010,6 +3119,22 @@ function AutopilotProfilesView({
       New
     </WriteActionButton>
   );
+  const packImport = useNativeJsonImport({
+    title: "Autopilot profile",
+    description:
+      "Import Graph Export JSON (from an Autopilot profile Export) or Axis pack JSON. Created unassigned.",
+    acceptKinds: ["autopilotProfile", "enrollment-autopilot"],
+    onImported: (created) => {
+      setOverlay({ id: created.id, displayName: created.displayName });
+      onSelect(created.id);
+      window.setTimeout(() => void profiles.reload(), 0);
+    },
+  });
+  const importButton = (
+    <WriteActionButton type="button" className="axis-btn" onClick={() => packImport.openDialog()}>
+      Import
+    </WriteActionButton>
+  );
   return (
     <>
     <WorkspaceSplit
@@ -3052,7 +3177,12 @@ function AutopilotProfilesView({
                 countLabel={countLabel}
                 searchPlaceholder="Name, join type, description…"
                 filters={listFilters}
-                actions={createButton}
+                actions={
+                  <>
+                    {createButton}
+                    {importButton}
+                  </>
+                }
               />
             </div>
           ) : (
@@ -3066,6 +3196,7 @@ function AutopilotProfilesView({
                 actions={
                   <>
                     {createButton}
+                    {importButton}
                     <button
                       type="button"
                       className="axis-btn"
@@ -3146,6 +3277,7 @@ function AutopilotProfilesView({
         void profiles.reload();
       }}
     />
+    {packImport.dialog}
     </>
   );
 }
@@ -3192,24 +3324,21 @@ function GitHubLeastPrivilegePatHelp() {
   );
 }
 
-function BaselinesWorkbench({
-  surface,
+function PolicyPacksWorkbench({
   selectedId,
   onSelect,
   signedIn,
   organizationName,
+  onManageKits,
 }: {
-  surface: "baselines" | "templates";
   selectedId: string | null;
   onSelect: (id: string) => void;
   signedIn: boolean;
   organizationName: string | null;
+  onManageKits: (sourceId?: string) => void;
 }) {
   const { writeDisabled } = useWriteGate();
-  const templates = surface === "templates";
-  const [sourceEntries, setSourceEntries] = useState<BaselineReferenceSourceInput[]>([
-    DEFAULT_E8_SOURCE,
-  ]);
+  const [sourceEntries, setSourceEntries] = useState<BaselineReferenceSourceInput[]>([]);
   const [sourcesHydrated, setSourcesHydrated] = useState(false);
   const [sourceEditorOpen, setSourceEditorOpen] = useState(false);
   const [editingSourceKey, setEditingSourceKey] = useState<string | null>(null);
@@ -3283,10 +3412,7 @@ function BaselinesWorkbench({
   }, [sourceEntries, sourcesHydrated]);
 
   const loadReferences = useCallback(async () => {
-    const ready = sourceEntries
-      .map(sanitizeSource)
-      .filter(isSourceReady)
-      .filter((entry) => (templates ? !isBuiltinSource(entry) : isBuiltinSource(entry)));
+    const ready = sourceEntries.map(sanitizeSource).filter(isSourceReady);
     if (ready.length === 0) {
       setReferenceLoads([]);
       setReferencesError(null);
@@ -3303,7 +3429,7 @@ function BaselinesWorkbench({
     } finally {
       setE8Loading(false);
     }
-  }, [sourceEntries, templates]);
+  }, [sourceEntries]);
 
   const refreshSource = useCallback(
     async (entry: BaselineReferenceSourceInput) => {
@@ -3424,7 +3550,7 @@ function BaselinesWorkbench({
 
   const packs = useMemo(() => {
     const loadsById = new Map(referenceLoads.map((load) => [load.source.id, load]));
-    return sourceEntries.filter(isSourceReady).filter((entry) => (templates ? !isBuiltinSource(entry) : isBuiltinSource(entry))).map((entry) => {
+    return sourceEntries.filter(isSourceReady).map((entry) => {
       const normalizedEntry = sanitizeSource(entry);
       const load = loadsById.get(normalizedEntry.id ?? "");
       const source = load?.source;
@@ -3433,6 +3559,8 @@ function BaselinesWorkbench({
         name: source?.name ?? entry.name,
         owner: source?.owner ?? entry.owner,
         repo: source?.repo ?? entry.repo,
+        kind: entry.kind,
+        localPath: entry.localPath,
       });
       return {
         id: source?.id ?? normalizedEntry.id ?? title,
@@ -3441,6 +3569,7 @@ function BaselinesWorkbench({
         owner: source?.owner ?? entry.owner,
         repo: source?.repo ?? entry.repo,
         local: isLocalSource(entry) || source?.kind === "local",
+        kit: isKitPackSource(entry),
         directoryUrl: source?.directoryUrl ?? sourceOpenUrl(entry),
         error: load?.error ?? null,
         warning: load?.warnings[0] ?? null,
@@ -3452,22 +3581,29 @@ function BaselinesWorkbench({
         })),
       };
     });
-  }, [referenceLoads, sourceEntries, templates]);
+  }, [referenceLoads, sourceEntries]);
 
   const allReferences = useMemo(
     () => packs.flatMap((pack) => pack.references),
     [packs],
   );
 
+  const importableReferences = useMemo(
+    () => allReferences.filter((reference) => isImportablePackArtifact(reference.artifactKind)),
+    [allReferences],
+  );
   const catalogReferences = useMemo(
     () => allReferences.filter((reference) => isCatalogPackArtifact(reference.artifactKind)),
     [allReferences],
   );
-  const catalogSelectionIds = useMemo(
-    () => catalogReferences.map((reference) => `ref:${reference.sourceId}:${reference.id}`),
-    [catalogReferences],
+  const importableSelectionIds = useMemo(
+    () => importableReferences.map((reference) => `ref:${reference.sourceId}:${reference.id}`),
+    [importableReferences],
   );
-  const selection = useCheckedIds(catalogSelectionIds);
+  const selection = useCheckedIds(importableSelectionIds);
+  const checkedImportable = importableReferences.filter((reference) =>
+    selection.checkedIds.has(`ref:${reference.sourceId}:${reference.id}`),
+  );
   const checkedCatalog = catalogReferences.filter((reference) =>
     selection.checkedIds.has(`ref:${reference.sourceId}:${reference.id}`),
   );
@@ -3544,12 +3680,8 @@ function BaselinesWorkbench({
       master={
         selectedReference ? (
           <CompactObjectList
-            title={templates ? "Template items" : "Baselines"}
-            description={
-              templates
-                ? "Select an item from a template store to inspect it here."
-                : "Select an ASD baseline to inspect it here."
-            }
+            title="Pack items"
+            description="Select an item from a policy pack to inspect it here."
             items={allReferences.map((reference) => ({
               id: `ref:${reference.sourceId}:${reference.id}`,
               title: reference.name,
@@ -3562,52 +3694,45 @@ function BaselinesWorkbench({
         ) : (
           <div className="stack">
             <PageHeader
-              eyebrow={templates ? "Templates" : "Baselines"}
-              title={templates ? "Templates" : "Baselines"}
-              description={
-                templates
-                  ? "User template stores from a local folder or GitHub. Axis Templated reads axis-pack.json at the store root. Flat JSON lists a folder of policy files. Open a device to grade an ASD baseline or an expanded policy set."
-                  : "Built-in ASD Essential Eight hard baselines. Used to compare a device and to import one policy. User GitHub and local stores are listed under Templates."
-              }
+              eyebrow="Manage"
+              title="Policy Packs"
+              description="GitHub or local packs in kit shape (axis-pack.json) or flat JSON. Import creates objects in this tenant. Open a device to grade a policy set from a pack."
               actions={
                 <div className="baseline-actions">
-                  {templates ? (
-                    <WriteActionButton
-                      type="button"
-                      className="axis-btn axis-btn-primary"
-                      onClick={() => void runTenantExport()}
-                      disabled={!signedIn || exportBusy}
-                      title={signedIn ? undefined : "Sign in to export this tenant"}
-                    >
-                      {exportBusy ? "Exporting…" : "Export tenant pack"}
-                    </WriteActionButton>
-                  ) : (
-                    <button type="button" className="axis-btn" onClick={() => navigate("/intune/templates")}>
-                      Templates
-                    </button>
-                  )}
-                  {templates ? (
-                    <>
-                      <WriteActionButton type="button" className="axis-btn" onClick={addGitHubSource}>
-                        Add GitHub pack
-                      </WriteActionButton>
-                      <WriteActionButton
-                        type="button"
-                        className="axis-btn"
-                        onClick={() => void addLocalFolderSource()}
-                      >
-                        Add local folder
-                      </WriteActionButton>
-                      <button
-                        type="button"
-                        className={`axis-btn${sourceEditorOpen ? " is-active" : ""}`}
-                        aria-pressed={sourceEditorOpen}
-                        onClick={() => setSourceEditorOpen((open) => !open)}
-                      >
-                        {sourceEditorOpen ? "Hide sources" : "Manage sources"}
-                      </button>
-                    </>
-                  ) : null}
+                  <WriteActionButton
+                    type="button"
+                    className="axis-btn axis-btn-primary"
+                    onClick={() => void runTenantExport()}
+                    disabled={!signedIn || exportBusy}
+                    title={signedIn ? undefined : "Sign in to export this tenant"}
+                  >
+                    {exportBusy ? "Exporting…" : "Export tenant pack"}
+                  </WriteActionButton>
+                  <WriteActionButton type="button" className="axis-btn" onClick={addGitHubSource}>
+                    Add GitHub pack
+                  </WriteActionButton>
+                  <WriteActionButton
+                    type="button"
+                    className="axis-btn"
+                    onClick={() => void addLocalFolderSource()}
+                  >
+                    Add local folder
+                  </WriteActionButton>
+                  <button
+                    type="button"
+                    className="axis-btn"
+                    onClick={() => onManageKits()}
+                  >
+                    Manage kits
+                  </button>
+                  <button
+                    type="button"
+                    className={`axis-btn${sourceEditorOpen ? " is-active" : ""}`}
+                    aria-pressed={sourceEditorOpen}
+                    onClick={() => setSourceEditorOpen((open) => !open)}
+                  >
+                    {sourceEditorOpen ? "Hide sources" : "Manage sources"}
+                  </button>
                   <button type="button" className="axis-btn axis-btn-ghost" onClick={() => void loadReferences()} disabled={e8Loading}>
                     {e8Loading ? "Refreshing…" : "Refresh"}
                   </button>
@@ -3615,21 +3740,13 @@ function BaselinesWorkbench({
               }
             />
             <div className="workspace-scroll">
-            {templates ? (
             <IncompleteBanner>
-              Template stores are an external listing. Import applies to Settings Catalog files under
-              each platform’s policies/ folder. Tenant export writes the same layout (catalog JSON,
-              scripts with an <code>@axis-pack</code> header, compliance, Endpoint Security, Group
-              Policy, Windows Update, Autopilot) plus policy-set JSON that selects those files.
-              iOS, Linux, apps, and classic device configuration profiles are not exported.
+              Packs are an external listing. Import creates Settings Catalog, scripts, compliance,
+              Endpoint Security, Group Policy, Windows Update, and Autopilot objects from matching
+              export files. Tenant export writes the same layout plus policy-set JSON. iOS, Linux,
+              apps, and classic device configuration profiles are not exported.
             </IncompleteBanner>
-            ) : (
-            <IncompleteBanner>
-              ASD baselines stay on this page. One-policy import creates a new Settings Catalog policy.
-              Template stores, including policy sets, are listed under Templates.
-            </IncompleteBanner>
-            )}
-            {templates && (exportBusy || exportProgress || exportResult || exportError) ? (
+            {(exportBusy || exportProgress || exportResult || exportError) ? (
               <section className="axis-panel baseline-status">
                 <div className="baseline-status-head">
                   <p className="baseline-pack-kicker">Tenant export</p>
@@ -3671,13 +3788,13 @@ function BaselinesWorkbench({
                 ) : null}
               </section>
             ) : null}
-            {templates && sourceEditorOpen ? (
+            {sourceEditorOpen ? (
               <section className="axis-panel baseline-sources">
                 <div className="baseline-sources-head">
-                  <p className="baseline-pack-kicker">Template stores</p>
+                  <p className="baseline-pack-kicker">Policy packs</p>
                   <p className="muted baseline-sources-hint">
-                    Stores are read-only listings of policy files. Axis Templated reads{" "}
-                    <code>axis-pack.json</code> at the store root; Flat JSON lists a folder of policy
+                    Packs are read-only listings of policy files. Kit packs read{" "}
+                    <code>axis-pack.json</code> at the store root; flat JSON lists a folder of policy
                     files.{" "}
                     <button
                       type="button"
@@ -3690,7 +3807,6 @@ function BaselinesWorkbench({
                 </div>
                 <ul className="baseline-source-rows">
                   {sourceEntries.map((entry, index) => {
-                    if (isBuiltinSource(entry)) return null;
                     const sourceKey = sourceKeyFor(entry, index);
                     const ready = isSourceReady(entry);
                     return (
@@ -3713,6 +3829,16 @@ function BaselinesWorkbench({
                           >
                             {isLocalSource(entry) ? "Open folder" : "Open repo"}
                           </button>
+                          {isKitPackSource(entry) ? (
+                            <button
+                              type="button"
+                              className="axis-btn"
+                              disabled={!ready}
+                              onClick={() => onManageKits(entry.id)}
+                            >
+                              Kits
+                            </button>
+                          ) : null}
                           <button
                             type="button"
                             className="axis-btn"
@@ -3732,8 +3858,8 @@ function BaselinesWorkbench({
                     );
                   })}
                 </ul>
-                {sourceEntries.every((entry) => isBuiltinSource(entry)) ? (
-                  <p className="muted baseline-source-empty">No template stores yet.</p>
+                {sourceEntries.length === 0 ? (
+                  <p className="muted baseline-source-empty">No policy packs yet.</p>
                 ) : null}
                 <div className="baseline-sources-foot">
                   <WriteActionButton type="button" className="axis-btn" onClick={addGitHubSource}>
@@ -3747,27 +3873,27 @@ function BaselinesWorkbench({
                     Add local folder
                   </WriteActionButton>
                   <button type="button" className="axis-btn axis-btn-ghost" onClick={() => void loadReferences()} disabled={e8Loading}>
-                    Reload stores
+                    Reload packs
                   </button>
                 </div>
               </section>
             ) : null}
             {referencesError ? <div className="axis-alert axis-alert-danger">Reference loading failed: {referencesError}</div> : null}
-            {templates && !e8Loading && !sourceEntries.some((entry) => !isBuiltinSource(entry)) ? (
-              <p className="muted">No template stores yet. Add a GitHub pack or a local folder.</p>
+            {!e8Loading && sourceEntries.filter(isSourceReady).length === 0 ? (
+              <p className="muted">No policy packs yet. Add a GitHub pack or a local folder.</p>
             ) : null}
-            {checkedCatalog.length > 0 ? (
+            {checkedImportable.length > 0 ? (
               <BulkAssignBar
-                count={checkedCatalog.length}
+                count={checkedImportable.length}
                 editLabel="Import to Intune"
                 editHint={
                   signedIn
-                    ? "Create Settings Catalog policies from the selected exports"
-                    : "Sign in to import policies"
+                    ? "Create tenant objects from the selected pack exports"
+                    : "Sign in to import pack items"
                 }
                 editDisabled={!signedIn || writeDisabled}
                 onEdit={() => {
-                  setBulkImportTargets(checkedCatalog);
+                  setBulkImportTargets(checkedImportable);
                   setBulkImportOpen(true);
                 }}
                 onClear={selection.clear}
@@ -3852,22 +3978,29 @@ function BaselinesWorkbench({
                     <button type="button" className="axis-btn axis-btn-ghost baseline-pack-open" onClick={() => void openExternalUrl(pack.directoryUrl)}>
                       {pack.local ? "Open folder" : "Open repository"}
                     </button>
-                    {templates ? (
+                    {pack.kit ? (
                       <button
                         type="button"
-                        className="axis-btn axis-btn-ghost axis-btn-icon baseline-pack-delete"
-                        title="Remove this store"
-                        aria-label={`Remove ${pack.title}`}
-                        onClick={() => setDeletingSourceKey(pack.id)}
+                        className="axis-btn axis-btn-ghost"
+                        onClick={() => onManageKits(pack.id)}
                       >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                          <path d="M3 6h18" />
-                          <path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" />
-                          <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-                          <path d="M10 11v6M14 11v6" />
-                        </svg>
+                        Kits
                       </button>
                     ) : null}
+                    <button
+                      type="button"
+                      className="axis-btn axis-btn-ghost axis-btn-icon baseline-pack-delete"
+                      title="Remove this pack"
+                      aria-label={`Remove ${pack.title}`}
+                      onClick={() => setDeletingSourceKey(pack.id)}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <path d="M3 6h18" />
+                        <path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" />
+                        <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                        <path d="M10 11v6M14 11v6" />
+                      </svg>
+                    </button>
                   </div>
                 </div>
                 {expanded ? (
@@ -3883,8 +4016,8 @@ function BaselinesWorkbench({
                   </div>
                 ) : null}
                 {groupPackArtifacts(pack.references).map((section) => {
-                  const sectionCatalog = isCatalogPackArtifact(section.kind);
-                  const sectionIds = sectionCatalog
+                  const sectionImportable = isImportablePackArtifact(section.kind);
+                  const sectionIds = sectionImportable
                     ? section.items.map((reference) => `ref:${reference.sourceId}:${reference.id}`)
                     : [];
                   const sectionSelected = sectionIds.filter((id) => selection.checkedIds.has(id)).length;
@@ -3898,7 +4031,7 @@ function BaselinesWorkbench({
                     <table className="axis-table">
                       <thead>
                         <tr>
-                          {sectionCatalog ? (
+                          {sectionImportable ? (
                             <th className="axis-table-check">
                               <SelectCheckbox
                                 checked={sectionAllSelected}
@@ -3922,7 +4055,7 @@ function BaselinesWorkbench({
                             className="row-link"
                             onClick={() => onSelect(rowId)}
                           >
-                            {sectionCatalog ? (
+                            {sectionImportable ? (
                               <td className="axis-table-check">
                                 <SelectCheckbox
                                   checked={selection.checkedIds.has(rowId)}
@@ -3950,7 +4083,7 @@ function BaselinesWorkbench({
                 })}
                 {!e8Loading && !pack.error && pack.references.length === 0 ? (
                   <p className="muted baseline-pack-empty">
-                    {templates ? "No items were returned from this template store." : "No baselines were returned from ASD Blueprint."}
+                    No items were returned from this policy pack.
                   </p>
                 ) : null}
                 </>
@@ -3970,7 +4103,7 @@ function BaselinesWorkbench({
               title={exportResolved?.name ?? selectedReference.name}
               actions={
                 <div className="device-actions">
-                  {isCatalogPackArtifact(selectedReference.artifactKind) ? (
+                  {isImportablePackArtifact(selectedReference.artifactKind) ? (
                     <WriteActionButton
                       type="button"
                       className="axis-btn axis-btn-primary"
@@ -3989,21 +4122,19 @@ function BaselinesWorkbench({
               <PolicyExportInspect
                 reference={selectedReference}
                 sources={sourceEntries}
-                storeLabel={templates ? "Store" : "Baseline"}
+                storeLabel="Pack"
                 formatRelative={formatRelative}
                 openExternalUrl={openExternalUrl}
                 onResolved={onExportResolved}
                 banner={
-                  isCatalogPackArtifact(selectedReference.artifactKind) ? (
+                  isImportablePackArtifact(selectedReference.artifactKind) ? (
                     <IncompleteBanner>
-                      Import creates a new Settings Catalog policy. Review its settings and assignments
-                      before deployment.
+                      Import creates a new tenant object from this export. Review settings and
+                      assignments before deployment.
                     </IncompleteBanner>
                   ) : (
                     <IncompleteBanner>
-                      {templates
-                        ? "This item is listed from a template store. Axis does not import it as a Settings Catalog policy."
-                        : "This ASD baseline is listed for compare and one-policy import."}
+                      This item is listed from a policy pack. Axis does not import this artifact kind.
                     </IncompleteBanner>
                   )
                 }
@@ -4035,7 +4166,7 @@ function BaselinesWorkbench({
                       <dd>{packArtifactKindLabel(selectedReference.artifactKind)}</dd>
                     </div>
                     <div>
-                      <dt>{templates ? "Store" : "Baseline"}</dt>
+                      <dt>Pack</dt>
                       <dd>{selectedReference.sourceName}</dd>
                     </div>
                   </dl>
@@ -4049,29 +4180,23 @@ function BaselinesWorkbench({
                   </div>
                 </section>
                 <IncompleteBanner>
-                  {templates
-                    ? "This item is listed from a template store. Axis does not import it as a Settings Catalog policy."
-                    : "This ASD baseline is listed for compare and one-policy import."}
+                  {isImportablePackArtifact(selectedReference.artifactKind)
+                    ? "Import creates a new tenant object from this export."
+                    : "This item is listed from a policy pack. Axis does not import this artifact kind."}
                 </IncompleteBanner>
               </>
             )}
-            {importOpen && isCatalogPackArtifact(selectedReference.artifactKind) ? (
+            {importOpen && isImportablePackArtifact(selectedReference.artifactKind) ? (
               <BaselineImportDialog
                 reference={selectedReference}
                 sources={sourceEntries}
-                kicker={templates ? "Template import" : "Baseline import"}
+                kicker="Pack import"
                 onClose={() => setImportOpen(false)}
               />
             ) : null}
           </div>
         ) : (
-          <InspectorEmpty
-            label={
-              templates
-                ? "Select an item under a template store to inspect it here."
-                : "Select a baseline to inspect it here."
-            }
-          />
+          <InspectorEmpty label="Select an item under a policy pack to inspect it here." />
         )
       }
     />
@@ -4079,7 +4204,7 @@ function BaselinesWorkbench({
       <BaselineBulkImportDialog
         references={bulkImportTargets}
         sources={sourceEntries}
-        kicker={templates ? "Template bulk import" : "Baseline bulk import"}
+        kicker="Pack bulk import"
         onClose={() => {
           setBulkImportOpen(false);
           setBulkImportTargets([]);
@@ -4095,7 +4220,7 @@ function BaselinesWorkbench({
       <BaselineMergeDialog
         references={bulkMergeTargets}
         sources={sourceEntries}
-        kicker={templates ? "Template combine and merge" : "Baseline combine and merge"}
+        kicker="Pack combine and merge"
         onClose={() => {
           setBulkMergeOpen(false);
           setBulkMergeTargets([]);
@@ -4367,482 +4492,6 @@ function TemplateSourceDialog({
           <button type="button" className="axis-btn axis-btn-primary" onClick={onClose}>
             Done
           </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function BaselineImportDialog({
-  reference,
-  sources,
-  kicker,
-  onClose,
-}: {
-  reference: E8BaselineReference & { sourceId: string; sourceName: string };
-  sources: BaselineReferenceSourceInput[];
-  kicker: string;
-  onClose: () => void;
-}) {
-  const { writeDisabled, writeHint } = useWriteGate();
-  const [name, setName] = useState(reference.name);
-  const [description, setDescription] = useState("");
-  const [platform, setPlatform] = useState<"windows" | "macos">("windows");
-  const [settings, setSettings] = useState<Record<string, unknown>[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    void loadCatalogImportDraft(reference, sources)
-      .then((draft) => {
-        if (cancelled) return;
-        setName(draft.name);
-        setDescription(draft.description);
-        setPlatform(draft.platform);
-        setSettings(draft.settings);
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Could not load the baseline export.");
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [reference.downloadUrl, reference.name, reference.sourceId, sources]);
-
-  useEffect(() => {
-    function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape" && !saving) onClose();
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, saving]);
-
-  async function importPolicy() {
-    setSaving(true);
-    setError(null);
-    try {
-      const response = await createSettingsCatalogPolicy({
-        name: name.trim(),
-        description,
-        platform,
-        settings,
-      });
-      if (response.error || !response.policy) {
-        setError(response.error ?? "Import failed.");
-        return;
-      }
-      navigate(
-        `/intune/policies/settings-catalog?platform=${platform}&policy=${encodeURIComponent(
-          response.policy.id,
-        )}`,
-      );
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Import failed.");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <div
-      className="axis-modal-backdrop"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget && !saving) onClose();
-      }}
-    >
-      <div className="axis-modal object-action-pane" role="dialog" aria-modal="true">
-        <div className="assignment-dialog-head">
-          <div>
-            <p className="axis-kicker">{kicker}</p>
-            <h2>{reference.name}</h2>
-          </div>
-          <button type="button" className="axis-btn" disabled={saving} onClick={onClose}>
-            Close
-          </button>
-        </div>
-        {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
-        {loading ? <p className="muted">Downloading and validating template…</p> : null}
-        <div className="object-action-fields">
-          <label className="device-field">
-            Policy name
-            <input
-              className="axis-input"
-              value={name}
-              disabled={loading || saving}
-              onChange={(event) => setName(event.target.value)}
-            />
-          </label>
-          <label className="device-field">
-            Description
-            <textarea
-              className="axis-input object-action-description"
-              value={description}
-              rows={4}
-              disabled={loading || saving}
-              onChange={(event) => setDescription(event.target.value)}
-            />
-          </label>
-          <label className="device-field">
-            Platform
-            <select
-              className="axis-input"
-              value={platform}
-              disabled={loading || saving}
-              onChange={(event) => setPlatform(event.target.value as "windows" | "macos")}
-            >
-              <option value="windows">Windows</option>
-              <option value="macos">macOS</option>
-            </select>
-          </label>
-          <p className="muted" style={{ margin: 0 }}>
-            {settings.length} setting{settings.length === 1 ? "" : "s"} will be imported.
-          </p>
-        </div>
-        <div className="object-action-footer">
-          <p className="muted">The imported policy is created unassigned.</p>
-          <div className="device-actions">
-            <button type="button" className="axis-btn" disabled={saving} onClick={onClose}>
-              Cancel
-            </button>
-            <button
-              type="button"
-              className="axis-btn axis-btn-primary"
-              disabled={writeDisabled || loading || saving || !name.trim() || settings.length === 0}
-              title={writeDisabled ? writeHint : undefined}
-              onClick={() => void importPolicy()}
-            >
-              {saving ? "Importing…" : "Import policy"}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-type CatalogImportDraft = {
-  name: string;
-  description: string;
-  platform: "windows" | "macos";
-  settings: Record<string, unknown>[];
-};
-
-async function loadCatalogImportDraft(
-  reference: E8BaselineReference & { sourceId: string },
-  sources: BaselineReferenceSourceInput[],
-): Promise<CatalogImportDraft> {
-  const response = await fetchBaselineExport(
-    reference.downloadUrl,
-    tokenForSource(sources, reference.sourceId),
-  );
-  if (response.error || response.document == null) {
-    throw new Error(response.error ?? "The baseline export was empty.");
-  }
-  const fileName = reference.downloadUrl.split(/[\\/]/).pop() ?? `${reference.name}.json`;
-  const policy = normalizeIntunePolicyExport(response.document, fileName);
-  const settings = catalogSettingsFromPolicy(policy);
-  if (settings.length === 0) {
-    throw new Error("No Settings Catalog instances in this file.");
-  }
-  const importedName =
-    (typeof policy.name === "string" && policy.name.trim()) ||
-    (typeof policy.displayName === "string" && policy.displayName.trim()) ||
-    reference.name;
-  return {
-    name: importedName,
-    description: catalogDescriptionFromPolicy(policy),
-    platform: catalogPlatformFromPolicy(policy),
-    settings,
-  };
-}
-
-type BulkImportRow = {
-  key: string;
-  referenceName: string;
-  include: boolean;
-  name: string;
-  platform: "windows" | "macos";
-  settings: Record<string, unknown>[];
-  description: string;
-  error: string | null;
-  status: "loading" | "ready" | "error";
-};
-
-function BaselineBulkImportDialog({
-  references,
-  sources,
-  kicker,
-  onClose,
-  onDone,
-}: {
-  references: Array<E8BaselineReference & { sourceId: string; sourceName: string }>;
-  sources: BaselineReferenceSourceInput[];
-  kicker: string;
-  onClose: () => void;
-  onDone: () => void;
-}) {
-  const { writeDisabled, writeHint } = useWriteGate();
-  const referenceKey = references.map((reference) => `${reference.sourceId}:${reference.id}`).join("\0");
-  const [rows, setRows] = useState<BulkImportRow[]>(() =>
-    references.map((reference) => ({
-      key: `ref:${reference.sourceId}:${reference.id}`,
-      referenceName: reference.name,
-      include: true,
-      name: reference.name,
-      platform: "windows" as const,
-      settings: [],
-      description: "",
-      error: null,
-      status: "loading" as const,
-    })),
-  );
-  const [saving, setSaving] = useState(false);
-  const [progress, setProgress] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setRows(
-      references.map((reference) => ({
-        key: `ref:${reference.sourceId}:${reference.id}`,
-        referenceName: reference.name,
-        include: true,
-        name: reference.name,
-        platform: "windows" as const,
-        settings: [],
-        description: "",
-        error: null,
-        status: "loading" as const,
-      })),
-    );
-    void (async () => {
-      for (const reference of references) {
-        if (cancelled) return;
-        const key = `ref:${reference.sourceId}:${reference.id}`;
-        try {
-          const draft = await loadCatalogImportDraft(reference, sources);
-          if (cancelled) return;
-          setRows((current) =>
-            current.map((row) =>
-              row.key === key
-                ? {
-                    ...row,
-                    name: draft.name,
-                    description: draft.description,
-                    platform: draft.platform,
-                    settings: draft.settings,
-                    include: true,
-                    error: null,
-                    status: "ready",
-                  }
-                : row,
-            ),
-          );
-        } catch (err) {
-          if (cancelled) return;
-          setRows((current) =>
-            current.map((row) =>
-              row.key === key
-                ? {
-                    ...row,
-                    include: false,
-                    error: err instanceof Error ? err.message : String(err),
-                    status: "error",
-                  }
-                : row,
-            ),
-          );
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [referenceKey, sources]);
-
-  useEffect(() => {
-    function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape" && !saving) onClose();
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, saving]);
-
-  const ready = rows.filter(
-    (row) => row.include && row.status === "ready" && row.name.trim() && row.settings.length > 0,
-  );
-  const stillLoading = rows.some((row) => row.status === "loading");
-
-  function patchRow(key: string, patch: Partial<BulkImportRow>) {
-    setRows((current) => current.map((row) => (row.key === key ? { ...row, ...patch } : row)));
-  }
-
-  async function importPolicies() {
-    if (ready.length === 0) return;
-    setSaving(true);
-    setError(null);
-    const created: Array<{ id: string; name: string }> = [];
-    const failures: string[] = [];
-    try {
-      for (const [index, row] of ready.entries()) {
-        setProgress(`Creating ${index + 1} of ${ready.length}…`);
-        const response = await createSettingsCatalogPolicy({
-          name: row.name.trim(),
-          description: row.description,
-          platform: row.platform,
-          settings: row.settings,
-        });
-        if (response.error || !response.policy) {
-          failures.push(`${row.name}: ${response.error ?? "Create failed."}`);
-          continue;
-        }
-        created.push(response.policy);
-      }
-      if (created.length === 0) {
-        setError(failures[0] ?? "Import failed.");
-        return;
-      }
-      if (failures.length > 0) {
-        setError(
-          `Imported ${created.length}. ${failures.length} issue${failures.length === 1 ? "" : "s"}: ${failures.slice(0, 4).join(" ")}`,
-        );
-        return;
-      }
-      onDone();
-      if (created.length === 1) {
-        navigate(
-          `/intune/policies/settings-catalog?platform=${ready[0]?.platform ?? "windows"}&policy=${encodeURIComponent(
-            created[0].id,
-          )}`,
-        );
-      } else {
-        navigate("/intune/policies/settings-catalog");
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Import failed.");
-    } finally {
-      setSaving(false);
-      setProgress(null);
-    }
-  }
-
-  return (
-    <div
-      className="axis-modal-backdrop"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget && !saving) onClose();
-      }}
-    >
-      <div className="axis-modal axis-modal-wide" role="dialog" aria-modal="true">
-        <div className="assignment-dialog-head">
-          <div>
-            <p className="axis-kicker">{kicker}</p>
-            <h2>
-              {references.length} polic{references.length === 1 ? "y" : "ies"}
-            </h2>
-            <p className="muted" style={{ margin: "0.35rem 0 0", fontSize: "0.75rem" }}>
-              Each selected Settings Catalog export is normalized and created unassigned, same as a
-              single import.
-            </p>
-          </div>
-          <button type="button" className="axis-btn" disabled={saving} onClick={onClose}>
-            Close
-          </button>
-        </div>
-        {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
-        {progress ? <p className="muted">{progress}</p> : null}
-        {stillLoading ? <p className="muted">Downloading and validating exports…</p> : null}
-        <div className="object-action-fields" style={{ maxHeight: "40vh", overflow: "auto" }}>
-          <table className="axis-table">
-            <thead>
-              <tr>
-                <th>Import</th>
-                <th>Policy name</th>
-                <th>Platform</th>
-                <th>Settings</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <tr key={row.key}>
-                  <td>
-                    <input
-                      type="checkbox"
-                      checked={row.include && row.status === "ready"}
-                      disabled={saving || row.status !== "ready"}
-                      onChange={(event) => patchRow(row.key, { include: event.target.checked })}
-                      aria-label={`Import ${row.referenceName}`}
-                    />
-                  </td>
-                  <td>
-                    {row.status === "error" ? (
-                      <div>
-                        <div>{row.referenceName}</div>
-                        <p className="muted" style={{ margin: "0.2rem 0 0", color: "var(--axis-danger, #b42318)" }}>
-                          {row.error}
-                        </p>
-                      </div>
-                    ) : (
-                      <input
-                        className="axis-input"
-                        value={row.name}
-                        disabled={saving || row.status !== "ready"}
-                        onChange={(event) => patchRow(row.key, { name: event.target.value })}
-                      />
-                    )}
-                  </td>
-                  <td>
-                    <select
-                      className="axis-input"
-                      value={row.platform}
-                      disabled={saving || row.status !== "ready"}
-                      onChange={(event) =>
-                        patchRow(row.key, { platform: event.target.value as "windows" | "macos" })
-                      }
-                    >
-                      <option value="windows">Windows</option>
-                      <option value="macos">macOS</option>
-                    </select>
-                  </td>
-                  <td className="muted">
-                    {row.status === "loading"
-                      ? "…"
-                      : row.status === "error"
-                        ? "—"
-                        : String(row.settings.length)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <div className="object-action-footer">
-          <p className="muted">
-            {ready.length} ready · created policies stay unassigned until you edit assignments.
-          </p>
-          <div className="device-actions">
-            <button type="button" className="axis-btn" disabled={saving} onClick={onClose}>
-              Cancel
-            </button>
-            <button
-              type="button"
-              className="axis-btn axis-btn-primary"
-              disabled={writeDisabled || saving || stillLoading || ready.length === 0}
-              title={writeDisabled ? writeHint : undefined}
-              onClick={() => void importPolicies()}
-            >
-              {saving
-                ? "Importing…"
-                : `Import ${ready.length} polic${ready.length === 1 ? "y" : "ies"}`}
-            </button>
-          </div>
         </div>
       </div>
     </div>

@@ -237,6 +237,12 @@ export const INTUNE_NAV: NavItem[] = [
     children: policiesPlatformNavChildren(),
   },
   {
+    href: "/intune/policy-sets",
+    label: "Policy sets",
+    icon: "policies",
+    section: "Manage",
+  },
+  {
     href: "/intune/policies/compliance",
     label: "Compliance",
     icon: "policies",
@@ -260,9 +266,7 @@ export const INTUNE_NAV: NavItem[] = [
     section: "Manage",
     children: WINDOWS_UPDATE_BLADES,
   },
-  { href: "/intune/baselines", label: "Baselines", icon: "baselines", section: "Manage" },
-  { href: "/intune/packs", label: "Packs", icon: "templates", section: "Manage" },
-  { href: "/intune/templates", label: "Templates", icon: "templates", section: "Manage" },
+  { href: "/intune/packs", label: "Policy Packs", icon: "templates", section: "Manage" },
   {
     href: "/intune/apps",
     label: "Apps",

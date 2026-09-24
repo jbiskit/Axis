@@ -13,6 +13,7 @@ import type {
   AppProtectionPolicy,
   AutopilotDevice,
   AutopilotProfile,
+  PolicySetSummary,
   CapabilityStatus,
   CatalogCategoriesResponse,
   CatalogIndexState,
@@ -35,7 +36,6 @@ import type {
   UpdateObjectMetadataResponse,
   UpdateScriptContentInput,
   GraphObjectDetailResponse,
-  E8BaselineReferencesResponse,
   BaselineExportResponse,
   BaselineReferenceSourceInput,
   BaselineReferenceSourcesResponse,
@@ -235,6 +235,10 @@ export async function fetchAppProtectionPolicies(): Promise<InventoryResponse<Ap
   return invoke("fetch_app_protection_policies_cmd");
 }
 
+export async function fetchPolicySets(): Promise<InventoryResponse<PolicySetSummary>> {
+  return invoke("fetch_policy_sets_cmd");
+}
+
 export async function fetchTenantScripts(): Promise<InventoryResponse<TenantScriptSummary>> {
   return invoke("fetch_tenant_scripts_cmd");
 }
@@ -261,10 +265,6 @@ export async function fetchEnrollmentConfigurations(
 
 export async function desktopCapability(name: string): Promise<CapabilityStatus> {
   return invoke("desktop_capability", { name });
-}
-
-export async function fetchE8BaselineReferences(): Promise<E8BaselineReferencesResponse> {
-  return invoke("fetch_e8_baseline_references_cmd");
 }
 
 export async function fetchBaselineReferenceSources(
@@ -489,6 +489,37 @@ export async function fetchBaselineExport(
   token?: string,
 ): Promise<BaselineExportResponse> {
   return invoke("fetch_baseline_export_cmd", { downloadUrl, token: token || null });
+}
+
+export async function fetchPackArtifactText(
+  downloadUrl: string,
+  token?: string,
+): Promise<import("../types/inventory").PackArtifactTextResponse> {
+  return invoke("fetch_pack_artifact_text_cmd", { downloadUrl, token: token || null });
+}
+
+export async function importPackJsonDocument(input: {
+  document: unknown;
+  displayName?: string | null;
+  description?: string | null;
+}): Promise<import("../types/inventory").PackImportResponse> {
+  return invoke("import_pack_json_document_cmd", {
+    document: input.document,
+    displayName: input.displayName?.trim() ? input.displayName : null,
+    description: input.description ?? null,
+  });
+}
+
+export async function importPackScriptText(input: {
+  text: string;
+  displayName?: string | null;
+  description?: string | null;
+}): Promise<import("../types/inventory").PackImportResponse> {
+  return invoke("import_pack_script_text_cmd", {
+    text: input.text,
+    displayName: input.displayName?.trim() ? input.displayName : null,
+    description: input.description ?? null,
+  });
 }
 
 export async function fetchAppliedPolicySettings(

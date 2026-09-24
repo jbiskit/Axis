@@ -3,7 +3,9 @@ import type { BaselineReferenceSourceInput, TemplateStoreKind } from "../../type
 export type { TemplateStoreKind };
 
 export const SOURCE_STORAGE_KEY = "axis-baseline-reference-sources-v1";
-export const BUILTIN_E8_SOURCE_ID = "e8-github";
+
+/** Former built-in ASD E8 id — stripped on load so old localStorage entries disappear. */
+const LEGACY_BUILTIN_E8_SOURCE_ID = "e8-github";
 
 /** GitHub form to create a fine-grained PAT (least privilege for Axis packs). */
 export const GITHUB_FINE_GRAINED_TOKEN_URL =
@@ -11,20 +13,8 @@ export const GITHUB_FINE_GRAINED_TOKEN_URL =
 export const GITHUB_FINE_GRAINED_TOKEN_DOCS_URL =
   "https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens#creating-a-fine-grained-personal-access-token";
 
-export const DEFAULT_E8_SOURCE: BaselineReferenceSourceInput = {
-  id: BUILTIN_E8_SOURCE_ID,
-  name: "ASD E8",
-  kind: "github",
-  url: "https://github.com/ASD-Blueprint/ASD-Blueprint-for-Secure-Cloud/tree/main/static/content/files/intune-config-policies",
-  owner: "ASD-Blueprint",
-  repo: "ASD-Blueprint-for-Secure-Cloud",
-  gitRef: "main",
-  path: "static/content/files/intune-config-policies",
-  private: false,
-};
-
-export function isBuiltinSource(source: { id?: string }): boolean {
-  return source.id === BUILTIN_E8_SOURCE_ID;
+export function isLegacyBuiltinSource(source: { id?: string }): boolean {
+  return source.id === LEGACY_BUILTIN_E8_SOURCE_ID;
 }
 
 export function isLocalSource(source: {
@@ -38,31 +28,45 @@ export function isTemplateStoreKind(value: string | undefined): value is Templat
   return value === "axisTemplated" || value === "flatJson";
 }
 
-/** User template stores only. Built-in ASD is not a template. Missing values follow the old path rule. */
+/**
+ * Policy pack shape: kit pack (`axis-pack.json` + kits) vs flat JSON policy folder.
+ * Missing values follow the path rule (empty path → kit pack).
+ */
 export function resolveStoreKind(source: {
-  id?: string;
   storeKind?: string;
   path?: string;
-}): TemplateStoreKind | undefined {
-  if (isBuiltinSource(source)) return undefined;
+}): TemplateStoreKind {
   if (isTemplateStoreKind(source.storeKind)) return source.storeKind;
   return source.path?.trim() ? "flatJson" : "axisTemplated";
 }
 
+export function isFlatPackSource(source: {
+  storeKind?: string;
+  path?: string;
+}): boolean {
+  return resolveStoreKind(source) === "flatJson";
+}
+
+export function isKitPackSource(source: {
+  storeKind?: string;
+  path?: string;
+}): boolean {
+  return resolveStoreKind(source) === "axisTemplated";
+}
+
 export function storeKindLabel(kind: TemplateStoreKind | undefined): string {
   if (kind === "flatJson") return "Flat JSON";
-  if (kind === "axisTemplated") return "Axis Templated";
+  if (kind === "axisTemplated") return "Kit pack";
   return "";
 }
 
+/** Shape + transport label for pack cards (e.g. "Local folder · Kit pack"). */
 export function templateKicker(source: {
-  id?: string;
   kind?: string;
   localPath?: string;
   storeKind?: string;
   path?: string;
 }): string {
-  if (isBuiltinSource(source)) return "Built-in";
   const transport = isLocalSource(source) ? "Local folder" : "GitHub";
   const kind = storeKindLabel(resolveStoreKind(source));
   return kind ? `${transport} · ${kind}` : transport;
@@ -76,40 +80,22 @@ export function packTitle(source: {
   kind?: string;
   localPath?: string;
 }): string {
-  if (isBuiltinSource(source)) return "ASD E8";
   const name = source.name?.trim();
   if (name) return name;
   if (isLocalSource(source)) {
     const folder = source.localPath?.trim().replace(/[\\/]+$/, "");
     const parts = folder?.split(/[\\/]/).filter(Boolean) ?? [];
-    return parts[parts.length - 1] || "Local template";
+    return parts[parts.length - 1] || "Local pack";
   }
   if (source.owner?.trim() && source.repo?.trim()) return `${source.owner}/${source.repo}`;
-  return "Template";
+  return "Policy pack";
 }
 
-export function ensureBuiltinSources(sources: BaselineReferenceSourceInput[]): BaselineReferenceSourceInput[] {
-  const rest = sources.filter((source) => !isBuiltinSource(source));
-  const existing = sources.find(isBuiltinSource);
-  return [
-    {
-      ...DEFAULT_E8_SOURCE,
-      ...existing,
-      id: BUILTIN_E8_SOURCE_ID,
-      name: "ASD E8",
-      url: DEFAULT_E8_SOURCE.url,
-      owner: DEFAULT_E8_SOURCE.owner,
-      repo: DEFAULT_E8_SOURCE.repo,
-      gitRef: DEFAULT_E8_SOURCE.gitRef,
-      path: DEFAULT_E8_SOURCE.path,
-      private: false,
-      token: undefined,
-      kind: "github",
-      localPath: undefined,
-      storeKind: undefined,
-    },
-    ...rest,
-  ];
+/** Drop the retired ASD E8 built-in if it is still in stored sources. */
+export function withoutLegacyBuiltin(
+  sources: BaselineReferenceSourceInput[],
+): BaselineReferenceSourceInput[] {
+  return sources.filter((source) => !isLegacyBuiltinSource(source));
 }
 
 export type ParsedGitHubRepo = {
@@ -208,9 +194,9 @@ export function isSourceReady(source: BaselineReferenceSourceInput): boolean {
 }
 
 export function sanitizeSource(entry: BaselineReferenceSourceInput): BaselineReferenceSourceInput {
-  if (isLocalSource(entry) && !isBuiltinSource(entry)) {
+  if (isLocalSource(entry)) {
     const localPath = (entry.localPath ?? "").trim();
-    const storeKind = resolveStoreKind(entry) ?? "axisTemplated";
+    const storeKind = resolveStoreKind(entry);
     const path =
       storeKind === "axisTemplated"
         ? ""
@@ -238,8 +224,7 @@ export function sanitizeSource(entry: BaselineReferenceSourceInput): BaselineRef
   const repo = (parsed?.repo ?? entry.repo ?? "").trim().replace(/\.git$/i, "");
   const gitRef = (parsed?.gitRef ?? entry.gitRef ?? "").trim() || "main";
   const parsedPath = (parsed?.path ?? entry.path ?? "").trim().replace(/^\/+|\/+$/g, "");
-  const builtin = isBuiltinSource(entry) || isBuiltinSource({ id: entry.id?.trim() });
-  const storeKind = builtin ? undefined : resolveStoreKind({ ...entry, path: parsedPath }) ?? "axisTemplated";
+  const storeKind = resolveStoreKind({ ...entry, path: parsedPath });
   const path = storeKind === "axisTemplated" ? "" : parsedPath;
   const privateRepo = entry.private === true || Boolean(entry.token?.trim());
   const token = privateRepo ? entry.token?.trim() || undefined : undefined;
@@ -250,10 +235,9 @@ export function sanitizeSource(entry: BaselineReferenceSourceInput): BaselineRef
   const id =
     entry.id?.trim() ||
     (owner && repo ? `repo:${owner}/${repo}:${gitRef}:${path}` : undefined);
-  const name = isBuiltinSource({ id }) ? "ASD E8" : entry.name?.trim() || undefined;
   return {
     id,
-    name,
+    name: entry.name?.trim() || undefined,
     kind: "github",
     url,
     owner,
@@ -313,20 +297,19 @@ export function sourceOpenUrl(source: BaselineReferenceSourceInput, directoryUrl
 export function loadStoredSources(): BaselineReferenceSourceInput[] {
   try {
     const stored = window.localStorage.getItem(SOURCE_STORAGE_KEY);
-    if (!stored) return [DEFAULT_E8_SOURCE];
+    if (!stored) return [];
     const parsed = JSON.parse(stored) as BaselineReferenceSourceInput[];
-    if (!Array.isArray(parsed) || parsed.length === 0) return [DEFAULT_E8_SOURCE];
-    const cleaned = parsed.map(sanitizeSource);
-    return ensureBuiltinSources(cleaned.length > 0 ? cleaned : [DEFAULT_E8_SOURCE]);
+    if (!Array.isArray(parsed) || parsed.length === 0) return [];
+    return withoutLegacyBuiltin(parsed.map(sanitizeSource)).filter(isSourceReady);
   } catch {
-    return [DEFAULT_E8_SOURCE];
+    return [];
   }
 }
 
 export function saveStoredSources(sources: BaselineReferenceSourceInput[]) {
   window.localStorage.setItem(
     SOURCE_STORAGE_KEY,
-    JSON.stringify(ensureBuiltinSources(sources).map(sanitizeSource)),
+    JSON.stringify(withoutLegacyBuiltin(sources).map(sanitizeSource)),
   );
 }
 

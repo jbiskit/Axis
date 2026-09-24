@@ -50,7 +50,8 @@ pub use auth::{
     DeviceCodePrompt, DeviceCodeTokens, PollResult, TokenClaims,
 };
 pub use autopilot_profiles::{
-    create_autopilot_profile, create_autopilot_profile_body, update_autopilot_profile,
+    autopilot_profile_create_body_from_export, create_autopilot_profile,
+    create_autopilot_profile_body, create_autopilot_profile_from_export, update_autopilot_profile,
     update_autopilot_profile_body, AutopilotEspDraft, AutopilotJoinKind, AutopilotOobeDraft,
     CreateAutopilotProfileInput, UpdateAutopilotProfileInput,
 };
@@ -80,8 +81,8 @@ pub use device_actions::{
     wipe_managed_device,
 };
 pub use device_compare::{
-    fetch_applied_policy_settings, fetch_baseline_export_json, AppliedPolicySettings,
-    AppliedPolicySettingsLoad,
+    fetch_applied_policy_settings, fetch_baseline_export_json, fetch_pack_artifact_text,
+    AppliedPolicySettings, AppliedPolicySettingsLoad,
 };
 pub use device_detail::{
     fetch_managed_device_detail, DetectedApp, DirectoryGroupMembership, ManagedApp,
@@ -127,7 +128,7 @@ pub use object_metadata::{
     WindowsAutopilotSettings,
 };
 pub use object_duplicate::{
-    can_duplicate_kind, duplicate_graph_object, copy_display_name, strip_keys,
+    can_duplicate_kind, duplicate_graph_object, copy_display_name, strip_for_graph_create, strip_keys,
     strip_setting_definitions, DuplicatedObject,
 };
 pub use pack_diff::{
@@ -145,8 +146,9 @@ pub use pack_kits::{
     PackKitsError, PackManifestView, PackWorkspace,
 };
 pub use pack_restore::{
-    apply_kit_apply, apply_restore, kit_apply_selection_preview, list_restore_candidates,
-    plan_kit_apply, plan_restore, KitApplyPlan, KitApplyResult, PackRestoreError, RestoreApplyResult,
+    apply_kit_apply, apply_restore, import_pack_json_document, import_pack_script_text,
+    kit_apply_selection_preview, list_restore_candidates, plan_kit_apply, plan_restore,
+    KitApplyPlan, KitApplyResult, PackImportResult, PackRestoreError, RestoreApplyResult,
     RestoreCandidate, RestoreItemStatus, RestoreMode, RestorePlan, RestorePlanItem,
 };
 pub use policy_health::{

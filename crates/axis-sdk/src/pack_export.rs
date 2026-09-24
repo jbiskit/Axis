@@ -804,8 +804,34 @@ fn graph_object_document(detail: &GraphObjectDetail, axis_kind: &str, exported_a
         map.insert("extras".into(), extras.clone());
         if let Some(actions) = extras.get("scheduledActions") {
             if let Some(obj) = map.get_mut("object").and_then(Value::as_object_mut) {
-                obj.insert("scheduledActionsForRule".into(), actions.clone());
+                obj.insert(
+                    "scheduledActionsForRule".into(),
+                    crate::object_duplicate::strip_for_graph_create(actions),
+                );
             }
+        }
+    }
+    if axis_kind == "enrollment-autopilot" || axis_kind == "autopilotProfile" {
+        if let Some(obj) = map.get_mut("object").and_then(Value::as_object_mut) {
+            // Prefer create-safe singular OOBE; drop deprecated read-only plural.
+            if obj.get("outOfBoxExperienceSetting").is_none() {
+                if let Ok(body) =
+                    crate::autopilot_profiles::autopilot_profile_create_body_from_export(
+                        &Value::Object(obj.clone()),
+                        obj.get("displayName")
+                            .and_then(Value::as_str)
+                            .unwrap_or("Autopilot"),
+                        None,
+                    )
+                {
+                    if let Some(oobe) = body.get("outOfBoxExperienceSetting").cloned() {
+                        obj.insert("outOfBoxExperienceSetting".into(), oobe);
+                    }
+                }
+            } else if let Some(oobe) = obj.get_mut("outOfBoxExperienceSetting") {
+                *oobe = crate::object_duplicate::strip_for_graph_create(oobe);
+            }
+            obj.remove("outOfBoxExperienceSettings");
         }
     }
     document

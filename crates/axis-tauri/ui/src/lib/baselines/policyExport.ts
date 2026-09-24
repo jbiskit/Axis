@@ -98,8 +98,8 @@ export function policyExportToBaseline(
     byId.set(leaf.definitionId, leaf);
   }
 
-  const idPrefix = options?.idPrefix ?? "asd";
-  const originLabel = options?.originLabel ?? "ASD Blueprint";
+  const idPrefix = options?.idPrefix ?? "pack";
+  const originLabel = options?.originLabel ?? "Policy pack";
   const policyName =
     (typeof policy.name === "string" && policy.name.trim()) ||
     (typeof policy.displayName === "string" && policy.displayName.trim()) ||
@@ -141,8 +141,8 @@ export function policyExportToBaseline(
     description:
       (typeof policy.description === "string" && policy.description.trim()) ||
       `Intune Settings Catalog export (${fileName}).`,
-    version: options?.version ?? "asd-blueprint-main",
-    source: options?.source ?? "asd",
+    version: options?.version ?? "pack",
+    source: options?.source ?? "custom",
     checks,
   };
 }

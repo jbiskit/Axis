@@ -9,7 +9,7 @@ import { INTUNE_PLATFORM_LABELS, type IntunePlatform } from "../lib/platforms";
 import { hrefWithParam, navigate } from "../lib/route";
 import { WriteActionButton } from "../lib/readOnly";
 import { withTransientItem } from "../lib/duplicateObject";
-import { useCatalogFileImport } from "./workbench/CatalogFileImportDialog";
+import { useNativeJsonImport } from "./workbench/NativeJsonImportDialog";
 import {
   BulkListActions,
   listTargetProps,
@@ -103,23 +103,22 @@ export function SettingsCatalogWorkbench({
     [listed, policies],
   );
   const selectPolicy = (id: string) => navigate(hrefWithParam(pathname, search, "policy", id || null));
-  const catalogImport = useCatalogFileImport((created) => {
-    const first = created[0];
-    if (first) {
+  const catalogImport = useNativeJsonImport({
+    title: "Settings Catalog",
+    description:
+      "Import Axis pack JSON (file or paste). Settings Catalog policies are created unassigned in this tenant.",
+    acceptKinds: ["catalogPolicy"],
+    onImported: (created) => {
       setOverlay({
-        id: first.id,
-        name: first.name,
+        id: created.id,
+        name: created.displayName,
         isAssigned: false,
       });
-    }
-    window.setTimeout(() => onRefresh(), 0);
-  }, catalogPlatform ?? "windows");
+      window.setTimeout(() => onRefresh(), 0);
+    },
+  });
   const importButton = (
-    <WriteActionButton
-      type="button"
-      className="axis-btn"
-      onClick={() => void catalogImport.openPicker()}
-    >
+    <WriteActionButton type="button" className="axis-btn" onClick={() => catalogImport.openDialog()}>
       Import
     </WriteActionButton>
   );

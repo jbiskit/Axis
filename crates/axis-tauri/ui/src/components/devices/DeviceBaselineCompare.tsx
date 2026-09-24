@@ -24,7 +24,7 @@ import {
   fetchBaselineExport,
   fetchBaselineReferenceSources,
 } from "../../lib/tauri";
-import { BUILTIN_E8_SOURCE_ID, loadStoredSources, packTitle, tokenForSource } from "../../lib/baselines/sources";
+import { loadStoredSources, packTitle, tokenForSource } from "../../lib/baselines/sources";
 
 const COMPARE_ALL_ID = "__all__";
 
@@ -201,9 +201,8 @@ export function DeviceBaselineCompare({ device }: { device: ManagedDeviceDetail 
           notes.push(`Failed to read ${applied.load.failed} policy setting collection${applied.load.failed === 1 ? "" : "s"}.`);
         }
 
-        const catalog = references.filter(
-          (reference) =>
-            isCatalogPackArtifact(reference.artifactKind) && reference.sourceId === BUILTIN_E8_SOURCE_ID,
+        const catalog = references.filter((reference) =>
+          isCatalogPackArtifact(reference.artifactKind),
         );
         const comparable = references.filter(
           (reference) =>
@@ -213,7 +212,7 @@ export function DeviceBaselineCompare({ device }: { device: ManagedDeviceDetail 
           baselineKey === COMPARE_ALL_ID
             ? catalog
             : comparable.filter((reference) => `${reference.sourceId}:${reference.id}` === baselineKey);
-        if (targets.length === 0) throw new Error("Pick an ASD baseline or a policy set to compare.");
+        if (targets.length === 0) throw new Error("Pick a pack policy or policy set to compare.");
 
         const nextEvaluations: DeviceBaselineEvaluation[] = [];
         for (let index = 0; index < targets.length; index++) {
@@ -226,7 +225,7 @@ export function DeviceBaselineCompare({ device }: { device: ManagedDeviceDetail 
           }
           const originLabel = reference.sourceName || reference.source;
           const options = {
-            idPrefix: reference.sourceId || "asd",
+            idPrefix: reference.sourceId || "pack",
             source: "custom" as const,
             version: reference.version ?? "pack",
             originLabel,
@@ -266,12 +265,7 @@ export function DeviceBaselineCompare({ device }: { device: ManagedDeviceDetail 
             };
           } else {
             const fileName = reference.downloadUrl.split(/[/\\]/).pop() ?? `${reference.name}.txt`;
-            const asd = reference.sourceId === BUILTIN_E8_SOURCE_ID;
-            baseline = policyExportToBaseline(fileName, document, {
-              ...options,
-              source: asd ? "asd" : "custom",
-              version: asd ? reference.version ?? "asd-blueprint-main" : options.version,
-            });
+            baseline = policyExportToBaseline(fileName, document, options);
           }
           nextEvaluations.push(evaluateDeviceBaseline(baseline, device, applied.occurrences, notes));
         }
@@ -336,28 +330,19 @@ export function DeviceBaselineCompare({ device }: { device: ManagedDeviceDetail 
     [references],
   );
 
-  const asdCatalog = useMemo(
-    () =>
-      catalogReferences.filter((reference) => reference.sourceId === BUILTIN_E8_SOURCE_ID),
-    [catalogReferences],
-  );
   const policySets = useMemo(
     () => comparableReferences.filter((reference) => isPolicySetPackArtifact(reference.artifactKind)),
     [comparableReferences],
   );
-  const templatePolicies = useMemo(
-    () =>
-      catalogReferences.filter((reference) => reference.sourceId !== BUILTIN_E8_SOURCE_ID),
-    [catalogReferences],
-  );
+  const packPolicies = useMemo(() => catalogReferences, [catalogReferences]);
 
   const busy = Boolean(progress);
 
   return (
     <section className="stack">
       <p className="muted" style={{ margin: 0 }}>
-        Compare this device against an ASD baseline or a template policy set. Template catalog files
-        can be graded one at a time. Scripts and other template files stay on Templates and are not
+        Compare this device against a policy pack catalog file or kit/policy set. Catalog files can
+        be graded one at a time. Scripts and other pack files stay on Policy Packs and are not
         graded here.
       </p>
       <div className="device-toolbar baseline-compare-toolbar">
@@ -373,18 +358,9 @@ export function DeviceBaselineCompare({ device }: { device: ManagedDeviceDetail 
               void runCompare(next);
             }}
           >
-            <option value="">{referencesLoading ? "Loading…" : "Select a baseline or policy set…"}</option>
-            {asdCatalog.length > 1 ? (
-              <option value={COMPARE_ALL_ID}>Compare all ASD baselines ({asdCatalog.length})</option>
-            ) : null}
-            {asdCatalog.length ? (
-              <optgroup label="ASD baselines">
-                {asdCatalog.map((reference) => (
-                  <option key={`${reference.sourceId}:${reference.id}`} value={`${reference.sourceId}:${reference.id}`}>
-                    {reference.name}
-                  </option>
-                ))}
-              </optgroup>
+            <option value="">{referencesLoading ? "Loading…" : "Select a pack policy or set…"}</option>
+            {packPolicies.length > 1 ? (
+              <option value={COMPARE_ALL_ID}>Compare all pack policies ({packPolicies.length})</option>
             ) : null}
             {policySets.length ? (
               <optgroup label="Policy sets">
@@ -395,9 +371,9 @@ export function DeviceBaselineCompare({ device }: { device: ManagedDeviceDetail 
                 ))}
               </optgroup>
             ) : null}
-            {templatePolicies.length ? (
-              <optgroup label="Template policies">
-                {templatePolicies.map((reference) => (
+            {packPolicies.length ? (
+              <optgroup label="Pack policies">
+                {packPolicies.map((reference) => (
                   <option key={`${reference.sourceId}:${reference.id}`} value={`${reference.sourceId}:${reference.id}`}>
                     {reference.sourceName} · {reference.name}
                   </option>
@@ -525,7 +501,7 @@ export function DeviceBaselineCompare({ device }: { device: ManagedDeviceDetail 
         </>
       ) : !busy && !error ? (
         <p className="muted">
-          Select an ASD baseline or a template policy set. Comparison uses this device’s applied
+          Select a pack policy or policy set. Comparison uses this device’s applied
           policies, not a tenant-wide catalog scan.
         </p>
       ) : null}

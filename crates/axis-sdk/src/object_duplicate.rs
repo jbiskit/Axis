@@ -128,6 +128,55 @@ pub fn strip_keys(value: &Value, keys: &[&str]) -> Value {
     }
 }
 
+fn keep_odata_annotation(key: &str) -> bool {
+    key == "@odata.type" || key.ends_with("@odata.bind")
+}
+
+/// Drop Graph read-only fields and OData noise that break POST create.
+/// Keeps `@odata.type` and `*@odata.bind`; strips `*@odata.context` and nested `id`s.
+pub fn strip_for_graph_create(value: &Value) -> Value {
+    const EXACT: &[&str] = &[
+        "id",
+        "createdDateTime",
+        "lastModifiedDateTime",
+        "modifiedDateTime",
+        "version",
+        "assignments",
+        "isAssigned",
+        "settingCount",
+        "supportsScopeTags",
+        "lastModifiedBy",
+        "createdBy",
+        "priority",
+        "deviceStatusOverview",
+        "userStatusOverview",
+        "deviceStatuses",
+        "userStatuses",
+        "deviceSettingStateSummaries",
+        "definitionValues",
+        "installSummary",
+    ];
+    match value {
+        Value::Object(map) => {
+            let mut next = Map::new();
+            for (key, child) in map {
+                if EXACT.iter().any(|strip| *strip == key) {
+                    continue;
+                }
+                if key.contains("@odata.") && !keep_odata_annotation(key) {
+                    continue;
+                }
+                next.insert(key.clone(), strip_for_graph_create(child));
+            }
+            Value::Object(next)
+        }
+        Value::Array(rows) => {
+            Value::Array(rows.iter().map(strip_for_graph_create).collect())
+        }
+        other => other.clone(),
+    }
+}
+
 pub fn strip_setting_definitions(value: &mut Value) {
     match value {
         Value::Object(map) => {
@@ -210,7 +259,7 @@ fn generic_create_body(
     name: &str,
     description: Option<&str>,
 ) -> Value {
-    let mut body = strip_keys(&detail.object, STRIP_KEYS);
+    let mut body = strip_for_graph_create(&strip_keys(&detail.object, STRIP_KEYS));
     apply_copy_name(&mut body, name);
     if let Some(description) = description {
         if let Some(map) = body.as_object_mut() {
@@ -223,7 +272,7 @@ fn generic_create_body(
             .as_ref()
             .and_then(|extras| extras.get("scheduledActions"))
         {
-            let cleaned = strip_keys(actions, &["id", "@odata.context", "@odata.etag"]);
+            let cleaned = strip_for_graph_create(actions);
             if let Some(map) = body.as_object_mut() {
                 map.insert("scheduledActionsForRule".into(), cleaned);
             }
@@ -298,7 +347,7 @@ fn gpo_definition_value_body(row: &Value) -> Option<Value> {
     Some(payload)
 }
 
-async fn copy_gpo_definition_values(
+pub(crate) async fn copy_gpo_definition_values(
     access_token: &str,
     configuration_id: &str,
     settings: &[Value],
@@ -441,6 +490,23 @@ pub async fn duplicate_graph_object(
     let path = create_collection(kind)?;
     let body = if kind == "configurationPolicy" {
         catalog_create_body(&detail, &name, description)?
+    } else if kind == "autopilotProfile" {
+        // Prefer the dedicated create path (retry with safe licensing flags on 400).
+        let created = crate::autopilot_profiles::create_autopilot_profile_from_export(
+            access_token,
+            &detail.object,
+            &name,
+            description,
+        )
+        .await?;
+        if copy_assignments {
+            copy_object_assignments(access_token, kind, &created.id, &detail).await?;
+        }
+        return Ok(DuplicatedObject {
+            id: created.id,
+            kind: kind.to_string(),
+            title: created.display_name,
+        });
     } else {
         generic_create_body(&detail, &name, description)
     };
@@ -519,5 +585,59 @@ mod tests {
             body["settings"][0]["settingInstance"]["settingDefinitionId"],
             "def"
         );
+    }
+
+    #[test]
+    fn strip_for_graph_create_drops_nav_property_annotations() {
+        let input = json!({
+            "@odata.type": "#microsoft.graph.windows10CompliancePolicy",
+            "@odata.context": "https://graph.microsoft.com/beta/$metadata#…",
+            "id": "live-id",
+            "displayName": "Defender",
+            "scheduledActionsForRule@odata.context": "https://graph.microsoft.com/beta/$metadata#…/scheduledActionsForRule",
+            "scheduledActionsForRule": [{
+                "@odata.type": "#microsoft.graph.deviceComplianceScheduledActionForRule",
+                "id": "rule-id",
+                "ruleName": "PasswordRequired",
+                "scheduledActionConfigurations@odata.context": "https://graph.microsoft.com/beta/$metadata#…/scheduledActionConfigurations",
+                "scheduledActionConfigurations": [{
+                    "@odata.type": "#microsoft.graph.deviceComplianceActionItem",
+                    "id": "action-id",
+                    "actionType": "block",
+                    "gracePeriodHours": 0
+                }]
+            }],
+            "deviceStatuses": [{ "id": "noise" }]
+        });
+        let cleaned = strip_for_graph_create(&input);
+        assert_eq!(
+            cleaned["@odata.type"],
+            "#microsoft.graph.windows10CompliancePolicy"
+        );
+        assert!(cleaned.get("@odata.context").is_none());
+        assert!(cleaned.get("id").is_none());
+        assert!(cleaned.get("scheduledActionsForRule@odata.context").is_none());
+        assert!(cleaned.get("deviceStatuses").is_none());
+        let rule = &cleaned["scheduledActionsForRule"][0];
+        assert!(rule.get("id").is_none());
+        assert!(rule.get("scheduledActionConfigurations@odata.context").is_none());
+        assert_eq!(rule["ruleName"], "PasswordRequired");
+        assert_eq!(
+            rule["scheduledActionConfigurations"][0]["actionType"],
+            "block"
+        );
+        assert!(rule["scheduledActionConfigurations"][0].get("id").is_none());
+    }
+
+    #[test]
+    fn strip_for_graph_create_keeps_bind_annotations() {
+        let input = json!({
+            "@odata.type": "#microsoft.graph.groupPolicyDefinitionValue",
+            "definition@odata.bind": "https://graph.microsoft.com/beta/deviceManagement/groupPolicyDefinitions/abc",
+            "definition@odata.context": "noise"
+        });
+        let cleaned = strip_for_graph_create(&input);
+        assert!(cleaned.get("definition@odata.bind").is_some());
+        assert!(cleaned.get("definition@odata.context").is_none());
     }
 }

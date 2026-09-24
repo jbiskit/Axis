@@ -201,6 +201,23 @@ pub struct AppProtectionPolicy {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PolicySetSummary {
+    pub id: String,
+    pub display_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_date_time: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_modified_date_time: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WindowsUpdatePolicy {
     pub id: String,
     pub family: String,
@@ -289,6 +306,10 @@ struct GraphNamed {
     /// Present on `deviceEnrollmentLimitConfiguration`.
     #[serde(default)]
     limit: Option<i32>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    error_code: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -464,6 +485,19 @@ fn as_app_protection(row: GraphNamed) -> Option<AppProtectionPolicy> {
         display_name: title(&row),
         description: row.description,
         odata_type: row.odata_type,
+        last_modified_date_time: row.last_modified_date_time,
+        id,
+    })
+}
+
+fn as_policy_set(row: GraphNamed) -> Option<PolicySetSummary> {
+    let id = take_id(&row)?;
+    Some(PolicySetSummary {
+        display_name: title(&row),
+        description: row.description,
+        status: row.status,
+        error_code: row.error_code,
+        created_date_time: row.created_date_time,
         last_modified_date_time: row.last_modified_date_time,
         id,
     })
@@ -718,6 +752,19 @@ pub async fn fetch_app_protection_policies(
 ) -> Result<InventoryList<AppProtectionPolicy>, GraphError> {
     let rows = list_named(access_token, "/deviceAppManagement/managedAppPolicies").await?;
     let mut items: Vec<_> = rows.into_iter().filter_map(as_app_protection).collect();
+    items.sort_by(|a, b| {
+        a.display_name
+            .to_lowercase()
+            .cmp(&b.display_name.to_lowercase())
+    });
+    Ok(InventoryList::from_items(items))
+}
+
+pub async fn fetch_policy_sets(
+    access_token: &str,
+) -> Result<InventoryList<PolicySetSummary>, GraphError> {
+    let rows = list_named(access_token, "/deviceAppManagement/policySets").await?;
+    let mut items: Vec<_> = rows.into_iter().filter_map(as_policy_set).collect();
     items.sort_by(|a, b| {
         a.display_name
             .to_lowercase()

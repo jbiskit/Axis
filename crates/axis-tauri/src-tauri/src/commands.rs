@@ -11,10 +11,12 @@ use axis_sdk::{
     create_autopilot_profile, update_autopilot_profile, CreateAutopilotProfileInput,
     UpdateAutopilotProfileInput,
     drafts_from_graph_assignments, normalize_assignment_drafts_for, fetch_app_protection_policies,
+    fetch_policy_sets,
     fetch_autopilot_devices,
     fetch_applied_policy_settings, fetch_autopilot_profiles, fetch_baseline_export_json,
+    fetch_pack_artifact_text, import_pack_json_document, import_pack_script_text, PackImportResult,
     fetch_baseline_reference_sources, fetch_compliance_policies,
-    fetch_configuration_policies, fetch_device_configurations, fetch_e8_baseline_references,
+    fetch_configuration_policies, fetch_device_configurations,
     fetch_configuration_policy_template, list_configuration_policy_templates,
     fetch_endpoint_security_intents, fetch_enrollment_configurations_filtered, fetch_graph_object_detail,
     fetch_group_policy_configurations, fetch_managed_device_detail, fetch_policy_setting_issues,
@@ -39,6 +41,7 @@ use axis_sdk::{
     rotate_managed_device_laps_password, search_catalog_settings, search_directory_groups,
     sync_managed_device, update_enrollment_platform_restrictions, update_enrollment_limit,
     update_object_metadata, update_script_content, wipe_managed_device, AppProtectionPolicy,
+    PolicySetSummary,
     AppliedPolicySettingsLoad, AssignmentCapabilities, AssignmentDraft, AssignmentFilter, AutopilotDevice, AutopilotProfile,
     BaselineReferenceSourceInput, BaselineReferenceSourceLoad, BitLockerRecoveryKeySummary,
     CatalogCategory, CatalogIndexState, CatalogPolicySummary, CatalogSearchResult,
@@ -48,7 +51,7 @@ use axis_sdk::{
     CreateEnrollmentLimitInput, CreateEnrollmentPlatformRestrictionInput, CreateTenantScriptInput,
     CreatedCatalogPolicy, UpdateCompliancePolicyInput,
     DirectoryAuditEvent, DirectoryGroup, DuplicatedObject,
-    E8BaselineReference, E8BaselineSource, GraphObjectDetail, InventoryList, LapsCredentialInfo,
+    GraphObjectDetail, InventoryList, LapsCredentialInfo,
     MobileAppSummary, PolicySettingIssue, RemediationDeviceStatusReport, SettingConflictDetail,
     SettingsCatalogPlatform, TenantScriptSummary, UpdateEnrollmentLimitInput,
     UpdateEnrollmentPlatformRestrictionsInput,
@@ -84,49 +87,8 @@ pub struct CapabilityStatus {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct E8BaselineReferencesResponse {
-    pub source: E8BaselineSource,
-    pub references: Vec<E8BaselineReference>,
-    pub warnings: Vec<String>,
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct BaselineReferenceSourcesResponse {
     pub sources: Vec<BaselineReferenceSourceLoad>,
-}
-
-#[tauri::command]
-pub async fn fetch_e8_baseline_references_cmd() -> Result<E8BaselineReferencesResponse, String> {
-    match fetch_e8_baseline_references().await {
-        Ok(load) => Ok(E8BaselineReferencesResponse {
-            source: load.source,
-            references: load.references,
-            warnings: load.warnings,
-            error: None,
-        }),
-        Err(error) => Ok(E8BaselineReferencesResponse {
-            source: E8BaselineSource {
-                id: "e8-github".into(),
-                name: "ASD E8".into(),
-                kind: "github".into(),
-                owner: "ASD-Blueprint".into(),
-                repo: "ASD-Blueprint-for-Secure-Cloud".into(),
-                git_ref: "main".into(),
-                path: "static/content/files/intune-config-policies".into(),
-                local_path: String::new(),
-                repository_url: "https://github.com/ASD-Blueprint/ASD-Blueprint-for-Secure-Cloud".into(),
-                directory_url: "https://github.com/ASD-Blueprint/ASD-Blueprint-for-Secure-Cloud/tree/main/static/content/files/intune-config-policies".into(),
-                api_url: "https://api.github.com/repos/ASD-Blueprint/ASD-Blueprint-for-Secure-Cloud/contents/static/content/files/intune-config-policies?ref=main".into(),
-                has_token: false,
-                store_kind: String::new(),
-            },
-            references: Vec::new(),
-            warnings: Vec::new(),
-            error: Some(error.to_string()),
-        }),
-    }
 }
 
 #[tauri::command]
@@ -159,6 +121,110 @@ pub async fn fetch_baseline_export_cmd(
         Err(error) => Ok(BaselineExportResponse {
             document: None,
             error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackArtifactTextResponse {
+    pub text: Option<String>,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn fetch_pack_artifact_text_cmd(
+    download_url: String,
+    token: Option<String>,
+) -> Result<PackArtifactTextResponse, String> {
+    match fetch_pack_artifact_text(&download_url, token.as_deref()).await {
+        Ok(text) => Ok(PackArtifactTextResponse {
+            text: Some(text),
+            error: None,
+        }),
+        Err(error) => Ok(PackArtifactTextResponse {
+            text: None,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackImportResponse {
+    pub result: Option<PackImportResult>,
+    pub error: Option<String>,
+    pub mode: &'static str,
+}
+
+#[tauri::command]
+pub async fn import_pack_json_document_cmd(
+    state: State<'_, AppState>,
+    document: Value,
+    display_name: Option<String>,
+    description: Option<String>,
+) -> Result<PackImportResponse, String> {
+    ensure_write_allowed(&state).await?;
+    let Some(token) = session_token(&state).await? else {
+        return Ok(PackImportResponse {
+            result: None,
+            error: Some("Not signed in.".into()),
+            mode: "live",
+        });
+    };
+    match import_pack_json_document(
+        &token,
+        &document,
+        display_name.as_deref(),
+        description.as_deref(),
+    )
+    .await
+    {
+        Ok(result) => Ok(PackImportResponse {
+            result: Some(result),
+            error: None,
+            mode: "live",
+        }),
+        Err(error) => Ok(PackImportResponse {
+            result: None,
+            error: Some(error.to_string()),
+            mode: "live",
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn import_pack_script_text_cmd(
+    state: State<'_, AppState>,
+    text: String,
+    display_name: Option<String>,
+    description: Option<String>,
+) -> Result<PackImportResponse, String> {
+    ensure_write_allowed(&state).await?;
+    let Some(token) = session_token(&state).await? else {
+        return Ok(PackImportResponse {
+            result: None,
+            error: Some("Not signed in.".into()),
+            mode: "live",
+        });
+    };
+    match import_pack_script_text(
+        &token,
+        &text,
+        display_name.as_deref(),
+        description.as_deref(),
+    )
+    .await
+    {
+        Ok(result) => Ok(PackImportResponse {
+            result: Some(result),
+            error: None,
+            mode: "live",
+        }),
+        Err(error) => Ok(PackImportResponse {
+            result: None,
+            error: Some(error.to_string()),
+            mode: "live",
         }),
     }
 }
@@ -1218,6 +1284,14 @@ pub async fn fetch_app_protection_policies_cmd(
 ) -> Result<InventoryResponse<AppProtectionPolicy>, String> {
     let token = session_token(&state).await?.unwrap_or_default();
     with_inventory(&state, fetch_app_protection_policies(&token)).await
+}
+
+#[tauri::command]
+pub async fn fetch_policy_sets_cmd(
+    state: State<'_, AppState>,
+) -> Result<InventoryResponse<PolicySetSummary>, String> {
+    let token = session_token(&state).await?.unwrap_or_default();
+    with_inventory(&state, fetch_policy_sets(&token)).await
 }
 
 #[tauri::command]
