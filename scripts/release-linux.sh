@@ -190,15 +190,23 @@ printf 'Bumping Axis %s -> %s (Linux release build)\n' "$current_version" "$vers
 
 node - "$version" <<'NODE'
 const fs = require("fs");
-const version = process.argv[2];
+const version = process.argv[2].replace(/\r/g, "");
+
+function readText(path) {
+  return fs.readFileSync(path, "utf8").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+}
+
+function writeText(path, text) {
+  fs.writeFileSync(path, text.replace(/\r\n/g, "\n").replace(/\r/g, "\n"));
+}
 
 function replaceOne(path, pattern, replacement) {
-  const current = fs.readFileSync(path, "utf8");
+  const current = readText(path);
   const matches = current.match(new RegExp(pattern.source, pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`));
   if (!matches || matches.length !== 1) {
     throw new Error(`Expected one version field in ${path}; found ${matches?.length ?? 0}`);
   }
-  fs.writeFileSync(path, current.replace(pattern, replacement));
+  writeText(path, current.replace(pattern, replacement));
 }
 
 replaceOne(
@@ -216,10 +224,10 @@ for (const path of [
   "crates/axis-tauri/ui/package.json",
   "crates/axis-tauri/ui/package-lock.json",
 ]) {
-  const document = JSON.parse(fs.readFileSync(path, "utf8"));
+  const document = JSON.parse(readText(path));
   document.version = version;
   if (document.packages?.[""]) document.packages[""].version = version;
-  fs.writeFileSync(path, `${JSON.stringify(document, null, 2)}\n`);
+  writeText(path, `${JSON.stringify(document, null, 2)}\n`);
 }
 NODE
 
