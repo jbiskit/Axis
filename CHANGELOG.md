@@ -4,10 +4,6 @@ Notable user-facing changes to Axis are recorded here.
 
 ## [Unreleased]
 
-Add release notes here before preparing the next version.
-
-## [0.1.6] - 2026-09-16
-
 ### Added
 
 - **Enrollment** navigation and Windows enrolment work: platform restrictions and device limits (create, edit, assignments), plus Autopilot **Devices** (search/filters, bulk group tag, delete, Sync with 10-minute cooldown) and **Deployment profiles** (structured Overview, create/edit with locked join/mode/device type, Language (Region) search).
