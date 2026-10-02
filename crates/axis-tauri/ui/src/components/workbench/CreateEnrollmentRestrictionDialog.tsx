@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { createEnrollmentPlatformRestriction } from "../../lib/tauri";
+import { BooleanToggle } from "./BooleanToggle";
 import type { CatalogPolicySummary } from "../../types/inventory";
 
 type PlatformType = "windows" | "ios" | "android" | "androidForWork" | "mac";
@@ -156,12 +157,11 @@ export function CreateEnrollmentRestrictionDialog({
           </label>
           <div className="create-script-options">
             <label className="app-update-auto">
-              <input
-                type="checkbox"
+              <BooleanToggle
                 checked={platformBlocked}
                 disabled={busy}
-                onChange={(event) => {
-                  const blocked = event.target.checked;
+                ariaLabel="Block MDM enrollment"
+                onChange={(blocked) => {
                   setPlatformBlocked(blocked);
                   if (blocked) setPersonalBlocked(false);
                 }}
@@ -169,11 +169,11 @@ export function CreateEnrollmentRestrictionDialog({
               Block MDM enrollment
             </label>
             <label className="app-update-auto">
-              <input
-                type="checkbox"
+              <BooleanToggle
                 checked={personalBlocked}
                 disabled={busy || platformBlocked}
-                onChange={(event) => setPersonalBlocked(event.target.checked)}
+                ariaLabel="Block personally owned devices"
+                onChange={setPersonalBlocked}
               />
               Block personally owned devices
             </label>

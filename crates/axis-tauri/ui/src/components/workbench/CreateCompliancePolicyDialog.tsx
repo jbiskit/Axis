@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { createCompliancePolicy } from "../../lib/tauri";
+import { BooleanToggle } from "./BooleanToggle";
 import type { CatalogPolicySummary } from "../../types/inventory";
 
 export type ComplianceCreatePlatform =
@@ -258,9 +259,10 @@ export function CreateCompliancePolicyDialog({
             <div className="create-compliance-checks">
               {settingRows.map((row) => (
                 <label key={row.key} className="app-update-auto">
-                  <input
-                    type="checkbox"
+                  <BooleanToggle
                     checked={Boolean(settings[row.key])}
+                    disabled={busy}
+                    ariaLabel={row.label}
                     onChange={() => toggleSetting(row.key)}
                   />
                   {row.label}

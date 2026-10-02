@@ -7,6 +7,7 @@ import {
   AUTOPILOT_USER_TYPE_OPTIONS,
 } from "../../lib/autopilotProfile";
 import { AutopilotLocaleField } from "./AutopilotLocaleField";
+import { BooleanToggle } from "./BooleanToggle";
 
 function Field({
   label,
@@ -46,12 +47,7 @@ function Toggle({
       className="device-field"
       style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexDirection: "row" }}
     >
-      <input
-        type="checkbox"
-        checked={checked}
-        disabled={disabled}
-        onChange={(event) => onChange(event.target.checked)}
-      />
+      <BooleanToggle checked={checked} disabled={disabled} ariaLabel={label} onChange={onChange} />
       <span>{label}</span>
     </label>
   );

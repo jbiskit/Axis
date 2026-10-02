@@ -124,7 +124,7 @@ export function BulkAssignBar({
   editLabel = "Update assignments",
 }: {
   count: number;
-  onEdit: () => void;
+  onEdit?: () => void;
   onClear: () => void;
   extra?: ReactNode;
   editDisabled?: boolean;
@@ -142,6 +142,7 @@ export function BulkAssignBar({
       </p>
       <div className="device-actions">
         {extra}
+        {onEdit ? (
         <button
           type="button"
           className="axis-btn axis-btn-primary"
@@ -151,6 +152,7 @@ export function BulkAssignBar({
         >
           {editLabel}
         </button>
+        ) : null}
         <button type="button" className="axis-btn" onClick={onClear}>
           Clear selection
         </button>

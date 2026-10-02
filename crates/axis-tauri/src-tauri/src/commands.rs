@@ -5,14 +5,17 @@ use axis_sdk::{
     create_enrollment_platform_restriction,
     create_enrollment_limit,
     create_compliance_policy, create_policy_with_settings, create_policy_with_template,
-    create_tenant_script, delete_graph_object, delete_managed_device, fetch_compliance_policy_status_with_options, fetch_compliance_property_docs, update_compliance_policy,
+    create_tenant_script, delete_graph_object, delete_managed_device, fetch_compliance_policy_status_with_options, fetch_compliance_property_docs, mobile_app_delete_links, mobile_app_relationships, update_compliance_policy,
     duplicate_graph_object, update_autopilot_device_properties, fetch_windows_autopilot_settings,
     sync_windows_autopilot_devices, WindowsAutopilotSettings,
     create_autopilot_profile, update_autopilot_profile, CreateAutopilotProfileInput,
-    UpdateAutopilotProfileInput,
+    UpdateAutopilotProfileInput, update_win32_app, UpdateWin32AppInput,
+    create_winget_app, fetch_store_catalog_manifest, search_store_catalog, update_winget_app,
+    CreateWinGetAppInput, UpdateWinGetAppInput,
+    StoreCatalogHit, StoreCatalogManifest,
     drafts_from_graph_assignments, normalize_assignment_drafts_for, fetch_app_protection_policies,
     fetch_policy_sets,
-    fetch_autopilot_devices,
+    fetch_autopilot_devices, fetch_autopilot_profile_assigned_devices,
     fetch_applied_policy_settings, fetch_autopilot_profiles, fetch_baseline_export_json,
     fetch_pack_artifact_text, import_pack_json_document, import_pack_script_text, PackImportResult,
     fetch_baseline_reference_sources, fetch_compliance_policies,
@@ -25,10 +28,19 @@ use axis_sdk::{
     dest_dir_from_save_as, export_selected_graph_objects, export_tenant_pack, PackExportObject,
     PackExportOptions, PackExportProgress, PackExportResult, SelectedExportResult,
     create_empty_kit, create_local_pack, open_pack_workspace, open_pack_workspace_from_source,
+    attach_catalog_icon, attach_catalog_intunewin, catalog_dependency_chain, copy_catalog_app_version,
+    create_catalog_app,
+    download_public_icon, fetch_catalog_icon, list_catalog_apps, read_local_icon,
+    find_catalog_upload_matches, link_win32_app_dependency, read_catalog_app_config,
+    unlink_win32_app_dependency,
+    save_catalog_app_config, upload_catalog_win32, CatalogAppDocument, Win32AppMatch,
+    CatalogAppSummary, CatalogDependencyChain, CatalogIntuneWinFile, CopyCatalogAppInput,
+    CreateCatalogAppInput,
+    SaveCatalogAppInput, Win32UploadResult, CatalogAppIcon,
     write_pack_kit, CreateLocalPackInput, PackKitWriteInput, PackWorkspace, PackKitSummary,
     finalize_snapshot, list_snapshots, prepare_snapshot_export, snapshot_label, snapshot_pack_dir,
     ClientContainerStatus, ClientSnapshotSummary, SnapshotManifest, SNAPSHOT_REPORT_DIR,
-    diff_pack_roots, PackDiffReport,
+    assignment_target_ids, diff_pack_roots, label_assignment_ids, PackDiffReport,
     apply_kit_apply, apply_restore, list_restore_candidates, plan_kit_apply, plan_restore,
     KitApplyPlan, KitApplyResult, RestoreApplyResult, RestoreCandidate, RestoreMode, RestorePlan,
     generate_environment_report, EnvironmentReport, EnvironmentReportProgress,
@@ -283,6 +295,295 @@ pub async fn create_local_pack_cmd(input: CreateLocalPackInput) -> Result<PackWo
     create_local_pack(input).map_err(|error| error.to_string())
 }
 
+/// Open container wins. Otherwise use the repo the user picked.
+fn catalog_root(state: &AppState, requested: Option<&str>) -> Result<std::path::PathBuf, String> {
+    if let Some(active) = state.client_container.active_path() {
+        return Ok(active);
+    }
+    let requested = requested
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "Choose a local repo, or open a client container.".to_string())?;
+    let path = std::path::PathBuf::from(requested);
+    if !path.is_dir() {
+        return Err(format!("Local repo not found: {}", path.display()));
+    }
+    Ok(path)
+}
+
+fn path_inside(root: &std::path::Path, candidate: &std::path::Path) -> bool {
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let candidate = candidate
+        .canonicalize()
+        .unwrap_or_else(|_| candidate.to_path_buf());
+    candidate.starts_with(&root)
+}
+
+fn same_open_container(state: &AppState, root: &std::path::Path) -> bool {
+    let Some(active) = state.client_container.active_path() else {
+        return false;
+    };
+    path_inside(&active, root) && path_inside(root, &active)
+}
+
+fn discard_if_container_closed(
+    state: &AppState,
+    root: &std::path::Path,
+    snap_root: &std::path::Path,
+) -> Result<(), String> {
+    if same_open_container(state, root) {
+        return Ok(());
+    }
+    let _ = std::fs::remove_dir_all(snap_root);
+    Err("Client container was closed. Snapshot files were removed from that folder.".into())
+}
+
+#[tauri::command]
+pub async fn list_catalog_apps_cmd(
+    state: State<'_, AppState>,
+    source_root: Option<String>,
+) -> Result<Vec<CatalogAppSummary>, String> {
+    let requested = source_root.as_deref().map(str::trim).filter(|value| !value.is_empty());
+    if state.client_container.active_path().is_none() && requested.is_none() {
+        return Ok(Vec::new());
+    }
+    let root = catalog_root(&state, requested)?;
+    list_catalog_apps(&root.to_string_lossy()).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn create_catalog_app_cmd(
+    state: State<'_, AppState>,
+    mut input: CreateCatalogAppInput,
+) -> Result<CatalogAppSummary, String> {
+    let root = catalog_root(&state, Some(input.source_root.as_str()))?;
+    input.source_root = root.to_string_lossy().into_owned();
+    create_catalog_app(input).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn copy_catalog_app_version_cmd(
+    state: State<'_, AppState>,
+    input: CopyCatalogAppInput,
+) -> Result<CatalogAppSummary, String> {
+    let root = catalog_root(&state, input.source_root.as_deref())?;
+    let source = std::path::PathBuf::from(input.source_app_path.trim());
+    if !source.is_dir() || !path_inside(&root, &source) {
+        return Err("That package is not in the selected catalog.".into());
+    }
+    copy_catalog_app_version(input).map_err(|error| error.to_string())
+}
+
+fn require_catalog_package(
+    state: &AppState,
+    source_root: Option<&str>,
+    app_path: &str,
+) -> Result<std::path::PathBuf, String> {
+    let root = catalog_root(state, source_root)?;
+    let app = std::path::PathBuf::from(app_path.trim());
+    if !app.is_dir() || !path_inside(&root, &app) {
+        return Err("That package is not in the selected catalog.".into());
+    }
+    Ok(app)
+}
+
+#[tauri::command]
+pub async fn catalog_dependency_chain_cmd(
+    state: State<'_, AppState>,
+    app_path: String,
+    source_root: Option<String>,
+) -> Result<CatalogDependencyChain, String> {
+    let app = require_catalog_package(&state, source_root.as_deref(), &app_path)?;
+    let root = catalog_root(&state, source_root.as_deref())?;
+    catalog_dependency_chain(&root.to_string_lossy(), &app.to_string_lossy())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn read_catalog_app_config_cmd(
+    state: State<'_, AppState>,
+    app_path: String,
+    source_root: Option<String>,
+) -> Result<CatalogAppDocument, String> {
+    let app = require_catalog_package(&state, source_root.as_deref(), &app_path)?;
+    read_catalog_app_config(&app.to_string_lossy()).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn save_catalog_app_config_cmd(
+    state: State<'_, AppState>,
+    source_root: Option<String>,
+    input: SaveCatalogAppInput,
+) -> Result<CatalogAppDocument, String> {
+    let app = require_catalog_package(&state, source_root.as_deref(), &input.app_path)?;
+    save_catalog_app_config(SaveCatalogAppInput {
+        app_path: app.to_string_lossy().into_owned(),
+        config: input.config,
+    })
+    .map_err(|error| error.to_string())
+}
+
+const INTUNEWIN_UPLOAD_PROGRESS_EVENT: &str = "axis-intunewin-upload-progress";
+
+#[tauri::command]
+pub async fn pick_intunewin_file_cmd() -> Result<Option<String>, String> {
+    let path = tokio::task::spawn_blocking(|| {
+        rfd::FileDialog::new()
+            .set_title("Attach IntuneWin package")
+            .add_filter("IntuneWin", &["intunewin"])
+            .pick_file()
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(path.map(|path| path.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
+pub async fn attach_catalog_intunewin_cmd(
+    state: State<'_, AppState>,
+    app_path: String,
+    source_root: Option<String>,
+    file_path: String,
+) -> Result<CatalogIntuneWinFile, String> {
+    let app = require_catalog_package(&state, source_root.as_deref(), &app_path)?;
+    let package = app.to_string_lossy().into_owned();
+    tokio::task::spawn_blocking(move || attach_catalog_intunewin(&package, &file_path))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn find_catalog_upload_matches_cmd(
+    state: State<'_, AppState>,
+    app_path: String,
+    source_root: Option<String>,
+) -> Result<Vec<Win32AppMatch>, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Err("Not signed in.".into());
+    };
+    let package = require_catalog_package(&state, source_root.as_deref(), &app_path)?;
+    find_catalog_upload_matches(&token, &package.to_string_lossy())
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn link_catalog_dependency_cmd(
+    state: State<'_, AppState>,
+    parent_app_id: String,
+    target_app_id: String,
+    auto_install: bool,
+) -> Result<(), String> {
+    ensure_write_allowed(&state).await?;
+    let Some(token) = session_token(&state).await? else {
+        return Err("Not signed in.".into());
+    };
+    link_win32_app_dependency(&token, &parent_app_id, &target_app_id, auto_install)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn unlink_mobile_app_dependency_cmd(
+    state: State<'_, AppState>,
+    parent_app_id: String,
+    target_app_id: String,
+) -> Result<(), String> {
+    ensure_write_allowed(&state).await?;
+    let Some(token) = session_token(&state).await? else {
+        return Err("Not signed in.".into());
+    };
+    unlink_win32_app_dependency(&token, &parent_app_id, &target_app_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn upload_catalog_intunewin_cmd(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    app_path: String,
+    source_root: Option<String>,
+    existing_app_id: Option<String>,
+    content_only: Option<bool>,
+) -> Result<Win32UploadResult, String> {
+    ensure_write_allowed(&state).await?;
+    let Some(token) = session_token(&state).await? else {
+        return Err("Not signed in.".into());
+    };
+    let package = require_catalog_package(&state, source_root.as_deref(), &app_path)?;
+    let package = package.to_string_lossy().into_owned();
+    upload_catalog_win32(
+        &token,
+        &package,
+        existing_app_id.as_deref(),
+        content_only.unwrap_or(false),
+        |progress| {
+            let _ = app.emit(INTUNEWIN_UPLOAD_PROGRESS_EVENT, &progress);
+        },
+    )
+    .await
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn pick_app_icon_cmd() -> Result<Option<String>, String> {
+    let path = tokio::task::spawn_blocking(|| {
+        rfd::FileDialog::new()
+            .set_title("Choose app icon")
+            .add_filter("PNG or JPEG", &["png", "jpg", "jpeg"])
+            .pick_file()
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(path.map(|path| path.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
+pub async fn read_local_app_icon_cmd(file_path: String) -> Result<CatalogAppIcon, String> {
+    let source = std::path::PathBuf::from(file_path);
+    tokio::task::spawn_blocking(move || read_local_icon(&source))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn fetch_public_app_icon_cmd(url: String) -> Result<CatalogAppIcon, String> {
+    download_public_icon(&url)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn attach_catalog_icon_cmd(
+    state: State<'_, AppState>,
+    app_path: String,
+    source_root: Option<String>,
+    file_path: String,
+) -> Result<CatalogAppIcon, String> {
+    let app = require_catalog_package(&state, source_root.as_deref(), &app_path)?;
+    let source = std::path::PathBuf::from(file_path);
+    tokio::task::spawn_blocking(move || attach_catalog_icon(&app, &source))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn fetch_catalog_icon_cmd(
+    state: State<'_, AppState>,
+    app_path: String,
+    source_root: Option<String>,
+    url: String,
+) -> Result<CatalogAppIcon, String> {
+    let app = require_catalog_package(&state, source_root.as_deref(), &app_path)?;
+    fetch_catalog_icon(&app, &url)
+        .await
+        .map_err(|error| error.to_string())
+}
+
 const KIT_APPLY_PROGRESS_EVENT: &str = "axis-pack-kit-apply-progress";
 
 #[tauri::command]
@@ -521,6 +822,7 @@ pub async fn client_container_export_snapshot_cmd(
             return Err(error.to_string());
         }
     };
+    discard_if_container_closed(&state, &root, &snap_root)?;
 
     let axis_version = app.package_info().version.to_string();
     let claims = decode_access_token_claims(&token);
@@ -576,6 +878,7 @@ pub async fn client_container_export_snapshot_cmd(
         .as_ref()
         .map(|r| format!("{}/{}", SNAPSHOT_REPORT_DIR, r.suggested_markdown_name));
     let report_object_count = report.as_ref().map(|r| r.object_count);
+    discard_if_container_closed(&state, &root, &snap_root)?;
 
     let snapshot = finalize_snapshot(
         &root,
@@ -694,14 +997,32 @@ pub async fn client_container_diff_cmd(
             }
         };
 
-    let report = diff_pack_roots(&left_pack, &right_pack, &left_label, &right_label);
+    let mut report = diff_pack_roots(&left_pack, &right_pack, &left_label, &right_label)
+        .map_err(|error| error.to_string())?;
+    if let Some(token) = session_token(&state).await? {
+        let ids = assignment_target_ids(&report);
+        if !ids.is_empty() {
+            let mut names = std::collections::HashMap::new();
+            if let Ok(groups) = resolve_directory_groups(&token, &ids).await {
+                for group in groups {
+                    names.insert(group.id, group.display_name);
+                }
+            }
+            if let Ok(filters) = list_assignment_filters(&token).await {
+                for filter in filters {
+                    names.entry(filter.id).or_insert(filter.display_name);
+                }
+            }
+            label_assignment_ids(&mut report, &names);
+        }
+    }
     if let Some(path) = left_cleanup {
         let _ = std::fs::remove_dir_all(path);
     }
     if let Some(path) = right_cleanup {
         let _ = std::fs::remove_dir_all(path);
     }
-    report.map_err(|error| error.to_string())
+    Ok(report)
 }
 
 const RESTORE_PROGRESS_EVENT: &str = "axis-client-restore-progress";
@@ -756,6 +1077,7 @@ pub async fn client_container_restore_apply_cmd(
     snapshot_id: String,
     mode: String,
     keys: Vec<String>,
+    restore_assignments: Option<bool>,
 ) -> Result<RestoreApplyResult, String> {
     let Some(token) = session_token(&state).await? else {
         return Err("Sign in to restore from a snapshot.".into());
@@ -784,6 +1106,7 @@ pub async fn client_container_restore_apply_cmd(
         snapshot_id.trim(),
         mode,
         &keys,
+        restore_assignments.unwrap_or(false),
         |message| {
             let _ = app.emit(RESTORE_PROGRESS_EVENT, &message);
         },
@@ -1308,6 +1631,19 @@ pub async fn fetch_autopilot_devices_cmd(
 ) -> Result<InventoryResponse<AutopilotDevice>, String> {
     let token = session_token(&state).await?.unwrap_or_default();
     with_inventory(&state, fetch_autopilot_devices(&token)).await
+}
+
+#[tauri::command]
+pub async fn fetch_autopilot_profile_assigned_devices_cmd(
+    state: State<'_, AppState>,
+    profile_id: String,
+) -> Result<InventoryResponse<AutopilotDevice>, String> {
+    let token = session_token(&state).await?.unwrap_or_default();
+    with_inventory(
+        &state,
+        fetch_autopilot_profile_assigned_devices(&token, &profile_id),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -2550,6 +2886,126 @@ pub async fn update_autopilot_profile_cmd(
 }
 
 #[tauri::command]
+pub async fn update_win32_app_cmd(
+    state: State<'_, AppState>,
+    input: UpdateWin32AppInput,
+) -> Result<ActionResponse, String> {
+    ensure_write_allowed(&state).await?;
+    let Some(token) = session_token(&state).await? else {
+        return Ok(ActionResponse {
+            ok: false,
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match update_win32_app(&token, input).await {
+        Ok(()) => Ok(ActionResponse {
+            ok: true,
+            error: None,
+        }),
+        Err(error) => Ok(ActionResponse {
+            ok: false,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoreCatalogSearchResponse {
+    pub hits: Vec<StoreCatalogHit>,
+    pub error: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoreCatalogManifestResponse {
+    pub manifest: Option<StoreCatalogManifest>,
+    pub error: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateWinGetAppResponse {
+    pub app: Option<MobileAppSummary>,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn search_store_catalog_cmd(query: String) -> Result<StoreCatalogSearchResponse, String> {
+    match search_store_catalog(&query).await {
+        Ok(hits) => Ok(StoreCatalogSearchResponse { hits, error: None }),
+        Err(error) => Ok(StoreCatalogSearchResponse {
+            hits: Vec::new(),
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn fetch_store_catalog_manifest_cmd(
+    package_identifier: String,
+) -> Result<StoreCatalogManifestResponse, String> {
+    match fetch_store_catalog_manifest(&package_identifier).await {
+        Ok(manifest) => Ok(StoreCatalogManifestResponse {
+            manifest: Some(manifest),
+            error: None,
+        }),
+        Err(error) => Ok(StoreCatalogManifestResponse {
+            manifest: None,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn create_winget_app_cmd(
+    state: State<'_, AppState>,
+    input: CreateWinGetAppInput,
+) -> Result<CreateWinGetAppResponse, String> {
+    ensure_write_allowed(&state).await?;
+    let Some(token) = session_token(&state).await? else {
+        return Ok(CreateWinGetAppResponse {
+            app: None,
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match create_winget_app(&token, input).await {
+        Ok(app) => Ok(CreateWinGetAppResponse {
+            app: Some(app),
+            error: None,
+        }),
+        Err(error) => Ok(CreateWinGetAppResponse {
+            app: None,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn update_winget_app_cmd(
+    state: State<'_, AppState>,
+    input: UpdateWinGetAppInput,
+) -> Result<ActionResponse, String> {
+    ensure_write_allowed(&state).await?;
+    let Some(token) = session_token(&state).await? else {
+        return Ok(ActionResponse {
+            ok: false,
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match update_winget_app(&token, input).await {
+        Ok(()) => Ok(ActionResponse {
+            ok: true,
+            error: None,
+        }),
+        Err(error) => Ok(ActionResponse {
+            ok: false,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[tauri::command]
 pub async fn update_compliance_policy_cmd(
     state: State<'_, AppState>,
     input: UpdateCompliancePolicyInput,
@@ -2718,6 +3174,32 @@ pub async fn update_object_metadata_cmd(
             error: Some(error.to_string()),
         }),
     }
+}
+
+#[tauri::command]
+pub async fn preview_mobile_app_delete_cmd(
+    state: State<'_, AppState>,
+    ids: Vec<String>,
+) -> Result<Vec<axis_sdk::MobileAppDeleteLink>, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Err("Not signed in.".into());
+    };
+    mobile_app_delete_links(&token, &ids)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn list_mobile_app_relationships_cmd(
+    state: State<'_, AppState>,
+    ids: Vec<String>,
+) -> Result<Vec<axis_sdk::MobileAppDeleteLink>, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Err("Not signed in.".into());
+    };
+    mobile_app_relationships(&token, &ids)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

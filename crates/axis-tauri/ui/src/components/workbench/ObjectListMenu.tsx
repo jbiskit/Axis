@@ -18,6 +18,8 @@ import {
   assignObjectAssignments,
   deleteGraphObject,
   duplicateGraphObject,
+  previewMobileAppDelete,
+  type MobileAppDeleteLink,
   exportSelectedObjects,
   fetchGraphObjectDetail,
   updateObjectMetadata,
@@ -401,6 +403,93 @@ function ObjectActionPane({
   );
 }
 
+function AppDeleteImpact({
+  targets,
+  onReady,
+}: {
+  targets: ObjectListTarget[];
+  onReady: (ready: boolean) => void;
+}) {
+  const appIds = targets.filter((target) => target.kind === "mobileApp").map((target) => target.id);
+  const appKey = appIds.join("\n");
+  const [links, setLinks] = useState<MobileAppDeleteLink[] | null>(null);
+  const [checkError, setCheckError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (appIds.length === 0) {
+      setLinks([]);
+      setCheckError(null);
+      onReady(true);
+      return;
+    }
+    let cancelled = false;
+    setLinks(null);
+    setCheckError(null);
+    onReady(false);
+    void previewMobileAppDelete(appIds)
+      .then((rows) => {
+        if (cancelled) return;
+        setLinks(rows);
+        onReady(true);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setLinks([]);
+        setCheckError(err instanceof Error ? err.message : String(err));
+        onReady(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [appKey, onReady]);
+
+  if (appIds.length === 0) return null;
+  if (links === null) return <p className="muted">Checking dependency and supersedence links…</p>;
+  if (checkError) {
+    return <p className="muted">Could not check dependency links. {checkError}</p>;
+  }
+  if (links.length === 0) return null;
+  const selected = new Set(targets.map((target) => target.id.toLowerCase()));
+  const names = new Map(targets.map((target) => [target.id.toLowerCase(), target.title]));
+  return (
+    <div className="axis-alert axis-alert-warning app-delete-impact">
+      <p>Confirming delete removes the link.</p>
+      <ul>
+        {links.map((link) => (
+          <li key={`${link.sourceId}|${link.targetId}|${link.relationship}|${link.relationshipType}`}>
+            {deleteImpactSentence(link, selected, names)}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function deleteImpactSentence(
+  link: MobileAppDeleteLink,
+  selected: Set<string>,
+  names: Map<string, string>,
+): string {
+  const parent = names.get(link.sourceId.toLowerCase()) || link.sourceName;
+  const child = names.get(link.targetId.toLowerCase()) || link.targetName;
+  const parentSelected = selected.has(link.sourceId.toLowerCase());
+  const childSelected = selected.has(link.targetId.toLowerCase());
+  const linkName = link.relationship === "supersedence" ? "supersedence link" : "dependency link";
+  const lead =
+    link.relationship === "supersedence"
+      ? link.relationshipType === "replace"
+        ? `${parent} supersedes and replaces ${child}.`
+        : `${parent} supersedes ${child}.`
+      : link.relationshipType === "autoInstall"
+        ? `${child} is a dependency for ${parent}. Intune installs ${child} automatically before ${parent}.`
+        : `${child} is a dependency for ${parent}. ${parent} requires ${child} to be installed already.`;
+  if (parentSelected && childSelected) {
+    return `${lead} Both apps are selected, so both are deleted and this ${linkName} is removed.`;
+  }
+  const stays = parentSelected ? child : parent;
+  return `${lead} Deleting this application will remove the ${linkName}. ${stays} stays in Intune.`;
+}
+
 function DeleteObjectDialog({
   target,
   onClose,
@@ -416,6 +505,7 @@ function DeleteObjectDialog({
 }) {
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [linksReady, setLinksReady] = useState(target.kind !== "mobileApp");
 
   async function confirmDelete() {
     setDeleting(true);
@@ -462,6 +552,7 @@ function DeleteObjectDialog({
         <p>
           This permanently deletes the object from Microsoft Intune. This action cannot be undone.
         </p>
+        <AppDeleteImpact targets={[target]} onReady={setLinksReady} />
         <div className="object-action-footer">
           <span />
           <div className="device-actions">
@@ -471,7 +562,7 @@ function DeleteObjectDialog({
             <button
               type="button"
               className="axis-btn axis-btn-danger"
-              disabled={deleting}
+              disabled={deleting || !linksReady}
               onClick={() => void confirmDelete()}
             >
               {deleting ? "Deleting…" : "Delete"}
@@ -577,6 +668,7 @@ export function BulkDeleteAction({
   const [deleting, setDeleting] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [linksReady, setLinksReady] = useState(true);
 
   async function confirmDelete() {
     setDeleting(true);
@@ -619,6 +711,7 @@ export function BulkDeleteAction({
         onClick={() => {
           setError(null);
           setProgress(0);
+          setLinksReady(deletableTargets.every((target) => target.kind !== "mobileApp"));
           setOpen(true);
         }}
       >
@@ -653,6 +746,7 @@ export function BulkDeleteAction({
               These objects will be permanently deleted from Microsoft Intune. This action cannot
               be undone.
             </p>
+            <AppDeleteImpact targets={deletableTargets} onReady={setLinksReady} />
             {deleting ? (
               <p className="muted">
                 Deleting {progress} of {deletableTargets.length}…
@@ -672,7 +766,7 @@ export function BulkDeleteAction({
                 <button
                   type="button"
                   className="axis-btn axis-btn-danger"
-                  disabled={deleting}
+                  disabled={deleting || !linksReady}
                   onClick={() => void confirmDelete()}
                 >
                   {deleting ? "Deleting…" : `Delete ${deletableTargets.length}`}

@@ -6,6 +6,7 @@ import { INTUNE_NAV, matchingNavItems } from "../lib/nav";
 import { navigate, type AppRoute } from "../lib/route";
 import { SHELL_BANNER_DISMISS_KEYS } from "../lib/readOnly";
 import { AppUpdateControls } from "./AppUpdateControls";
+import { TaskTracker } from "./TaskTracker";
 import { openExternalUrl } from "../lib/tauri";
 
 const SNOOZE_DAY_OPTIONS = [7, 14, 30] as const;
@@ -564,6 +565,7 @@ export function AppShell({
       <div className="shell-workspace">
         <header className="shell-titlebar">
           <h1>{current?.label ?? "Overview"}</h1>
+          <TaskTracker />
         </header>
         {mode === "read" && readOnlyScopeExceedsRequest ? (
           <ScopeBanner

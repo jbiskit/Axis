@@ -247,6 +247,12 @@ export async function fetchAutopilotDevices(): Promise<InventoryResponse<Autopil
   return invoke("fetch_autopilot_devices_cmd");
 }
 
+export async function fetchAutopilotProfileAssignedDevices(
+  profileId: string,
+): Promise<InventoryResponse<AutopilotDevice>> {
+  return invoke("fetch_autopilot_profile_assigned_devices_cmd", { profileId });
+}
+
 export async function fetchAutopilotProfiles(): Promise<InventoryResponse<AutopilotProfile>> {
   return invoke("fetch_autopilot_profiles_cmd");
 }
@@ -311,6 +317,233 @@ export async function createLocalPack(
   input: import("../types/packs").CreateLocalPackInput,
 ): Promise<import("../types/packs").PackWorkspace> {
   return invoke("create_local_pack_cmd", { input });
+}
+
+export type CatalogAppSummary = {
+  id: string;
+  vendor: string;
+  name: string;
+  version: string;
+  localPath: string;
+  relativePath: string;
+  hasConfig: boolean;
+  hasIntuneWin: boolean;
+  missingRequired?: string[];
+  description?: string;
+};
+
+export type CatalogDependencyNode = {
+  vendor: string;
+  name: string;
+  version: string;
+  relativePath: string;
+  localPath: string;
+  requiredBy: string;
+  requiredByPath: string;
+  depth: number;
+  hasIntuneWin: boolean;
+  inIntune: boolean;
+  missing: boolean;
+  intuneAppId?: string | null;
+};
+
+export async function linkCatalogDependency(input: {
+  parentAppId: string;
+  targetAppId: string;
+  autoInstall: boolean;
+}): Promise<void> {
+  return invoke("link_catalog_dependency_cmd", {
+    parentAppId: input.parentAppId,
+    targetAppId: input.targetAppId,
+    autoInstall: input.autoInstall,
+  });
+}
+
+export async function unlinkMobileAppDependency(input: {
+  parentAppId: string;
+  targetAppId: string;
+}): Promise<void> {
+  return invoke("unlink_mobile_app_dependency_cmd", {
+    parentAppId: input.parentAppId,
+    targetAppId: input.targetAppId,
+  });
+}
+
+export type CatalogDependencyChain = {
+  nodes: CatalogDependencyNode[];
+  cycle?: string | null;
+};
+
+export async function catalogDependencyChain(input: {
+  appPath: string;
+  sourceRoot?: string | null;
+}): Promise<CatalogDependencyChain> {
+  return invoke("catalog_dependency_chain_cmd", {
+    appPath: input.appPath,
+    sourceRoot: input.sourceRoot?.trim() || null,
+  });
+}
+
+export async function listCatalogApps(sourceRoot?: string | null): Promise<CatalogAppSummary[]> {
+  return invoke("list_catalog_apps_cmd", { sourceRoot: sourceRoot?.trim() || null });
+}
+
+export async function createCatalogApp(input: {
+  sourceRoot: string;
+  vendor: string;
+  name: string;
+  version: string;
+  description?: string;
+  publisher?: string;
+}): Promise<CatalogAppSummary> {
+  return invoke("create_catalog_app_cmd", { input });
+}
+
+export type CatalogAppDocument = {
+  appPath: string;
+  configPath: string;
+  config: Record<string, unknown>;
+  intuneWinFile?: string;
+  iconPreview?: { type: string; value: string };
+};
+
+export type CatalogAppIcon = {
+  file: string;
+  type: string;
+  value: string;
+  url?: string;
+};
+
+export type CatalogIntuneWinFile = {
+  fileName: string;
+  path: string;
+};
+
+export type Win32UploadProgress = {
+  stage: string;
+  message: string;
+  percent: number;
+};
+
+export type Win32UploadResult = {
+  appId: string;
+  displayName: string;
+  contentVersionId: string;
+  replaced: boolean;
+  warning?: string;
+};
+
+export async function pickIntuneWinFile(): Promise<string | null> {
+  return invoke("pick_intunewin_file_cmd");
+}
+
+export async function attachCatalogIntuneWin(input: {
+  appPath: string;
+  sourceRoot?: string | null;
+  filePath: string;
+}): Promise<CatalogIntuneWinFile> {
+  return invoke("attach_catalog_intunewin_cmd", {
+    appPath: input.appPath,
+    sourceRoot: input.sourceRoot?.trim() || null,
+    filePath: input.filePath,
+  });
+}
+
+export async function pickAppIcon(): Promise<string | null> {
+  return invoke("pick_app_icon_cmd");
+}
+
+export async function readLocalAppIcon(filePath: string): Promise<CatalogAppIcon> {
+  return invoke("read_local_app_icon_cmd", { filePath });
+}
+
+export async function fetchPublicAppIcon(url: string): Promise<CatalogAppIcon> {
+  return invoke("fetch_public_app_icon_cmd", { url });
+}
+
+export async function attachCatalogIcon(input: {
+  appPath: string;
+  sourceRoot?: string | null;
+  filePath: string;
+}): Promise<CatalogAppIcon> {
+  return invoke("attach_catalog_icon_cmd", {
+    appPath: input.appPath,
+    sourceRoot: input.sourceRoot?.trim() || null,
+    filePath: input.filePath,
+  });
+}
+
+export async function fetchCatalogIcon(input: {
+  appPath: string;
+  sourceRoot?: string | null;
+  url: string;
+}): Promise<CatalogAppIcon> {
+  return invoke("fetch_catalog_icon_cmd", {
+    appPath: input.appPath,
+    sourceRoot: input.sourceRoot?.trim() || null,
+    url: input.url,
+  });
+}
+
+export type Win32AppMatch = {
+  id: string;
+  displayName: string;
+  displayVersion: string;
+  publisher: string;
+  linked: boolean;
+};
+
+export async function findCatalogUploadMatches(input: {
+  appPath: string;
+  sourceRoot?: string | null;
+}): Promise<Win32AppMatch[]> {
+  return invoke("find_catalog_upload_matches_cmd", {
+    appPath: input.appPath,
+    sourceRoot: input.sourceRoot?.trim() || null,
+  });
+}
+
+export async function uploadCatalogIntuneWin(input: {
+  appPath: string;
+  sourceRoot?: string | null;
+  existingAppId?: string | null;
+  contentOnly?: boolean;
+}): Promise<Win32UploadResult> {
+  return invoke("upload_catalog_intunewin_cmd", {
+    appPath: input.appPath,
+    sourceRoot: input.sourceRoot?.trim() || null,
+    existingAppId: input.existingAppId?.trim() || null,
+    contentOnly: input.contentOnly === true,
+  });
+}
+
+export async function readCatalogAppConfig(
+  appPath: string,
+  sourceRoot?: string | null,
+): Promise<CatalogAppDocument> {
+  return invoke("read_catalog_app_config_cmd", {
+    appPath,
+    sourceRoot: sourceRoot?.trim() || null,
+  });
+}
+
+export async function saveCatalogAppConfig(input: {
+  appPath: string;
+  sourceRoot?: string | null;
+  config: Record<string, unknown>;
+}): Promise<CatalogAppDocument> {
+  return invoke("save_catalog_app_config_cmd", {
+    sourceRoot: input.sourceRoot?.trim() || null,
+    input: { appPath: input.appPath, config: input.config },
+  });
+}
+
+export async function copyCatalogAppVersion(input: {
+  sourceAppPath: string;
+  newVersion: string;
+  sourceRoot?: string | null;
+}): Promise<CatalogAppSummary> {
+  return invoke("copy_catalog_app_version_cmd", { input });
 }
 
 export async function planPackKitApply(input: {
@@ -422,11 +655,13 @@ export async function clientContainerRestoreApply(input: {
   snapshotId: string;
   mode: import("../types/clientContainer").RestoreMode;
   keys: string[];
+  restoreAssignments?: boolean;
 }): Promise<import("../types/clientContainer").RestoreApplyResult> {
   return invoke("client_container_restore_apply_cmd", {
     snapshotId: input.snapshotId,
     mode: input.mode,
     keys: input.keys,
+    restoreAssignments: input.restoreAssignments === true,
   });
 }
 
@@ -689,6 +924,89 @@ export async function updateAutopilotProfile(
   return invoke<ActionResponse>("update_autopilot_profile_cmd", { input });
 }
 
+export type StoreCatalogHit = {
+  packageIdentifier: string;
+  packageName: string;
+  publisher: string;
+};
+
+export type StoreCatalogManifest = {
+  packageIdentifier: string;
+  packageName: string;
+  publisher: string;
+  description?: string | null;
+  informationUrl?: string | null;
+  privacyInformationUrl?: string | null;
+  runAsAccount: string;
+};
+
+export async function searchStoreCatalog(
+  query: string,
+): Promise<{ hits: StoreCatalogHit[]; error: string | null }> {
+  return invoke("search_store_catalog_cmd", { query });
+}
+
+export async function fetchStoreCatalogManifest(
+  packageIdentifier: string,
+): Promise<{ manifest: StoreCatalogManifest | null; error: string | null }> {
+  return invoke("fetch_store_catalog_manifest_cmd", { packageIdentifier });
+}
+
+export async function createWinGetApp(input: {
+  displayName: string;
+  packageIdentifier: string;
+  description?: string | null;
+  publisher?: string | null;
+  informationUrl?: string | null;
+  privacyInformationUrl?: string | null;
+  developer?: string | null;
+  owner?: string | null;
+  notes?: string | null;
+  runAsAccount?: string | null;
+}): Promise<{ app: MobileAppSummary | null; error: string | null }> {
+  return invoke("create_winget_app_cmd", { input });
+}
+
+export async function updateWinGetApp(input: {
+  id: string;
+  displayName: string;
+  description: string;
+  publisher: string;
+  developer: string;
+  owner: string;
+  notes: string;
+  informationUrl: string;
+  privacyInformationUrl: string;
+  packageIdentifier: string;
+}): Promise<ActionResponse> {
+  return invoke<ActionResponse>("update_winget_app_cmd", { input });
+}
+
+export async function updateWin32App(input: {
+  id: string;
+  displayName: string;
+  description: string;
+  publisher: string;
+  displayVersion: string;
+  notes: string;
+  owner: string;
+  installCommandLine: string;
+  uninstallCommandLine: string;
+  allowedArchitectures: string;
+  minimumSupportedWindowsRelease: string;
+  allowAvailableUninstall: boolean;
+  runAsAccount: string;
+  deviceRestartBehavior: string;
+  maxRunTimeInMinutes: number;
+  minimumFreeDiskSpaceInMB: number | null;
+  minimumMemoryInMB: number | null;
+  minimumNumberOfProcessors: number | null;
+  minimumCpuSpeedInMHz: number | null;
+  detectionRules: unknown[];
+}): Promise<ActionResponse> {
+  return invoke<ActionResponse>("update_win32_app_cmd", { input });
+}
+
 export async function updateCompliancePolicy(input: {
   id: string;
   odataType: string;
@@ -772,6 +1090,23 @@ export async function updateObjectMetadata(input: {
 
 export async function deleteGraphObject(kind: string, id: string): Promise<ActionResponse> {
   return invoke<ActionResponse>("delete_graph_object_cmd", { kind, id });
+}
+
+export type MobileAppDeleteLink = {
+  sourceId: string;
+  sourceName: string;
+  targetId: string;
+  targetName: string;
+  relationship: string;
+  relationshipType: string;
+};
+
+export async function previewMobileAppDelete(ids: string[]): Promise<MobileAppDeleteLink[]> {
+  return invoke<MobileAppDeleteLink[]>("preview_mobile_app_delete_cmd", { ids });
+}
+
+export async function listMobileAppRelationships(ids: string[]): Promise<MobileAppDeleteLink[]> {
+  return invoke<MobileAppDeleteLink[]>("list_mobile_app_relationships_cmd", { ids });
 }
 
 export async function updateAutopilotDeviceGroupTag(

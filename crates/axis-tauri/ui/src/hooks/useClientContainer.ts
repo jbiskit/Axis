@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { APP_CATALOG_ROOT_KEY } from "../lib/baselines/sources";
 import type { ClientContainerStatus } from "../types/clientContainer";
 import {
   clientContainerClear,
@@ -90,16 +91,21 @@ export function useClientContainer(enabled: boolean) {
   }, []);
 
   const clear = useCallback(async () => {
+    const closedRoot = status?.root?.trim() ?? "";
     setBusy(true);
     setError(null);
     try {
       setStatus(await clientContainerClear());
+      const saved = window.localStorage.getItem(APP_CATALOG_ROOT_KEY)?.trim() ?? "";
+      if (closedRoot && saved && sameFolder(saved, closedRoot)) {
+        window.localStorage.removeItem(APP_CATALOG_ROOT_KEY);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [status?.root]);
 
   const snooze = useCallback(async (days: number) => {
     setBusy(true);
@@ -143,4 +149,9 @@ export function useClientContainer(enabled: boolean) {
     snooze,
     exportSnapshot,
   };
+}
+
+function sameFolder(left: string, right: string): boolean {
+  const norm = (value: string) => value.trim().replace(/[\\/]+$/, "").toLowerCase();
+  return norm(left) === norm(right);
 }

@@ -572,6 +572,19 @@ pub async fn fetch_graph_object_detail(
         }
         Err(error) => return Err(error),
     };
+    if kind == "mobileApp" {
+        let icon_path = format!("{}?$select=largeIcon", spec.object_path);
+        if let Ok(icon_doc) = client
+            .fetch_plain::<Value>(access_token, &icon_path, "beta")
+            .await
+        {
+            if let Some(icon) = icon_doc.get("largeIcon").cloned() {
+                if let Some(map) = object.as_object_mut() {
+                    map.insert("largeIcon".into(), icon);
+                }
+            }
+        }
+    }
     let mut warnings = Vec::new();
 
     let mut assignments = take_embedded_assignments(&object);
@@ -608,7 +621,16 @@ pub async fn fetch_graph_object_detail(
     if let Some(items) = take_embedded_items(&mut object) {
         extras.insert("items".into(), items);
     }
+    let winget = object
+        .get("@odata.type")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .contains("wingetapp");
     for (name, path) in spec.extra_paths {
+        if winget && name == "installSummary" {
+            continue;
+        }
         match client
             .fetch_plain::<Value>(access_token, &path, "beta")
             .await
@@ -625,6 +647,36 @@ pub async fn fetch_graph_object_detail(
                 }
                 Err(error) => warnings.push(format!("{name}: {error}")),
             },
+        }
+    }
+    if winget {
+        match fetch_store_install_report(
+            &client,
+            access_token,
+            id,
+            "/deviceManagement/reports/retrieveDeviceAppInstallationStatusReport",
+            DEVICE_INSTALL_SELECT,
+        )
+        .await
+        {
+            Ok(value) => {
+                extras.insert("deviceInstallStatus".into(), value);
+            }
+            Err(error) => warnings.push(format!("Device install status: {error}")),
+        }
+        match fetch_store_install_report(
+            &client,
+            access_token,
+            id,
+            "/deviceManagement/reports/getUserInstallStatusReport",
+            USER_INSTALL_SELECT,
+        )
+        .await
+        {
+            Ok(value) => {
+                extras.insert("userInstallStatus".into(), value);
+            }
+            Err(error) => warnings.push(format!("User install status: {error}")),
         }
     }
 
@@ -672,6 +724,161 @@ pub async fn fetch_graph_object_detail(
         },
         warnings,
     })
+}
+
+const DEVICE_INSTALL_SELECT: &[&str] = &[
+    "AppInstallState",
+    "AppInstallStateDetails",
+    "ApplicationId",
+    "AppVersion",
+    "AssignmentFilterIdsExist",
+    "AssignmentFilterIdsList",
+    "DeviceId",
+    "DeviceName",
+    "ErrorCode",
+    "HexErrorCode",
+    "InstallState",
+    "InstallStateDetail",
+    "LastModifiedDateTime",
+    "Platform",
+    "UserName",
+    "UserId",
+    "UserPrincipalName",
+];
+
+const USER_INSTALL_SELECT: &[&str] = &[
+    "UserName",
+    "UserPrincipalName",
+    "FailedCount",
+    "InstalledCount",
+    "PendingInstallCount",
+    "NotInstalledCount",
+    "NotApplicableCount",
+    "UserId",
+    "ApplicationId",
+];
+
+const STORE_INSTALL_ROW_CAP: i64 = 500;
+
+async fn fetch_store_install_report(
+    client: &GraphClient,
+    access_token: &str,
+    app_id: &str,
+    path: &str,
+    select: &[&str],
+) -> Result<Value, GraphError> {
+    let filter = format!("(ApplicationId eq '{app_id}')");
+    let mut skip = 0i64;
+    let mut rows = Vec::new();
+    let mut total = 0i64;
+    loop {
+        let body = json!({
+            "top": 50,
+            "skip": skip,
+            "select": select,
+            "orderBy": [],
+            "search": "",
+            "filter": filter,
+        });
+        let text = client
+            .post_intune_report_text(access_token, path, &body)
+            .await?;
+        let document = decode_report_document(&text)?;
+        let (page_total, page_rows) = report_rows(&document);
+        total = page_total;
+        let page_len = page_rows.len() as i64;
+        rows.extend(page_rows);
+        if page_len == 0 {
+            break;
+        }
+        skip += page_len;
+        if skip >= total || skip >= STORE_INSTALL_ROW_CAP || page_len < 50 {
+            break;
+        }
+    }
+    Ok(json!({
+        "total": total,
+        "rows": rows,
+    }))
+}
+
+fn decode_report_document(text: &str) -> Result<Value, GraphError> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Ok(json!({ "Schema": [], "Values": [], "TotalRowCount": 0 }));
+    }
+    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        if let Value::String(encoded) = value {
+            return decode_b64_json(&encoded);
+        }
+        if value.is_object() {
+            return Ok(value);
+        }
+    }
+    decode_b64_json(trimmed.trim_matches('"'))
+}
+
+fn decode_b64_json(raw: &str) -> Result<Value, GraphError> {
+    let compact: String = raw.chars().filter(|ch| !ch.is_whitespace()).collect();
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(compact.as_bytes())
+        .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(compact.as_bytes()))
+        .map_err(|_| GraphError::Request {
+            status: 502,
+            code: None,
+            message: "Install status report was not readable.".into(),
+            permission_related: false,
+        })?;
+    Ok(serde_json::from_slice(&bytes)?)
+}
+
+fn report_rows(document: &Value) -> (i64, Vec<Value>) {
+    let columns: Vec<String> = document
+        .get("Schema")
+        .or_else(|| document.get("schema"))
+        .and_then(Value::as_array)
+        .map(|columns| {
+            columns
+                .iter()
+                .filter_map(|column| {
+                    column
+                        .get("Column")
+                        .or_else(|| column.get("column"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let values = document
+        .get("Values")
+        .or_else(|| document.get("values"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let total = document
+        .get("TotalRowCount")
+        .or_else(|| document.get("totalRowCount"))
+        .and_then(Value::as_i64)
+        .unwrap_or(values.len() as i64);
+    let rows = values
+        .into_iter()
+        .map(|row| {
+            if row.is_object() {
+                return row;
+            }
+            let cells = row.as_array().cloned().unwrap_or_default();
+            let mut record = serde_json::Map::new();
+            for (index, key) in columns.iter().enumerate() {
+                record.insert(
+                    key.clone(),
+                    cells.get(index).cloned().unwrap_or(Value::Null),
+                );
+            }
+            Value::Object(record)
+        })
+        .collect();
+    (total, rows)
 }
 
 fn encode_b64(text: &str) -> String {

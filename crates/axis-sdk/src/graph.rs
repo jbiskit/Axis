@@ -199,6 +199,33 @@ impl GraphClient {
         ))
     }
 
+    /// POST with an empty body. Intune `renewUpload` rejects `{}`.
+    pub async fn post_empty(
+        &self,
+        access_token: &str,
+        path: &str,
+        version: &str,
+    ) -> Result<(), GraphError> {
+        let url = format!("{GRAPH_BASE}/{version}{path}");
+        let response = self
+            .http
+            .post(url)
+            .bearer_auth(access_token)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .header(reqwest::header::CONTENT_LENGTH, "0")
+            .body("")
+            .send()
+            .await?;
+        let status = response.status();
+        if status.is_success() {
+            return Ok(());
+        }
+        Err(graph_error_from_response(
+            status,
+            response.json().await.unwrap_or_default(),
+        ))
+    }
+
     pub async fn delete(
         &self,
         access_token: &str,
@@ -272,6 +299,36 @@ impl GraphClient {
                 return serde_json::from_str("{}").map_err(GraphError::from);
             }
             return Ok(serde_json::from_str(&text)?);
+        }
+        Err(graph_error_from_response(
+            status,
+            response.json().await.unwrap_or_default(),
+        ))
+    }
+
+    /// Same POST as `post_intune_report`, returning the raw success body.
+    /// Some app reports return a base64 document rather than a JSON object.
+    pub async fn post_intune_report_text(
+        &self,
+        access_token: &str,
+        path: &str,
+        body: &impl Serialize,
+    ) -> Result<String, GraphError> {
+        let payload = serde_json::to_value(body)?;
+        let url = format!("{GRAPH_BASE}/beta{path}");
+        let response = self
+            .http
+            .post(url)
+            .bearer_auth(access_token)
+            .header("Accept", "*/*")
+            .header("Accept-Language", "en")
+            .header("x-ms-effective-locale", "en.en-us")
+            .json(&payload)
+            .send()
+            .await?;
+        let status = response.status();
+        if status.is_success() {
+            return Ok(response.text().await?);
         }
         Err(graph_error_from_response(
             status,

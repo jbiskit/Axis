@@ -118,7 +118,10 @@ export function appsPlatformNavChildren() {
     label: INTUNE_PLATFORM_LABELS[platform],
     section: "Platform",
     children: appTypeNavForPlatform(platform).map((entry) => ({
-      href: appsInventoryHref({ platform, type: entry.kind }),
+      href:
+        platform === "windows" && entry.kind === "store"
+          ? "/intune/apps/store"
+          : appsInventoryHref({ platform, type: entry.kind }),
       label: entry.label,
       icon: "apps" as const,
     })),

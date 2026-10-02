@@ -516,7 +516,7 @@ fn as_windows_update(row: GraphNamed, family: &str) -> Option<WindowsUpdatePolic
     })
 }
 
-const WIN32_FILTER: &str = "(isof(%27microsoft.graph.win32LobApp%27)%20and%20not(isof(%27microsoft.graph.win32CatalogApp%27)))";
+const WIN32_FILTER: &str = "(isof(%27microsoft.graph.win32LobApp%27)%20and%20not(isof(%27microsoft.graph.win32CatalogApp%27))%20and%20not(isof(%27microsoft.graph.winGetApp%27)))";
 const WINGET_FILTER: &str = "isof(%27microsoft.graph.winGetApp%27)";
 const WUFB_FILTER: &str = "isof(%27microsoft.graph.windowsUpdateForBusinessConfiguration%27)";
 const DRIVER_FILTER: &str = "isof(%27microsoft.graph.windowsDriverUpdateProfile%27)";
@@ -558,6 +558,37 @@ const GRAPH_APP_TYPES: &[GraphAppType] = &[
     GraphAppType { odata_type: "microsoft.graph.androidForWorkApp", platform: "android", kind: "store", label: "Android for Work", exclude_win32_catalog: false },
 ];
 
+fn is_winget_odata(odata_type: Option<&str>) -> bool {
+    odata_type
+        .unwrap_or("")
+        .trim()
+        .trim_start_matches('#')
+        .to_ascii_lowercase()
+        .contains("winget")
+}
+
+/// Drop rows Intune returns for a broader `isof` than the list asked for.
+fn requested_app_matches(
+    item: &MobileAppSummary,
+    platform: Option<&str>,
+    app_kind: Option<&str>,
+) -> bool {
+    if let (Some(wanted), Some(actual)) = (platform, item.platform.as_deref()) {
+        if !actual.eq_ignore_ascii_case(wanted) {
+            return false;
+        }
+    }
+    if let (Some(wanted), Some(actual)) = (app_kind, item.app_kind.as_deref()) {
+        if !actual.eq_ignore_ascii_case(wanted) {
+            return false;
+        }
+    }
+    if app_kind == Some("lob") && is_winget_odata(item.odata_type.as_deref()) {
+        return false;
+    }
+    true
+}
+
 fn classify_odata_type(odata_type: Option<&str>) -> Option<(&'static str, &'static str, &'static str)> {
     let needle = odata_type.unwrap_or("").trim().trim_start_matches('#').to_ascii_lowercase();
     if needle.is_empty() {
@@ -576,7 +607,10 @@ fn mobile_app_filter(platform: Option<&str>, app_kind: Option<&str>) -> Option<S
         .map(|entry| {
             let isof = format!("isof('{}')", entry.odata_type);
             if entry.exclude_win32_catalog {
-                format!("({isof} and not(isof('microsoft.graph.win32CatalogApp')))")
+                // WinGet apps match isof(win32LobApp) in Intune. Keep them on the Store list.
+                format!(
+                    "({isof} and not(isof('microsoft.graph.win32CatalogApp')) and not(isof('microsoft.graph.winGetApp')))"
+                )
             } else {
                 isof
             }
@@ -615,6 +649,7 @@ pub async fn fetch_mobile_apps(
     let mut items: Vec<_> = rows
         .into_iter()
         .filter_map(|row| as_app(row, kind_label))
+        .filter(|item| requested_app_matches(item, platform, app_kind))
         .collect();
     items.sort_by(|a, b| {
         a.display_name
@@ -637,6 +672,8 @@ pub async fn fetch_win32_apps(
     let mut items: Vec<_> = rows
         .into_iter()
         .filter_map(|row| as_app(row, "win32"))
+        .filter(|item| item.app_kind.as_deref() != Some("store"))
+        .filter(|item| !is_winget_odata(item.odata_type.as_deref()))
         .collect();
     items.sort_by(|a, b| {
         a.display_name
@@ -879,6 +916,34 @@ pub async fn fetch_autopilot_devices(
         "/deviceManagement/windowsAutopilotDeviceIdentities",
     )
     .await?;
+    let mut items: Vec<_> = rows.into_iter().filter_map(as_autopilot_device).collect();
+    items.sort_by(|a, b| {
+        a.serial_number
+            .as_deref()
+            .or(a.display_name.as_deref())
+            .unwrap_or(&a.id)
+            .to_lowercase()
+            .cmp(
+                &b.serial_number
+                    .as_deref()
+                    .or(b.display_name.as_deref())
+                    .unwrap_or(&b.id)
+                    .to_lowercase(),
+            )
+    });
+    Ok(InventoryList::from_items(items))
+}
+
+/// Devices the portal shows on a deployment profile (`…/assignedDevices`).
+pub async fn fetch_autopilot_profile_assigned_devices(
+    access_token: &str,
+    profile_id: &str,
+) -> Result<InventoryList<AutopilotDevice>, GraphError> {
+    let enc = urlencoding::encode(profile_id.trim());
+    let path = format!(
+        "/deviceManagement/windowsAutopilotDeploymentProfiles('{enc}')/assignedDevices?$top=50"
+    );
+    let rows = list_named(access_token, &path).await?;
     let mut items: Vec<_> = rows.into_iter().filter_map(as_autopilot_device).collect();
     items.sort_by(|a, b| {
         a.serial_number

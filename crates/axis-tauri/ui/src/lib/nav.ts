@@ -266,22 +266,20 @@ export const INTUNE_NAV: NavItem[] = [
     section: "Manage",
     children: WINDOWS_UPDATE_BLADES,
   },
-  { href: "/intune/packs", label: "Policy Packs", icon: "templates", section: "Manage" },
   {
     href: "/intune/apps",
     label: "Apps",
     icon: "apps",
-    section: "Apps",
+    section: "Manage",
     children: [
       ...appsPlatformNavChildren(),
       { href: "/intune/apps/tenant", label: "All tenant apps", icon: "apps", section: "Inventory" },
-      { href: "/intune/apps/catalog", label: "All catalog apps", icon: "apps", section: "Inventory" },
-      { href: "/intune/apps/uploads", label: "Upload tasks", icon: "apps", section: "Tools" },
       { href: "/intune/apps/setup", label: "Apps setup", icon: "apps-setup", section: "Tools" },
-      { href: "/intune/apps/store", label: "Add Store app", icon: "apps", section: "Tools" },
       { href: "/intune/apps/protection", label: "App protection", icon: "apps", section: "Tools" },
     ],
   },
+  { href: "/intune/packs", label: "Policy Packs", icon: "templates", section: "Library" },
+  { href: "/intune/apps/catalog", label: "Local catalog", icon: "apps", section: "Library" },
 ];
 
 export const POLICY_HUB_FAMILIES = POLICY_FAMILIES.filter((family) => family.listInHub !== false);

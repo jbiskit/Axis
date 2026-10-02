@@ -1,3 +1,5 @@
+import { BooleanToggle } from "./BooleanToggle";
+
 export function ScriptRunSettingsFields({
   runAsUser,
   onRunAsUserChange,
@@ -23,32 +25,32 @@ export function ScriptRunSettingsFields({
     <>
       <label className="inspector-form-row">
         <span>Run this script using the logged-on credentials</span>
-        <input
-          type="checkbox"
+        <BooleanToggle
           checked={runAsUser}
           disabled={disabled}
-          onChange={(event) => onRunAsUserChange(event.target.checked)}
+          ariaLabel="Run this script using the logged-on credentials"
+          onChange={onRunAsUserChange}
         />
       </label>
       {showSignature ? (
         <label className="inspector-form-row">
           <span>Enforce script signature check</span>
-          <input
-            type="checkbox"
+          <BooleanToggle
             checked={enforceSignatureCheck}
             disabled={disabled}
-            onChange={(event) => onEnforceSignatureCheckChange(event.target.checked)}
+            ariaLabel="Enforce script signature check"
+            onChange={onEnforceSignatureCheckChange}
           />
         </label>
       ) : null}
       {show64Bit ? (
         <label className="inspector-form-row">
           <span>Run script in 64-bit PowerShell</span>
-          <input
-            type="checkbox"
+          <BooleanToggle
             checked={runAs64Bit}
             disabled={disabled}
-            onChange={(event) => onRunAs64BitChange(event.target.checked)}
+            ariaLabel="Run script in 64-bit PowerShell"
+            onChange={onRunAs64BitChange}
           />
         </label>
       ) : null}

@@ -4,6 +4,12 @@ export type { TemplateStoreKind };
 
 export const SOURCE_STORAGE_KEY = "axis-baseline-reference-sources-v1";
 
+/** Active Policy Pack / library source, shared with the local application catalog. */
+export const ACTIVE_PACK_SOURCE_KEY = "axis-packs-active-source-id";
+
+/** Explicit folder for `Applications/{Vendor}/{App}/{Version}` when it differs from the active pack. */
+export const APP_CATALOG_ROOT_KEY = "axis-apps-catalog-root";
+
 /** Former built-in ASD E8 id — stripped on load so old localStorage entries disappear. */
 const LEGACY_BUILTIN_E8_SOURCE_ID = "e8-github";
 

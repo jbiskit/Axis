@@ -36,7 +36,7 @@ function yesNo(value: boolean | null | undefined, empty = "—"): string {
 }
 
 /** Graph / Intune Learn wording for known Autopilot enums. */
-function enumLabel(value: string | null | undefined, map: Record<string, string>): string {
+export function enumLabel(value: string | null | undefined, map: Record<string, string>): string {
   if (!value) return "—";
   const key = value.trim();
   return map[key] ?? map[key.toLowerCase()] ?? humanizeSettingToken(key);
@@ -285,7 +285,7 @@ export function autopilotProfileSections(
   return sections.filter((section) => section.rows.length > 0);
 }
 
-const ENROLLMENT_STATE_LABELS: Record<string, string> = {
+export const ENROLLMENT_STATE_LABELS: Record<string, string> = {
   notContacted: "Not contacted",
   pendingReset: "Pending reset",
   resetFailed: "Reset failed",
@@ -296,7 +296,7 @@ const ENROLLMENT_STATE_LABELS: Record<string, string> = {
   unknown: "Unknown",
 };
 
-const PROFILE_ASSIGNMENT_LABELS: Record<string, string> = {
+export const PROFILE_ASSIGNMENT_LABELS: Record<string, string> = {
   unknown: "Unknown",
   availableForAssignment: "Available for assignment",
   pending: "Pending",
