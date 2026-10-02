@@ -179,7 +179,7 @@ function decodeGraphScript(raw: string): string {
 
 function detectionRulesFromGraph(value: unknown): Win32DetectionRule[] {
   if (!Array.isArray(value)) return [];
-  return value.flatMap((item) => {
+  return value.flatMap((item): Win32DetectionRule[] => {
     const rule = asRecord(item);
     if (!rule) return [];
     const odata = text(rule["@odata.type"]).toLowerCase();
