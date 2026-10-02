@@ -6,6 +6,30 @@ Notable user-facing changes to Axis are recorded here.
 
 Add release notes here before preparing the next version.
 
+## [0.1.7] - 2026-10-02
+
+### Added
+
+- **Local catalog** for Win32 packages, arranged as vendor / application / version. Create an app with type-ahead from existing vendors and names, edit the Intune package config, and preview the description as Markdown.
+- Catalog status is a faint wash: amber when only the source is present, green when the package is ready, and red when required Intune fields are missing. Empty controls in that section are marked the same way.
+- Upload a `.intunewin` to a new app, replace content on a match, or overwrite the app. A dependency chain uploads from the end and can be marked so Intune installs each dependency first.
+- **Tasks** in the title bar shows upload progress from any page. A dependency chain is one job, with a percent for the whole chain and for each package.
+- Tenant **Apps** lists by platform and type, with a Win32 editor (identity, install and uninstall, requirements, detection) and Store / WinGet create and edit, including icons.
+- **Dependencies** on a tenant app: add or remove a Win32 dependency, choose whether Intune installs it automatically, and open a graph of the chain. Names include the app version. Deleting a linked app states which dependency or supersedence link will be removed and clears it first.
+- Autopilot deployment profiles list **Assigned devices**, with search, filters, and bulk group tag.
+- Compare & restore can also write the snapshot’s assignments back onto accepted objects.
+
+### Changed
+
+- App settings stay on Overview. Dependencies is a pane with the other app settings, and apps no longer have a separate Settings tab.
+- **Policy Packs** and **Local catalog** live under Library. Windows Store opens the Store app list. Upload progress is the title-bar Tasks control.
+- On/off choices use the pill toggle, including automatic update checks and remediation assignment options. Assignment filters are omitted for objects that do not support them.
+
+### Fixed
+
+- Uploading a chain where A depends on B and B depends on C marks both links. The deeper link is written first, and the reverse copy of a link is not written back.
+- WinGet apps stay on the Store list. They no longer appear in the Win32 tenant list.
+- The delete confirmation names the dependency in the correct direction: the app being deleted is a dependency for the app that requires it.
 ## [0.1.6] - 2026-09-24
 
 ### Added
