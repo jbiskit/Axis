@@ -155,6 +155,9 @@ enum RestorePayload {
         settings: Vec<Value>,
         source_id: Option<String>,
         rel_paths: Vec<String>,
+        /// `None` when the snapshot predates assignment capture or the collection
+        /// could not be read. `Some([])` means the object had no assignments.
+        assignments: Option<Vec<Value>>,
     },
     Script {
         kind: String,
@@ -169,6 +172,7 @@ enum RestorePayload {
         remediation_script_text: Option<String>,
         source_id: Option<String>,
         rel_paths: Vec<String>,
+        assignments: Option<Vec<Value>>,
     },
     /// Pack JSON with `axisExport` + `object` (compliance, GPO, WU, Autopilot, enrolment).
     Named {
@@ -181,6 +185,7 @@ enum RestorePayload {
         /// GPO definition values (and similar) exported at the document root.
         settings: Vec<Value>,
         rel_paths: Vec<String>,
+        assignments: Option<Vec<Value>>,
     },
     /// Endpoint security intent export (`displayName` / `templateId` / `settings` / `intent`).
     EndpointSecurity {
@@ -190,6 +195,7 @@ enum RestorePayload {
         settings: Vec<Value>,
         source_id: Option<String>,
         rel_paths: Vec<String>,
+        assignments: Option<Vec<Value>>,
     },
 }
 
@@ -249,6 +255,31 @@ impl RestorePayload {
             Self::Script { display_name, .. }
             | Self::Named { display_name, .. }
             | Self::EndpointSecurity { display_name, .. } => display_name.as_str(),
+        }
+    }
+
+    fn captured_assignments(&self) -> Option<&[Value]> {
+        match self {
+            Self::Catalog { assignments, .. }
+            | Self::Script { assignments, .. }
+            | Self::Named { assignments, .. }
+            | Self::EndpointSecurity { assignments, .. } => assignments.as_deref(),
+        }
+    }
+
+    fn assignment_graph_kind(&self) -> &str {
+        match self {
+            Self::Catalog { .. } => "configurationPolicy",
+            Self::Script { kind, .. } => kind.as_str(),
+            Self::Named { graph_kind, .. } => graph_kind.as_str(),
+            Self::EndpointSecurity { .. } => "endpointSecurityIntent",
+        }
+    }
+
+    fn assignment_odata_type(&self) -> Option<&str> {
+        match self {
+            Self::Named { object, .. } => object.get("@odata.type").and_then(Value::as_str),
+            _ => None,
         }
     }
 
@@ -410,6 +441,7 @@ pub async fn apply_restore(
     snapshot_id: &str,
     mode: RestoreMode,
     selected_keys: &[String],
+    restore_assignments: bool,
     mut on_progress: impl FnMut(String),
 ) -> Result<RestoreApplyResult, PackRestoreError> {
     let payloads = load_restore_payloads(pack_root)?;
@@ -422,6 +454,7 @@ pub async fn apply_restore(
     let mut updated = 0u32;
     let mut skipped = 0u32;
     let mut failed = 0u32;
+    let mut missing_assignment_records = 0u32;
 
     let targets: Vec<_> = payloads
         .into_iter()
@@ -436,6 +469,14 @@ pub async fn apply_restore(
             match planned.status {
                 RestoreItemStatus::WillAdd => "Adding",
                 RestoreItemStatus::WillUpdate => "Updating",
+                status
+                    if restore_assignments
+                        && assignments_apply_without_content_change(status)
+                        && planned.live_id.is_some()
+                        && payload.captured_assignments().is_some() =>
+                {
+                    "Restoring assignments on"
+                }
                 _ => "Skipping",
             },
             payload.display_name(),
@@ -447,10 +488,21 @@ pub async fn apply_restore(
             RestoreItemStatus::WillAdd => match apply_add(access_token, &payload).await {
                 Ok(live_id) => {
                     added += 1;
+                        let note = assignment_restore_suffix(
+                            restore_captured_assignments(
+                                access_token,
+                                &payload,
+                                &live_id,
+                                restore_assignments,
+                                &mut missing_assignment_records,
+                                &mut warnings,
+                            )
+                            .await,
+                        );
                     items.push(RestorePlanItem {
                         status: RestoreItemStatus::Applied,
                         live_id: Some(live_id),
-                        message: Some("Created".into()),
+                        message: Some(format!("Created{note}")),
                         ..planned
                     });
                 }
@@ -476,9 +528,20 @@ pub async fn apply_restore(
                 match apply_update(access_token, &payload, &live_id).await {
                     Ok(()) => {
                         updated += 1;
+                        let note = assignment_restore_suffix(
+                            restore_captured_assignments(
+                                access_token,
+                                &payload,
+                                &live_id,
+                                restore_assignments,
+                                &mut missing_assignment_records,
+                                &mut warnings,
+                            )
+                            .await,
+                        );
                         items.push(RestorePlanItem {
                             status: RestoreItemStatus::Applied,
-                            message: Some("Updated".into()),
+                            message: Some(format!("Updated{note}")),
                             ..planned
                         });
                     }
@@ -487,6 +550,48 @@ pub async fn apply_restore(
                         items.push(RestorePlanItem {
                             status: RestoreItemStatus::Failed,
                             message: Some(error.to_string()),
+                            ..planned
+                        });
+                    }
+                }
+            }
+            status
+                if restore_assignments
+                    && assignments_apply_without_content_change(status)
+                    && planned.live_id.is_some()
+                    && payload.captured_assignments().is_some() =>
+            {
+                let live_id = planned.live_id.clone().expect("live id");
+                match restore_captured_assignments(
+                    access_token,
+                    &payload,
+                    &live_id,
+                    true,
+                    &mut missing_assignment_records,
+                    &mut warnings,
+                )
+                .await
+                {
+                    AssignmentRestore::Restored(note) => {
+                        updated += 1;
+                        items.push(RestorePlanItem {
+                            status: RestoreItemStatus::Applied,
+                            message: Some(format!("Settings unchanged.{note}")),
+                            ..planned
+                        });
+                    }
+                    AssignmentRestore::Failed(message) => {
+                        failed += 1;
+                        items.push(RestorePlanItem {
+                            status: RestoreItemStatus::Failed,
+                            message: Some(message),
+                            ..planned
+                        });
+                    }
+                    AssignmentRestore::NotRequested | AssignmentRestore::MissingRecord => {
+                        skipped += 1;
+                        items.push(RestorePlanItem {
+                            status: RestoreItemStatus::Skipped,
                             ..planned
                         });
                     }
@@ -508,6 +613,12 @@ pub async fn apply_restore(
         }
     }
 
+    if restore_assignments && missing_assignment_records > 0 {
+        warnings.push(format!(
+            "{missing_assignment_records} object(s) had no assignment record in this snapshot, so their live assignments were left unchanged."
+        ));
+    }
+
     Ok(RestoreApplyResult {
         mode,
         snapshot_id: snapshot_id.to_string(),
@@ -518,6 +629,98 @@ pub async fn apply_restore(
         failed,
         warnings,
     })
+}
+
+enum AssignmentRestore {
+    NotRequested,
+    MissingRecord,
+    Restored(String),
+    Failed(String),
+}
+
+fn assignment_restore_suffix(outcome: AssignmentRestore) -> String {
+    match outcome {
+        AssignmentRestore::Restored(note) => note,
+        AssignmentRestore::Failed(message) => format!(" {message}"),
+        AssignmentRestore::NotRequested | AssignmentRestore::MissingRecord => String::new(),
+    }
+}
+
+/// Settings-only compare treats an assignment-only difference as identical and
+/// would otherwise skip the object. Those statuses can still write assignments.
+fn assignments_apply_without_content_change(status: RestoreItemStatus) -> bool {
+    matches!(
+        status,
+        RestoreItemStatus::Identical
+            | RestoreItemStatus::SkipExists
+            | RestoreItemStatus::SettingsDiffer
+    )
+}
+
+async fn restore_captured_assignments(
+    access_token: &str,
+    payload: &RestorePayload,
+    live_id: &str,
+    restore_assignments: bool,
+    missing_records: &mut u32,
+    warnings: &mut Vec<String>,
+) -> AssignmentRestore {
+    if !restore_assignments {
+        return AssignmentRestore::NotRequested;
+    }
+    let Some(rows) = payload.captured_assignments() else {
+        *missing_records += 1;
+        return AssignmentRestore::MissingRecord;
+    };
+    let drafts = crate::assignments::drafts_from_graph_assignments(rows, false);
+    if !rows.is_empty() && drafts.is_empty() {
+        let message = format!(
+            "{}: assignments were stored but could not be read, so live assignments were left unchanged.",
+            payload.display_name()
+        );
+        warnings.push(message.clone());
+        return AssignmentRestore::Failed(message);
+    }
+    if drafts.len() != rows.len() {
+        warnings.push(format!(
+            "{}: {} assignment row(s) could not be read and were skipped.",
+            payload.display_name(),
+            rows.len() - drafts.len()
+        ));
+    }
+    match crate::assignments::assign_object_assignments(
+        access_token,
+        payload.assignment_graph_kind(),
+        live_id,
+        &drafts,
+        payload.assignment_odata_type(),
+    )
+    .await
+    {
+        Ok(()) => {
+            if drafts.is_empty() {
+                AssignmentRestore::Restored(" Assignments cleared.".into())
+            } else {
+                AssignmentRestore::Restored(format!(" {} assignment(s) restored.", drafts.len()))
+            }
+        }
+        Err(error) => {
+            let message = format!(
+                "{}: assignments were not restored ({error}).",
+                payload.display_name()
+            );
+            warnings.push(message.clone());
+            AssignmentRestore::Failed(message)
+        }
+    }
+}
+
+fn captured_assignments(value: &Value) -> Option<Vec<Value>> {
+    match value.get("assignments") {
+        Some(Value::Array(rows)) => Some(rows.clone()),
+        Some(_) => Some(Vec::new()),
+        None => None,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1682,6 +1885,7 @@ fn catalog_payload_from_value(
         settings,
         source_id,
         rel_paths: vec![rel.to_string()],
+        assignments: captured_assignments(value),
     }))
 }
 
@@ -1793,6 +1997,7 @@ fn endpoint_security_payload_from_value(
         settings,
         source_id,
         rel_paths: vec![rel.to_string()],
+        assignments: captured_assignments(value),
     }))
 }
 
@@ -1846,6 +2051,7 @@ fn named_payload_from_pack_document(
         axis.and_then(|a| a.get("sourceId")).and_then(Value::as_str),
         path,
         rel,
+        captured_assignments(value),
     )))
 }
 
@@ -1885,6 +2091,7 @@ fn named_payload_from_graph_export(
         value.get("id").and_then(Value::as_str),
         path,
         rel,
+        None,
     ))
 }
 
@@ -1896,6 +2103,7 @@ fn named_payload_parts(
     source_id: Option<&str>,
     path: &Path,
     rel: &str,
+    assignments: Option<Vec<Value>>,
 ) -> RestorePayload {
     let display_name = object
         .get("displayName")
@@ -1926,6 +2134,7 @@ fn named_payload_parts(
         object,
         settings,
         rel_paths: vec![rel.to_string()],
+        assignments,
     }
 }
 
@@ -2023,6 +2232,7 @@ struct ScriptPiece {
     body: String,
     source_id: Option<String>,
     rel_path: String,
+    assignments: Option<Vec<Value>>,
 }
 
 #[derive(Clone, Copy)]
@@ -2135,6 +2345,7 @@ fn parse_script_piece_text(
             body: body.replace("\r\n", "\n").trim().to_string(),
             source_id,
             rel_path: rel.to_string(),
+            assignments: meta.as_ref().and_then(captured_assignments),
         },
     )))
 }
@@ -2155,6 +2366,10 @@ fn merge_script_pieces(pieces: ScriptPieces) -> Option<RestorePayload> {
     let mut remediation = None;
     let mut body = None;
     let mut rel_paths = Vec::new();
+    let assignments = pieces
+        .pieces
+        .iter()
+        .find_map(|piece| piece.assignments.clone());
     for piece in &pieces.pieces {
         rel_paths.push(piece.rel_path.clone());
         match piece.role {
@@ -2181,6 +2396,7 @@ fn merge_script_pieces(pieces: ScriptPieces) -> Option<RestorePayload> {
             remediation_script_text: Some(remediation.unwrap_or_default()),
             source_id,
             rel_paths,
+            assignments: assignments.clone(),
         })
     } else if kind.contains("compliance") {
         let detection = detection.or(body).unwrap_or_default();
@@ -2200,6 +2416,7 @@ fn merge_script_pieces(pieces: ScriptPieces) -> Option<RestorePayload> {
             remediation_script_text: None,
             source_id,
             rel_paths,
+            assignments: assignments.clone(),
         })
     } else {
         let script_text = body.or(detection).unwrap_or_default();
@@ -2219,6 +2436,7 @@ fn merge_script_pieces(pieces: ScriptPieces) -> Option<RestorePayload> {
             remediation_script_text: None,
             source_id,
             rel_paths,
+            assignments,
         })
     }
 }
@@ -2566,6 +2784,61 @@ mod tests {
         assert_eq!(from_doc.kind_label(), "endpointSecurityIntent");
         let from_compliance = restore_payload_from_json_document(&compliance).unwrap();
         assert_eq!(from_compliance.kind_label(), "compliancePolicy");
+    }
+
+    #[test]
+    fn catalog_payload_captures_assignments_only_when_recorded() {
+        let with_rows = json!({
+            "name": "Demo",
+            "platforms": "windows10",
+            "settings": [{ "settingInstance": { "settingDefinitionId": "x" } }],
+            "axisExport": { "kind": "catalogPolicy" },
+            "assignments": [{
+                "target": {
+                    "@odata.type": "#microsoft.graph.groupAssignmentTarget",
+                    "groupId": "g1"
+                }
+            }]
+        });
+        let loaded = catalog_payload_from_value(
+            &with_rows,
+            Path::new("demo.json"),
+            "windows/policies/demo.json",
+        )
+        .unwrap()
+        .expect("catalog");
+        assert_eq!(loaded.captured_assignments().unwrap().len(), 1);
+
+        let legacy = json!({
+            "name": "Demo",
+            "platforms": "windows10",
+            "settings": [{ "settingInstance": { "settingDefinitionId": "x" } }],
+            "axisExport": { "kind": "catalogPolicy" }
+        });
+        let loaded = catalog_payload_from_value(
+            &legacy,
+            Path::new("demo.json"),
+            "windows/policies/demo.json",
+        )
+        .unwrap()
+        .expect("catalog");
+        assert!(loaded.captured_assignments().is_none());
+    }
+
+    #[test]
+    fn unchanged_settings_still_allow_assignment_restore() {
+        assert!(assignments_apply_without_content_change(
+            RestoreItemStatus::Identical
+        ));
+        assert!(assignments_apply_without_content_change(
+            RestoreItemStatus::SkipExists
+        ));
+        assert!(!assignments_apply_without_content_change(
+            RestoreItemStatus::SkipMissing
+        ));
+        assert!(!assignments_apply_without_content_change(
+            RestoreItemStatus::Unsupported
+        ));
     }
 }
 

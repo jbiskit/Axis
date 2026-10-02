@@ -1,3 +1,5 @@
+mod app_catalog;
+mod app_icon;
 mod assignments;
 mod auth;
 mod autopilot_profiles;
@@ -18,6 +20,7 @@ mod enrollment_restrictions;
 mod environment_report;
 mod glance;
 mod graph;
+mod intunewin;
 mod inventory;
 mod object_detail;
 mod object_metadata;
@@ -28,10 +31,23 @@ mod pack_kits;
 mod pack_restore;
 mod policy_health;
 mod script_status;
+mod win32_apps;
 mod session_store;
+mod store_apps;
 mod settings_catalog;
 mod types;
 
+pub use app_icon::{
+    attach_catalog_icon, download_public_icon, fetch_catalog_icon, large_icon_json,
+    preview_catalog_icon, read_local_icon, resolve_catalog_large_icon, CatalogAppIcon,
+    CatalogIconPreview, IconError,
+};
+pub use app_catalog::{
+    attach_catalog_intunewin, copy_catalog_app_version, create_catalog_app, find_intune_win_path,
+    catalog_dependency_chain, list_catalog_apps, read_catalog_app_config, save_catalog_app_config,
+    CatalogAppDocument, CatalogAppSummary, CatalogDependencyChain, CatalogDependencyNode,
+    CatalogIntuneWinFile, CopyCatalogAppInput, CreateCatalogAppInput, SaveCatalogAppInput,
+};
 pub use assignments::{
     apply_filter_names, apply_group_metadata, assign_object_assignments, assignment_capabilities,
     assignment_capabilities_for, classify_group_membership, create_directory_group,
@@ -48,6 +64,18 @@ pub use auth::{
     is_graph_command_line_tools_client, is_write_or_privileged_scope, parse_extra_scopes,
     scopes_for_mode, scopes_for_mode_with_extras, token_scp_has_write_scopes, AuthManager,
     DeviceCodePrompt, DeviceCodeTokens, PollResult, TokenClaims,
+};
+pub use intunewin::{
+    find_catalog_upload_matches, link_win32_app_dependency, unlink_win32_app_dependency,
+    upload_catalog_win32, Win32AppMatch,
+    Win32UploadProgress, Win32UploadResult,
+};
+pub use win32_apps::{
+    update_win32_app, update_win32_app_body, win32_lob_body_from_catalog, UpdateWin32AppInput,
+};
+pub use store_apps::{
+    create_winget_app, fetch_store_catalog_manifest, search_store_catalog, update_winget_app,
+    CreateWinGetAppInput, StoreCatalogHit, StoreCatalogManifest, UpdateWinGetAppInput,
 };
 pub use autopilot_profiles::{
     autopilot_profile_create_body_from_export, create_autopilot_profile,
@@ -122,8 +150,9 @@ pub use object_detail::{
 };
 pub use object_metadata::{
     can_delete_graph_object, can_update_object_metadata, delete_graph_object,
-    fetch_windows_autopilot_settings, sync_windows_autopilot_devices,
-    update_autopilot_device_properties, AUTOPILOT_SYNC_COOLDOWN_SECS,
+    fetch_windows_autopilot_settings, mobile_app_delete_links, mobile_app_relationships,
+    sync_windows_autopilot_devices,
+    update_autopilot_device_properties, MobileAppDeleteLink, AUTOPILOT_SYNC_COOLDOWN_SECS,
     update_object_metadata, UpdateObjectMetadataInput, UpdatedObjectMetadata,
     WindowsAutopilotSettings,
 };
@@ -132,8 +161,8 @@ pub use object_duplicate::{
     strip_setting_definitions, DuplicatedObject,
 };
 pub use pack_diff::{
-    diff_pack_roots, PackDiffChangeKind, PackDiffError, PackDiffReport, PackDiffSummary,
-    PackFieldChange, PackObjectDiff,
+    assignment_target_ids, diff_pack_roots, label_assignment_ids, PackDiffChangeKind,
+    PackDiffError, PackDiffReport, PackDiffSummary, PackFieldChange, PackObjectDiff,
 };
 pub use pack_export::{
     dest_dir_from_save_as, export_selected_graph_objects, export_tenant_pack, graph_fetch_concurrency,

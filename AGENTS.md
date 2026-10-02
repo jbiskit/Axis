@@ -24,3 +24,24 @@ For every Graph object workbench / inspector / list reveal:
 3. **Refresh** — List `onRefresh` and inspector/`requestObjectRefresh` on every Graph object surface.
 
 Local-only surfaces (baselines, template files) are exempt.
+
+## Navigation
+
+Place a surface by what it is, then by platform.
+
+- **Manage** is for objects that exist in the signed-in tenant and are managed there: devices, apps, enrollment, policies, policy sets, compliance, endpoint security, and update profiles.
+- Anything that exists beyond one tenant goes under **Library**. That includes local packs, catalogs, template files, and other generalized libraries.
+- Local Win32 packages live at `Applications/{Vendor}/{App}/{Version}` in the open client container, or in a local repo chosen when no container is open. Closing a container does not keep writing into that folder.
+- A platform-specific entry nests under that platform. Windows Store apps live under Apps → Windows, not in a cross-platform Tools list.
+
+## Lists and controls
+
+New features and suites are built for bulk editing.
+
+- Every policy or settings list has a multi-select control, such as a row checkbox, plus a way to act on the selection. Do not ship a list that can only be edited one row at a time.
+- A true/false choice uses a pill slider (`BooleanToggle`), including two-option choices that are really on/off. Row selection stays a checkbox.
+
+## Development
+
+- Do not add or run unit tests during feature work. They are a waste of time at this stage.
+- Do not compile, typecheck, or otherwise test for build failures unless the user says there is a problem.

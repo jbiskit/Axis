@@ -23,6 +23,7 @@ import {
 } from "../lib/clientCompareCache";
 import { WriteActionButton, useWriteGate } from "../lib/readOnly";
 import type { PackExportProgress } from "../types/inventory";
+import { BooleanToggle } from "./workbench/BooleanToggle";
 import { SelectCheckbox, useCheckedIds } from "./workbench/PolicyBulkAssign";
 
 const LIVE = "live";
@@ -137,6 +138,7 @@ export function ClientContainerDiffView({
   const [comparedAt, setComparedAt] = useState<string | null>(cached?.comparedAt ?? null);
   const [loadingList, setLoadingList] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [restoreAssignments, setRestoreAssignments] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<string | null>(null);
   const [applyResult, setApplyResult] = useState<RestoreApplyResult | null>(
@@ -440,6 +442,7 @@ export function ClientContainerDiffView({
           snapshotId,
           mode,
           keys,
+          restoreAssignments,
         });
         added += result.added;
         updated += result.updated;
@@ -663,6 +666,18 @@ export function ClientContainerDiffView({
                   Accept all right
                 </button>
               ) : null}
+              <label
+                className="client-merge-assign"
+                title="Writes the snapshot's assignments onto each accepted object. Snapshots taken before assignment capture have no record, so those objects keep their live assignments."
+              >
+                <BooleanToggle
+                  checked={restoreAssignments}
+                  disabled={busy || takeCount === 0}
+                  ariaLabel="Also restore assignments"
+                  onChange={setRestoreAssignments}
+                />
+                Also restore assignments
+              </label>
               <WriteActionButton
                 type="button"
                 className="axis-btn axis-btn-primary"
@@ -681,6 +696,13 @@ export function ClientContainerDiffView({
               <span className="axis-pill">{applyResult.skipped} skipped</span>
               <span className="axis-pill axis-pill-danger">{applyResult.failed} failed</span>
             </div>
+          ) : null}
+          {applyResult && applyResult.warnings.length > 0 ? (
+            <ul className="client-merge-warnings">
+              {applyResult.warnings.map((warning, index) => (
+                <li key={`${index}-${warning}`}>{warning}</li>
+              ))}
+            </ul>
           ) : null}
 
           <div className="client-diff-body client-merge-body">
@@ -987,13 +1009,14 @@ function ConflictHunks({
   }
   return (
     <ul className="client-merge-hunks">
-      {row.fieldChanges.map((change) => {
+      {row.fieldChanges.map((change, index) => {
         const value = side === "left" ? change.before : change.after;
         const missing = value == null || value === "";
+        const unassigned = value === "Unassigned";
         return (
           <li
-            key={`${side}:${change.path}:${change.before}:${change.after}`}
-            className={`client-merge-hunk${missing ? " is-missing" : ""}`}
+            key={`${side}:${index}:${change.path}`}
+            className={`client-merge-hunk${missing || unassigned ? " is-missing" : ""}`}
           >
             <span className="client-merge-hunk-path">{change.path}</span>
             <span className="client-merge-hunk-value">

@@ -23,9 +23,12 @@ import {
 import { requestLeave, useInspectorDirty } from "../../lib/inspectorDrafts";
 import { READ_ONLY_WRITE_HINT, useReadOnly } from "../../lib/readOnly";
 import { parseScriptInspectorKind } from "../../lib/scriptKinds";
-import type { AssignmentDraft, GraphObjectDetail } from "../../types/inventory";
+import type { AssignmentDraft, GraphObjectDetail, MobileAppSummary } from "../../types/inventory";
+import type { MobileAppDeleteLink } from "../../lib/tauri";
+import { AppDependencyPane } from "./AppDependencyGraph";
 import { OpenInIntune } from "../intune/OpenInIntune";
 import { ContextMenu, type ContextMenuState } from "../ui/ContextMenu";
+import { AutopilotAssignedDevices } from "./AutopilotAssignedDevices";
 import { ObjectDeleteButton } from "./ObjectListMenu";
 import { ScriptCodeEditor } from "../ui/ScriptCodeEditor";
 import { ScriptRunSettingsFields } from "./ScriptRunSettingsFields";
@@ -50,9 +53,16 @@ import {
 import { EnrollmentRestrictionsEditor } from "./EnrollmentRestrictionsEditor";
 import { EnrollmentLimitEditor } from "./EnrollmentLimitEditor";
 import { AutopilotProfileEditor } from "./AutopilotProfileEditor";
+import { Win32AppEditor } from "./Win32AppEditor";
+import { StoreAppEditor } from "./StoreAppEditor";
+import { TenantAppIcon } from "./TenantAppIcon";
+import { StoreInstallStatus } from "./StoreInstallStatus";
+import { graphLargeIcon } from "../../lib/appIcon";
+import { isWin32LobApp } from "../../lib/win32App";
+import { isWinGetApp } from "../../lib/storeApp";
 import { AutopilotOverviewSections } from "./AutopilotOverviewSections";
 
-type InspectorTab = "overview" | "status" | "assignments" | "payload";
+type InspectorTab = "overview" | "status" | "assignments" | "devices" | "payload";
 
 function text(value: unknown): string | null {
   if (value == null) return null;
@@ -364,6 +374,12 @@ export function GraphObjectInspector({
   incomplete,
   onClose,
   popout = false,
+  tenantApps,
+  appLinks,
+  appLinksReady,
+  appLinksError,
+  onAppLinksChanged,
+  onSelectApp,
 }: {
   kind: string;
   id: string;
@@ -371,6 +387,12 @@ export function GraphObjectInspector({
   incomplete?: string;
   onClose: () => void;
   popout?: boolean;
+  tenantApps?: MobileAppSummary[];
+  appLinks?: MobileAppDeleteLink[];
+  appLinksReady?: boolean;
+  appLinksError?: string | null;
+  onAppLinksChanged?: () => void;
+  onSelectApp?: (id: string) => void;
 }) {
   const readOnly = useReadOnly();
   const cached = readCachedObjectDetail(kind, id);
@@ -547,6 +569,14 @@ export function GraphObjectInspector({
         value: String(policySetItems.length),
       });
     }
+    if (kind === "mobileApp" && isWin32LobApp(asRecord(detail.object))) {
+      const keep = new Set(["Id", "Kind", "Assigned", "File", "Created", "Modified"]);
+      return all.filter((row) => keep.has(row.label));
+    }
+    if (kind === "mobileApp" && isWinGetApp(asRecord(detail.object))) {
+      const keep = new Set(["Id", "Kind", "Assigned", "Package id", "Created", "Modified"]);
+      return all.filter((row) => keep.has(row.label));
+    }
     if (kind !== "autopilotProfile" && kind !== "autopilotDevice") return all;
     // Structured Autopilot sections own join / OOBE / identity fields — keep a slim header.
     const keep = new Set(["Id", "Kind", "Assigned", "Description", "Created", "Modified"]);
@@ -561,8 +591,35 @@ export function GraphObjectInspector({
   const showAutopilotProfileOverview =
     kind === "autopilotProfile" && isAutopilotProfileObject(asRecord(detail?.object));
   const showAutopilotDeviceOverview = kind === "autopilotDevice";
+  const appIcon = kind === "mobileApp" ? graphLargeIcon(asRecord(detail?.object)) : null;
+  const showWin32Editor = kind === "mobileApp" && isWin32LobApp(asRecord(detail?.object));
+  const showStoreEditor = kind === "mobileApp" && isWinGetApp(asRecord(detail?.object));
   const hideEmptySettingsTab =
-    kind === "autopilotProfile" || kind === "autopilotDevice";
+    kind === "autopilotProfile" || kind === "autopilotDevice" || kind === "mobileApp";
+  const dependencyApp: MobileAppSummary | null =
+    kind === "mobileApp" && detail
+      ? {
+          id: detail.id,
+          displayName: detail.title || fallbackTitle || "App",
+          odataType:
+            typeof objectRecord?.["@odata.type"] === "string"
+              ? objectRecord["@odata.type"]
+              : null,
+        }
+      : null;
+  const dependencyNames = new Map((tenantApps ?? []).map((item) => [item.id.toLowerCase(), item.displayName]));
+  const dependencyPane = dependencyApp ? (
+    <AppDependencyPane
+      app={dependencyApp}
+      apps={tenantApps ?? []}
+      links={appLinks ?? []}
+      names={dependencyNames}
+      ready={appLinksReady ?? false}
+      error={appLinksError ?? null}
+      onSelectApp={onSelectApp}
+      onChanged={onAppLinksChanged ?? (() => undefined)}
+    />
+  ) : null;
   const inspectorTabs: Array<[InspectorTab, string]> = [
     ["overview", "Overview"],
     ...(kind === "compliancePolicy" ||
@@ -578,6 +635,9 @@ export function GraphObjectInspector({
           : assignments.length
       })`,
     ],
+    ...(kind === "autopilotProfile"
+      ? ([["devices", "Assigned devices"]] as Array<[InspectorTab, string]>)
+      : []),
     ...(hideEmptySettingsTab
       ? []
       : ([
@@ -804,6 +864,12 @@ export function GraphObjectInspector({
         <>
           {tab === "overview" ? (
             <section className="axis-panel" style={{ padding: "0.85rem" }}>
+              {appIcon && !showWin32Editor && !showStoreEditor ? (
+                <div className="device-field" style={{ marginBottom: "0.85rem" }}>
+                  <span>Icon</span>
+                  <TenantAppIcon mimeType={appIcon.iconType} value={appIcon.iconValue} />
+                </div>
+              ) : null}
               <dl className="meta-grid">
                 {rows.map((row) => (
                   <div key={row.label}>
@@ -830,6 +896,19 @@ export function GraphObjectInspector({
                   object={asRecord(detail.object)}
                 />
               ) : null}
+              {showWin32Editor ? (
+                <Win32AppEditor appId={detail.id} object={asRecord(detail.object)}>
+                  {dependencyPane}
+                </Win32AppEditor>
+              ) : null}
+              {showStoreEditor ? (
+                <StoreAppEditor appId={detail.id} object={asRecord(detail.object)}>
+                  {dependencyPane}
+                </StoreAppEditor>
+              ) : null}
+              {kind === "mobileApp" && !showWin32Editor && !showStoreEditor ? (
+                <div className="win32-panes">{dependencyPane}</div>
+              ) : null}
               {showAutopilotDeviceOverview ? (
                 <AutopilotOverviewSections
                   sections={autopilotDeviceSections(asRecord(detail.object))}
@@ -843,6 +922,9 @@ export function GraphObjectInspector({
           {tab === "status" &&
           (kind === "script:remediation" || kind.startsWith("script:platform-")) ? (
             <ScriptRunStatus kind={kind} scriptId={detail.id} />
+          ) : null}
+          {tab === "devices" && kind === "autopilotProfile" ? (
+            <AutopilotAssignedDevices profileId={detail.id} />
           ) : null}
           {tab === "assignments" ? (
             <section className="axis-panel" style={{ padding: "0.85rem" }}>
@@ -1065,6 +1147,11 @@ export function GraphObjectInspector({
                   object={detail.object}
                   extras={extras}
                   onSaved={() => void reloadDetail()}
+                />
+              ) : extrasRecord?.deviceInstallStatus || extrasRecord?.userInstallStatus ? (
+                <StoreInstallStatus
+                  devices={extrasRecord.deviceInstallStatus}
+                  users={extrasRecord.userInstallStatus}
                 />
               ) : extras ? (
                 <section className="axis-panel" style={{ padding: "0.85rem" }}>

@@ -357,12 +357,27 @@ pub fn assignment_capabilities_for(
         | "compliancePolicy"
         | "deviceConfiguration"
         | "groupPolicyConfiguration"
-        | "windowsUpdate:rings"
+        |         "windowsUpdate:rings"
+        | "windowsUpdate:feature"
+        | "windowsUpdate:quality"
+        | "windowsUpdate:drivers"
+        | "endpointSecurityIntent"
         | "script:platform-powershell"
-        | "script:platform-shell" => AssignmentCapabilities {
+        | "script:platform-shell"
+        | "script:compliance" => AssignmentCapabilities {
             writable: true,
             supports_intent: false,
             supports_filters: true,
+            supports_schedule: false,
+            supports_all_devices: true,
+            supports_all_users: true,
+        },
+        // Intune has no assignment-filter control on deployment profiles.
+        // Sending filter fields on /assign fails the call.
+        "autopilotProfile" => AssignmentCapabilities {
+            writable: true,
+            supports_intent: false,
+            supports_filters: false,
             supports_schedule: false,
             supports_all_devices: true,
             supports_all_users: true,
@@ -429,6 +444,13 @@ pub fn normalize_assignment_drafts_for(
             _ => true,
         }
     });
+    if !caps.supports_filters {
+        for draft in drafts.iter_mut() {
+            draft.filter_id = None;
+            draft.filter_name = None;
+            draft.filter_mode = None;
+        }
+    }
 }
 
 pub fn drafts_from_graph_assignments(rows: &[Value], include_intent: bool) -> Vec<AssignmentDraft> {
@@ -523,7 +545,11 @@ fn draft_from_graph_assignment(row: &Value, include_intent: bool) -> Option<Assi
             run_remediation_script: None,
             run_schedule: None,
         }
-    } else if odata.contains("groupAssignmentTarget") {
+    } else if odata.contains("groupAssignmentTarget")
+        || group_id.as_ref().is_some_and(|id| !id.trim().is_empty())
+    {
+        // Autopilot assignments often come back as the abstract
+        // deviceAndAppManagementAssignmentTarget with a groupId and filter.
         AssignmentDraft {
             target_kind: AssignmentTargetKind::Group,
             group_id,
@@ -771,15 +797,15 @@ pub fn apply_filter_names(drafts: &mut [AssignmentDraft], filters: &[AssignmentF
 pub async fn list_assignment_filters(
     access_token: &str,
 ) -> Result<Vec<AssignmentFilter>, GraphError> {
-    let page = GraphClient::new()
-        .fetch_plain::<GraphCollection<Value>>(
+    let rows = GraphClient::new()
+        .fetch_all_pages::<Value>(
             access_token,
             "/deviceManagement/assignmentFilters?$select=id,displayName,platform,assignmentFilterManagementType,rule&$top=100",
             "beta",
+            500,
         )
         .await?;
-    let mut filters: Vec<AssignmentFilter> = page
-        .value
+    let mut filters: Vec<AssignmentFilter> = rows
         .into_iter()
         .filter_map(|row| {
             let id = row.get("id")?.as_str()?.to_string();
@@ -839,6 +865,13 @@ pub async fn assign_object_assignments(
             permission_related: false,
         });
     }
+    let mut drafts = drafts.to_vec();
+    normalize_assignment_drafts_for(kind, object_odata_type, &mut drafts);
+    // Deployment profiles have no /assign collection replace. Intune posts each
+    // target to the assignments navigation: { "target": { "@odata.type", "groupId" } }.
+    if kind == "autopilotProfile" {
+        return assign_autopilot_profile_assignments(access_token, id, &drafts).await;
+    }
     let spec = assign_spec(kind, id, object_odata_type)?;
     let assignments: Vec<Value> = drafts
         .iter()
@@ -850,11 +883,111 @@ pub async fn assign_object_assignments(
         .await
 }
 
+/// Replace direct assignments on a deployment profile the way Intune does:
+/// delete removed rows, then POST each new target to `/assignments`.
+async fn assign_autopilot_profile_assignments(
+    access_token: &str,
+    profile_id: &str,
+    drafts: &[AssignmentDraft],
+) -> Result<(), GraphError> {
+    let client = GraphClient::new();
+    let enc = urlencoding::encode(profile_id);
+    let collection =
+        format!("/deviceManagement/windowsAutopilotDeploymentProfiles/{enc}/assignments");
+    let existing: Vec<Value> = client
+        .fetch_all_pages(access_token, &collection, "beta", 500)
+        .await?;
+    let desired: Vec<Value> = drafts
+        .iter()
+        .map(|draft| target_from_draft(draft, false))
+        .collect::<Result<_, _>>()?;
+
+    for row in &existing {
+        if autopilot_assignment_from_policy_set(row) {
+            continue;
+        }
+        let Some(current) = row.get("target") else {
+            continue;
+        };
+        if desired
+            .iter()
+            .any(|target| assignment_targets_match(target, current))
+        {
+            continue;
+        }
+        let Some(assignment_id) = row
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        let enc_id = urlencoding::encode(assignment_id);
+        client
+            .delete(access_token, &format!("{collection}/{enc_id}"), "beta")
+            .await?;
+    }
+
+    for target in &desired {
+        let already = existing.iter().any(|row| {
+            !autopilot_assignment_from_policy_set(row)
+                && row
+                    .get("target")
+                    .is_some_and(|current| assignment_targets_match(target, current))
+        });
+        if already {
+            continue;
+        }
+        client
+            .post_no_content(
+                access_token,
+                &collection,
+                "beta",
+                &json!({ "target": target }),
+            )
+            .await?;
+    }
+    Ok(())
+}
+
+fn autopilot_assignment_from_policy_set(row: &Value) -> bool {
+    row.get("source")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .eq_ignore_ascii_case("policySets")
+}
+
+fn assignment_targets_match(desired: &Value, current: &Value) -> bool {
+    let desired_type = desired
+        .get("@odata.type")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let current_type = current
+        .get("@odata.type")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if !odata_type_name(desired_type).eq_ignore_ascii_case(odata_type_name(current_type)) {
+        return false;
+    }
+    let desired_group = desired.get("groupId").and_then(Value::as_str).unwrap_or("");
+    let current_group = current.get("groupId").and_then(Value::as_str).unwrap_or("");
+    desired_group.eq_ignore_ascii_case(current_group)
+}
+
+fn odata_type_name(value: &str) -> &str {
+    value
+        .rsplit('.')
+        .next()
+        .unwrap_or(value)
+        .trim_start_matches('#')
+}
+
 struct AssignSpec {
     path: String,
     collection_name: &'static str,
     assignment_odata: &'static str,
     include_intent: bool,
+    include_filters: bool,
     remediation: bool,
     app_settings_kind: Option<&'static str>,
 }
@@ -871,6 +1004,7 @@ fn assign_spec(
             collection_name: "assignments",
             assignment_odata: "#microsoft.graph.deviceManagementConfigurationPolicyAssignment",
             include_intent: false,
+            include_filters: true,
             remediation: false,
             app_settings_kind: None,
         },
@@ -879,6 +1013,7 @@ fn assign_spec(
             collection_name: "assignments",
             assignment_odata: "#microsoft.graph.deviceCompliancePolicyAssignment",
             include_intent: false,
+            include_filters: true,
             remediation: false,
             app_settings_kind: None,
         },
@@ -887,6 +1022,7 @@ fn assign_spec(
             collection_name: "assignments",
             assignment_odata: "#microsoft.graph.deviceConfigurationAssignment",
             include_intent: false,
+            include_filters: true,
             remediation: false,
             app_settings_kind: None,
         },
@@ -895,6 +1031,7 @@ fn assign_spec(
             collection_name: "assignments",
             assignment_odata: "#microsoft.graph.groupPolicyConfigurationAssignment",
             include_intent: false,
+            include_filters: true,
             remediation: false,
             app_settings_kind: None,
         },
@@ -903,6 +1040,7 @@ fn assign_spec(
             collection_name: "mobileAppAssignments",
             assignment_odata: "#microsoft.graph.mobileAppAssignment",
             include_intent: true,
+            include_filters: true,
             remediation: false,
             app_settings_kind: Some(
                 if object_odata_type
@@ -926,6 +1064,7 @@ fn assign_spec(
             collection_name: "deviceManagementScriptAssignments",
             assignment_odata: "#microsoft.graph.deviceManagementScriptAssignment",
             include_intent: false,
+            include_filters: true,
             remediation: false,
             app_settings_kind: None,
         },
@@ -934,6 +1073,7 @@ fn assign_spec(
             collection_name: "deviceHealthScriptAssignments",
             assignment_odata: "#microsoft.graph.deviceHealthScriptAssignment",
             include_intent: false,
+            include_filters: true,
             remediation: true,
             app_settings_kind: None,
         },
@@ -942,6 +1082,61 @@ fn assign_spec(
             collection_name: "enrollmentConfigurationAssignments",
             assignment_odata: "#microsoft.graph.enrollmentConfigurationAssignment",
             include_intent: false,
+            include_filters: true,
+            remediation: false,
+            app_settings_kind: None,
+        },
+        "autopilotProfile" => AssignSpec {
+            path: format!("/deviceManagement/windowsAutopilotDeploymentProfiles/{enc}/assign"),
+            collection_name: "assignments",
+            assignment_odata: "#microsoft.graph.windowsAutopilotDeploymentProfileAssignment",
+            include_intent: false,
+            include_filters: false,
+            remediation: false,
+            app_settings_kind: None,
+        },
+        "windowsUpdate:feature" => AssignSpec {
+            path: format!("/deviceManagement/windowsFeatureUpdateProfiles/{enc}/assign"),
+            collection_name: "assignments",
+            assignment_odata: "#microsoft.graph.windowsFeatureUpdateProfileAssignment",
+            include_intent: false,
+            include_filters: true,
+            remediation: false,
+            app_settings_kind: None,
+        },
+        "windowsUpdate:quality" => AssignSpec {
+            path: format!("/deviceManagement/windowsQualityUpdateProfiles/{enc}/assign"),
+            collection_name: "assignments",
+            assignment_odata: "#microsoft.graph.windowsQualityUpdateProfileAssignment",
+            include_intent: false,
+            include_filters: true,
+            remediation: false,
+            app_settings_kind: None,
+        },
+        "windowsUpdate:drivers" => AssignSpec {
+            path: format!("/deviceManagement/windowsDriverUpdateProfiles/{enc}/assign"),
+            collection_name: "assignments",
+            assignment_odata: "#microsoft.graph.windowsDriverUpdateProfileAssignment",
+            include_intent: false,
+            include_filters: true,
+            remediation: false,
+            app_settings_kind: None,
+        },
+        "endpointSecurityIntent" => AssignSpec {
+            path: format!("/deviceManagement/intents/{enc}/assign"),
+            collection_name: "assignments",
+            assignment_odata: "#microsoft.graph.deviceManagementIntentAssignment",
+            include_intent: false,
+            include_filters: true,
+            remediation: false,
+            app_settings_kind: None,
+        },
+        "script:compliance" => AssignSpec {
+            path: format!("/deviceManagement/deviceComplianceScripts/{enc}/assign"),
+            collection_name: "deviceComplianceScriptAssignments",
+            assignment_odata: "#microsoft.graph.deviceComplianceScriptAssignment",
+            include_intent: false,
+            include_filters: true,
             remediation: false,
             app_settings_kind: None,
         },
@@ -959,7 +1154,7 @@ fn assign_spec(
 fn build_assignment_body(draft: &AssignmentDraft, spec: &AssignSpec) -> Result<Value, GraphError> {
     let mut body = json!({
         "@odata.type": spec.assignment_odata,
-        "target": target_from_draft(draft)?,
+        "target": target_from_draft(draft, spec.include_filters)?,
     });
     if spec.include_intent {
         let intent = draft.intent.unwrap_or(AssignmentIntent::Available);
@@ -1002,18 +1197,13 @@ fn build_assignment_body(draft: &AssignmentDraft, spec: &AssignSpec) -> Result<V
     Ok(body)
 }
 
-fn target_from_draft(draft: &AssignmentDraft) -> Result<Value, GraphError> {
-    let filter = filter_fields(draft);
-    Ok(match draft.target_kind {
+fn target_from_draft(draft: &AssignmentDraft, include_filters: bool) -> Result<Value, GraphError> {
+    let mut target = match draft.target_kind {
         AssignmentTargetKind::AllUsers => json!({
             "@odata.type": "#microsoft.graph.allLicensedUsersAssignmentTarget",
-            "deviceAndAppManagementAssignmentFilterId": filter.0,
-            "deviceAndAppManagementAssignmentFilterType": filter.1,
         }),
         AssignmentTargetKind::AllDevices => json!({
             "@odata.type": "#microsoft.graph.allDevicesAssignmentTarget",
-            "deviceAndAppManagementAssignmentFilterId": filter.0,
-            "deviceAndAppManagementAssignmentFilterType": filter.1,
         }),
         AssignmentTargetKind::ExclusionGroup => {
             let group_id = draft
@@ -1029,8 +1219,6 @@ fn target_from_draft(draft: &AssignmentDraft) -> Result<Value, GraphError> {
             json!({
                 "@odata.type": "#microsoft.graph.exclusionGroupAssignmentTarget",
                 "groupId": group_id,
-                "deviceAndAppManagementAssignmentFilterId": Value::Null,
-                "deviceAndAppManagementAssignmentFilterType": "none",
             })
         }
         AssignmentTargetKind::Group => {
@@ -1047,11 +1235,24 @@ fn target_from_draft(draft: &AssignmentDraft) -> Result<Value, GraphError> {
             json!({
                 "@odata.type": "#microsoft.graph.groupAssignmentTarget",
                 "groupId": group_id,
-                "deviceAndAppManagementAssignmentFilterId": filter.0,
-                "deviceAndAppManagementAssignmentFilterType": filter.1,
             })
         }
-    })
+    };
+    if include_filters {
+        let object = target.as_object_mut().expect("object");
+        let (filter_id, filter_type) = if draft.target_kind == AssignmentTargetKind::ExclusionGroup
+        {
+            (Value::Null, "none")
+        } else {
+            filter_fields(draft)
+        };
+        object.insert("deviceAndAppManagementAssignmentFilterId".into(), filter_id);
+        object.insert(
+            "deviceAndAppManagementAssignmentFilterType".into(),
+            json!(filter_type),
+        );
+    }
+    Ok(target)
 }
 
 fn filter_fields(draft: &AssignmentDraft) -> (Value, &'static str) {

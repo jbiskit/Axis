@@ -20,13 +20,22 @@ import { useDocumentTabs } from "../hooks/useDocumentTabs";
 import { matchesIntunePlatform, platformFromSearchParam, INTUNE_PLATFORM_LABELS } from "../lib/platforms";
 import { appKindFromSearchParam, APP_KIND_LABELS } from "../lib/appKinds";
 import {
+  AppDependencyGraphDialog,
+  appNameMap,
+  dependencySummary,
+  relationshipErrorText,
+  useTenantAppRelationships,
+} from "./workbench/AppDependencyGraph";
+import {
   compareBool,
   compareCatalogPolicy,
   compareIso,
   compareNumber,
   compareText,
-  matchesAppFilters,
+  matchesAppQuery,
+  matchesAssignedFilter,
   matchesCatalogPolicyFilters,
+  matchesListQuery,
   platformFilterOptionsFromList,
   sortRows,
   type CatalogPolicySortKey,
@@ -127,10 +136,12 @@ import { SettingsCatalogWorkbench } from "./SettingsCatalogWorkbench";
 import { TenantOverview } from "./TenantOverview";
 import { WriteActivityView } from "./WriteActivityView";
 import { EnvironmentReportView } from "./EnvironmentReportView";
+import { LocalCatalogView } from "./LocalCatalogView";
 import { PacksKitsView } from "./PacksKitsView";
 import { GraphObjectInspector } from "./workbench/GraphObjectInspector";
 import { PageHeader, SignalCard } from "./ui/PageChrome";
 import { CreateCompliancePolicyDialog } from "./workbench/CreateCompliancePolicyDialog";
+import { CreateStoreAppDialog } from "./workbench/CreateStoreAppDialog";
 import { CreateEnrollmentRestrictionDialog } from "./workbench/CreateEnrollmentRestrictionDialog";
 import { CreateEnrollmentLimitDialog } from "./workbench/CreateEnrollmentLimitDialog";
 import { CreateAutopilotProfileDialog } from "./workbench/CreateAutopilotProfileDialog";
@@ -143,6 +154,7 @@ import {
   BulkListActions,
   listTargetProps,
   ObjectListMenuHost,
+  type ObjectListTarget,
 } from "./workbench/ObjectListMenu";
 import {
   BulkAssignBar,
@@ -151,6 +163,7 @@ import {
   useCheckedIds,
 } from "./workbench/PolicyBulkAssign";
 import { AutopilotGroupTagDialog } from "./workbench/AutopilotGroupTagDialog";
+import { BooleanToggle } from "./workbench/BooleanToggle";
 import {
   CapabilityStub,
   CompactObjectList,
@@ -784,7 +797,10 @@ export function IntuneWorkspace({
   }
 
   if (pathname.startsWith("/intune/apps")) {
-    if (pathname === "/intune/apps/catalog" || pathname === "/intune/apps/uploads" || pathname === "/intune/apps/setup") {
+    if (pathname === "/intune/apps/catalog") {
+      return <LocalCatalogView container={clientContainer} />;
+    }
+    if (pathname === "/intune/apps/setup") {
       return (
         <CapabilityStub
           title={pathname.split("/").pop() ?? "Apps"}
@@ -821,6 +837,7 @@ export function IntuneWorkspace({
         error={source.error}
         truncated={source.truncated}
         selectedId={search.get("app")}
+        enableStoreCreate={pathname === "/intune/apps/store"}
         onSelect={(id) => navigate(hrefWithParam(pathname === "/intune/apps" ? "/intune/apps/tenant" : pathname, search, "app", id))}
         onRefresh={() => void source.reload()}
       />
@@ -990,6 +1007,41 @@ function WindowsUpdateWorkbench({
       }),
     [listed, sort],
   );
+  const filteredIds = useMemo(() => sorted.map((item) => item.id), [sorted]);
+  const selection = useCheckedIds(filteredIds);
+  const checkedProfiles = sorted.filter((item) => selection.checkedIds.has(item.id));
+  const updateFamilies = new Set(checkedProfiles.map((item) => item.family));
+  const bulkKind = updateFamilies.size === 1 ? `windowsUpdate:${checkedProfiles[0].family}` : null;
+  const bulkPolicies: CatalogPolicySummary[] = selection.bulkTargetIds.flatMap((id) => {
+    const item = sorted.find((row) => row.id === id);
+    return item ? [{ id: item.id, name: item.name }] : [];
+  });
+  const showBulk = selection.bulkEditorOpen && bulkPolicies.length > 0 && bulkKind != null;
+  const bulkDelete = (
+    <BulkListActions
+      targets={checkedProfiles.map((item) => ({
+        id: item.id,
+        title: item.name,
+        kind: `windowsUpdate:${item.family}`,
+      }))}
+      onDeleted={(deleted) => {
+        if (deleted.some((target) => target.id === overlay?.id)) setOverlay(null);
+        if (deleted.some((target) => target.id === selectedId)) selectPolicy("");
+        selection.clear();
+        onRefresh();
+      }}
+    />
+  );
+  const bulkBar = (
+    <BulkAssignBar
+      count={checkedProfiles.length}
+      onEdit={selection.openBulkEditor}
+      onClear={selection.clear}
+      editDisabled={bulkKind == null}
+      editHint={bulkKind == null ? "Select profiles from one update family" : undefined}
+      extra={bulkDelete}
+    />
+  );
   const selected = listed.find((item) => item.id === selectedId);
   const titleFor = useCallback(
     (id: string) => listed.find((item) => item.id === id)?.name ?? id,
@@ -1023,6 +1075,8 @@ function WindowsUpdateWorkbench({
       }}
     >
       {selected ? (
+          <div className="stack">
+          {bulkBar}
           <CompactObjectList
             title={family ?? "Windows Update"}
             description="Select a profile to inspect it here."
@@ -1038,7 +1092,15 @@ function WindowsUpdateWorkbench({
             loading={loading}
             error={error}
             actions={importButton}
+            checkedIds={selection.checkedIds}
+            onToggleChecked={selection.toggle}
+            allSelected={selection.allSelected}
+            onToggleAll={selection.toggleAll}
+            selectAllIndeterminate={checkedProfiles.length > 0 && !selection.allSelected}
+            selectAllDisabled={sorted.length === 0}
+            selectAllLabel="Select all shown profiles"
           />
+          </div>
         ) : (
           <div className="stack">
             <PageHeader
@@ -1057,10 +1119,20 @@ function WindowsUpdateWorkbench({
               }
             />
             {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
+            {bulkBar}
             <section className="axis-panel" style={{ overflow: "hidden" }}>
               <table className="axis-table">
                 <thead>
                   <tr>
+                    <th className="axis-table-check">
+                      <SelectCheckbox
+                        checked={selection.allSelected}
+                        indeterminate={checkedProfiles.length > 0 && !selection.allSelected}
+                        disabled={sorted.length === 0}
+                        label="Select all shown profiles"
+                        onChange={selection.toggleAll}
+                      />
+                    </th>
                     <SortableTh column="name" label="Name" sort={sort} onSort={toggleSort} />
                     <SortableTh column="family" label="Family" sort={sort} onSort={toggleSort} />
                     <SortableTh column="modified" label="Modified" sort={sort} onSort={toggleSort} />
@@ -1074,6 +1146,13 @@ function WindowsUpdateWorkbench({
                       onClick={() => navigate(hrefWithParam(pathname, search, "policy", item.id))}
                       {...listTargetProps(item.id, item.name, `windowsUpdate:${item.family}`)}
                     >
+                      <td className="axis-table-check">
+                        <SelectCheckbox
+                          checked={selection.checkedIds.has(item.id)}
+                          label={`Select ${item.name}`}
+                          onChange={() => selection.toggle(item.id)}
+                        />
+                      </td>
                       <td>{item.name}</td>
                       <td className="muted">{item.family}</td>
                       <td className="muted">{formatRelative(item.lastModifiedDateTime)}</td>
@@ -1118,6 +1197,16 @@ function WindowsUpdateWorkbench({
       }
     />
     {packImport.dialog}
+    <AssignmentsDialog
+      open={showBulk}
+      kind={bulkKind ?? "windowsUpdate:rings"}
+      policies={bulkPolicies}
+      onClose={selection.closeBulkEditor}
+      onSaved={() => {
+        onRefresh();
+        selection.clear();
+      }}
+    />
     </>
   );
 }
@@ -1153,6 +1242,9 @@ function AppProtectionWorkbench({
       }),
     [listed, sort],
   );
+  const filteredIds = useMemo(() => sorted.map((item) => item.id), [sorted]);
+  const selection = useCheckedIds(filteredIds);
+  const checkedPolicies = sorted.filter((item) => selection.checkedIds.has(item.id));
   const selected = listed.find((item) => item.id === selectedId);
   const titleFor = useCallback(
     (id: string) => listed.find((item) => item.id === id)?.displayName ?? id,
@@ -1160,6 +1252,28 @@ function AppProtectionWorkbench({
   );
   const selectPolicy = (id: string) =>
     navigate(hrefWithParam(pathname, search, "policy", id || null));
+  const bulkDelete = (
+    <BulkListActions
+      targets={checkedPolicies.map((item) => ({
+        id: item.id,
+        title: item.displayName,
+        kind: "appProtection",
+      }))}
+      onDeleted={(deleted) => {
+        if (deleted.some((target) => target.id === overlay?.id)) setOverlay(null);
+        if (deleted.some((target) => target.id === selectedId)) selectPolicy("");
+        selection.clear();
+        onRefresh();
+      }}
+    />
+  );
+  const bulkBar = (
+    <BulkAssignBar
+      count={checkedPolicies.length}
+      onClear={selection.clear}
+      extra={bulkDelete}
+    />
+  );
   return (
     <WorkspaceSplit
       inspectorPrimary={Boolean(selected)}
@@ -1185,6 +1299,8 @@ function AppProtectionWorkbench({
           }}
         >
         {selected ? (
+          <div className="stack">
+          {bulkBar}
           <CompactObjectList
             title="App protection"
             description="Select a policy to inspect it here."
@@ -1199,7 +1315,15 @@ function AppProtectionWorkbench({
             onRefresh={onRefresh}
             loading={loading}
             error={error}
+            checkedIds={selection.checkedIds}
+            onToggleChecked={selection.toggle}
+            allSelected={selection.allSelected}
+            onToggleAll={selection.toggleAll}
+            selectAllIndeterminate={checkedPolicies.length > 0 && !selection.allSelected}
+            selectAllDisabled={sorted.length === 0}
+            selectAllLabel="Select all shown policies"
           />
+          </div>
         ) : (
           <div className="stack">
             <PageHeader
@@ -1215,10 +1339,20 @@ function AppProtectionWorkbench({
               }
             />
             {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
+            {bulkBar}
             <section className="axis-panel" style={{ overflow: "hidden" }}>
               <table className="axis-table">
                 <thead>
                   <tr>
+                    <th className="axis-table-check">
+                      <SelectCheckbox
+                        checked={selection.allSelected}
+                        indeterminate={checkedPolicies.length > 0 && !selection.allSelected}
+                        disabled={sorted.length === 0}
+                        label="Select all shown policies"
+                        onChange={selection.toggleAll}
+                      />
+                    </th>
                     <SortableTh column="name" label="Name" sort={sort} onSort={toggleSort} />
                     <SortableTh column="type" label="Type" sort={sort} onSort={toggleSort} />
                     <SortableTh column="modified" label="Modified" sort={sort} onSort={toggleSort} />
@@ -1232,6 +1366,13 @@ function AppProtectionWorkbench({
                       onClick={() => navigate(hrefWithParam(pathname, search, "policy", item.id))}
                       {...listTargetProps(item.id, item.displayName, "appProtection")}
                     >
+                      <td className="axis-table-check">
+                        <SelectCheckbox
+                          checked={selection.checkedIds.has(item.id)}
+                          label={`Select ${item.displayName}`}
+                          onChange={() => selection.toggle(item.id)}
+                        />
+                      </td>
                       <td>{item.displayName}</td>
                       <td className="muted">{item.odataType ?? "—"}</td>
                       <td className="muted">{formatRelative(item.lastModifiedDateTime)}</td>
@@ -2063,6 +2204,7 @@ function AppsList({
   error,
   truncated,
   selectedId,
+  enableStoreCreate,
   onSelect,
   onRefresh,
 }: {
@@ -2072,16 +2214,36 @@ function AppsList({
   error: string | null;
   truncated?: boolean;
   selectedId: string | null;
+  enableStoreCreate?: boolean;
   onSelect: (id: string) => void;
   onRefresh: () => void;
 }) {
+  const [createStoreOpen, setCreateStoreOpen] = useState(false);
+  const [createdStoreApp, setCreatedStoreApp] = useState<MobileAppSummary | null>(null);
+  const rows = useMemo(() => {
+    if (!createdStoreApp || items.some((item) => item.id === createdStoreApp.id)) return items;
+    return [createdStoreApp, ...items];
+  }, [createdStoreApp, items]);
+  const [relationshipReload, setRelationshipReload] = useState(0);
+  const relationships = useTenantAppRelationships(rows, relationshipReload);
+  const appNames = useMemo(() => appNameMap(rows), [rows]);
+  const knownAppIds = useMemo(() => new Set(rows.map((item) => item.id.toLowerCase())), [rows]);
+  const [graph, setGraph] = useState<{ focusId: string | null } | null>(null);
+  function refreshApps() {
+    setRelationshipReload((value) => value + 1);
+    onRefresh();
+  }
   const { query, setQuery, assignedFilter, setAssignedFilter } = useListSearchState();
   const { sort, toggle: toggleSort } = useColumnSort<
-    "name" | "type" | "platform" | "publisher" | "version" | "assigned" | "modified"
+    "name" | "type" | "platform" | "publisher" | "version" | "dependencies" | "assigned" | "modified"
   >("name");
   const filtered = useMemo(() => {
-    const rows = items.filter((item) => matchesAppFilters(item, query, assignedFilter));
-    return sortRows(rows, sort.dir, (a, b) => {
+    const visible = rows.filter((item) => {
+      if (!matchesAssignedFilter(item.isAssigned, assignedFilter)) return false;
+      if (matchesAppQuery(item, query)) return true;
+      return matchesListQuery(dependencySummary(item.id, relationships.links, appNames), query);
+    });
+    return sortRows(visible, sort.dir, (a, b) => {
       switch (sort.key) {
         case "type":
           return compareText(a.appTypeLabel ?? a.kind, b.appTypeLabel ?? b.kind) || compareText(a.displayName, b.displayName);
@@ -2091,6 +2253,13 @@ function AppsList({
           return compareText(a.publisher, b.publisher) || compareText(a.displayName, b.displayName);
         case "version":
           return compareText(a.displayVersion, b.displayVersion) || compareText(a.displayName, b.displayName);
+        case "dependencies":
+          return (
+            compareText(
+              dependencySummary(a.id, relationships.links, appNames),
+              dependencySummary(b.id, relationships.links, appNames),
+            ) || compareText(a.displayName, b.displayName)
+          );
         case "assigned":
           return compareBool(a.isAssigned, b.isAssigned) || compareText(a.displayName, b.displayName);
         case "modified":
@@ -2099,12 +2268,40 @@ function AppsList({
           return compareText(a.displayName, b.displayName) || compareText(a.id, b.id);
       }
     });
-  }, [assignedFilter, items, query, sort]);
-  const selected = items.find((item) => item.id === selectedId);
+  }, [appNames, assignedFilter, query, relationships.links, rows, sort]);
+  const selected = rows.find((item) => item.id === selectedId);
+  const createButton = enableStoreCreate ? (
+    <WriteActionButton type="button" className="axis-btn axis-btn-primary" onClick={() => setCreateStoreOpen(true)}>
+      Add Store app
+    </WriteActionButton>
+  ) : null;
   const filteredIds = useMemo(() => filtered.map((item) => item.id), [filtered]);
   const selection = useCheckedIds(filteredIds);
   const checkedApps = filtered.filter((item) => selection.checkedIds.has(item.id));
   const bulkApps = filtered.filter((item) => selection.bulkTargetIds.includes(item.id));
+  function onAppsDeleted(deleted: ObjectListTarget[]) {
+    if (createdStoreApp && deleted.some((target) => target.id === createdStoreApp.id)) {
+      setCreatedStoreApp(null);
+    }
+    if (selectedId && deleted.some((target) => target.id === selectedId)) onSelect("");
+    selection.clear();
+    refreshApps();
+  }
+  const graphButton = relationships.enabled ? (
+    <button
+      type="button"
+      className="axis-btn"
+      disabled={!relationships.ready || relationships.links.length === 0}
+      title={
+        relationships.links.length === 0
+          ? "No dependency links in this view."
+          : "Show how these apps depend on each other."
+      }
+      onClick={() => setGraph({ focusId: null })}
+    >
+      Dependency graph
+    </button>
+  ) : null;
   const showBulk = selection.bulkEditorOpen && bulkApps.length > 0;
   const inspectorOpen = Boolean(selected);
   const bulkPolicies: CatalogPolicySummary[] = bulkApps.map((item) => ({
@@ -2119,6 +2316,7 @@ function AppsList({
       master={
         selected ? (
           <div className="stack">
+            {relationships.error ? <p className="muted">{relationshipErrorText(relationships.error)}</p> : null}
             <BulkAssignBar
               count={checkedApps.length}
               onEdit={selection.openBulkEditor}
@@ -2130,6 +2328,7 @@ function AppsList({
                     title: item.displayName,
                     kind: "mobileApp",
                   }))}
+                  onDeleted={onAppsDeleted}
                 />
               }
             />
@@ -2140,11 +2339,19 @@ function AppsList({
               items={filtered.map((item) => ({
                 id: item.id,
                 title: item.displayName,
-                meta: [item.publisher, item.appTypeLabel ?? item.kind, item.platform, item.displayVersion].filter(Boolean).join(" · "),
+                meta: [
+                  item.publisher,
+                  item.appTypeLabel ?? item.kind,
+                  item.platform,
+                  item.displayVersion,
+                  dependencySummary(item.id, relationships.links, appNames),
+                ]
+                  .filter(Boolean)
+                  .join(" · "),
               }))}
               selectedId={selected.id}
               onSelect={onSelect}
-              onRefresh={onRefresh}
+              onRefresh={refreshApps}
               loading={loading}
               error={error}
               checkedIds={selection.checkedIds}
@@ -2153,8 +2360,14 @@ function AppsList({
               onQueryChange={setQuery}
               assignedFilter={assignedFilter}
               onAssignedFilterChange={setAssignedFilter}
-              countLabel={`${filtered.length} of ${items.length}`}
-              searchPlaceholder="Name, publisher, assigned…"
+              countLabel={`${filtered.length} of ${rows.length}`}
+              actions={
+                <>
+                  {graphButton}
+                  {createButton}
+                </>
+              }
+              searchPlaceholder={relationships.enabled ? "Name, publisher, dependency…" : "Name, publisher, assigned…"}
               allSelected={selection.allSelected}
               onToggleAll={selection.toggleAll}
               selectAllIndeterminate={checkedApps.length > 0 && !selection.allSelected}
@@ -2167,16 +2380,25 @@ function AppsList({
             <PageHeader
               eyebrow="Apps"
               title={title}
-              description="Live Graph inventory. Local catalog / uploads remain host-only. Select a row to inspect it; checkboxes bulk-edit assignments."
-              onRefresh={onRefresh}
+              description={
+                enableStoreCreate
+                  ? "Microsoft Store apps in this tenant. Add one from the Store catalog, then assign it from the inspector."
+                  : "Live Graph inventory. Select a row to inspect it. Checked apps can update assignments or be deleted together."
+              }
+              onRefresh={refreshApps}
               refreshing={loading}
               actions={
-                <button type="button" className="axis-btn" onClick={onRefresh} disabled={loading}>
-                  {loading ? "Refreshing…" : "Refresh"}
-                </button>
+                <>
+                  {graphButton}
+                  {createButton}
+                  <button type="button" className="axis-btn" onClick={refreshApps} disabled={loading}>
+                    {loading ? "Refreshing…" : "Refresh"}
+                  </button>
+                </>
               }
             />
             {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
+            {relationships.error ? <p className="muted">{relationshipErrorText(relationships.error)}</p> : null}
             <LoadedInventoryBanner truncated={truncated} />
             <BulkAssignBar
               count={checkedApps.length}
@@ -2189,6 +2411,7 @@ function AppsList({
                     title: item.displayName,
                     kind: "mobileApp",
                   }))}
+                  onDeleted={onAppsDeleted}
                 />
               }
             />
@@ -2197,8 +2420,8 @@ function AppsList({
               onQueryChange={setQuery}
               assignedFilter={assignedFilter}
               onAssignedFilterChange={setAssignedFilter}
-              countLabel={`${filtered.length} of ${items.length}`}
-              placeholder="Name, publisher, assigned…"
+              countLabel={`${filtered.length} of ${rows.length}`}
+              placeholder={relationships.enabled ? "Name, publisher, dependency…" : "Name, publisher, assigned…"}
             >
               <table className="axis-table">
                 <thead>
@@ -2217,6 +2440,9 @@ function AppsList({
                     <SortableTh column="platform" label="Platform" sort={sort} onSort={toggleSort} />
                     <SortableTh column="publisher" label="Publisher" sort={sort} onSort={toggleSort} />
                     <SortableTh column="version" label="Version" sort={sort} onSort={toggleSort} />
+                    {relationships.enabled ? (
+                      <SortableTh column="dependencies" label="Dependencies" sort={sort} onSort={toggleSort} />
+                    ) : null}
                     <SortableTh column="assigned" label="Assigned" sort={sort} onSort={toggleSort} />
                     <SortableTh column="modified" label="Last modified" sort={sort} onSort={toggleSort} />
                   </tr>
@@ -2240,6 +2466,16 @@ function AppsList({
                       <td className="muted">{item.platform ?? "—"}</td>
                       <td className="muted">{item.publisher ?? "—"}</td>
                       <td className="muted">{item.displayVersion ?? "—"}</td>
+                      {relationships.enabled ? (
+                        <td
+                          className="muted app-dep-cell"
+                          title={dependencySummary(item.id, relationships.links, appNames)}
+                        >
+                          {!relationships.ready
+                            ? "Checking…"
+                            : dependencySummary(item.id, relationships.links, appNames) || "—"}
+                        </td>
+                      ) : null}
                       <td className="muted">{item.isAssigned ? "Yes" : "No"}</td>
                       <td className="muted">{formatRelative(item.lastModifiedDateTime)}</td>
                     </tr>
@@ -2262,8 +2498,18 @@ function AppsList({
             kind="mobileApp"
             id={selected.id}
             fallbackTitle={selected.displayName}
-            incomplete="Win32 content replace, detection-rule editor, and intunewin packaging are not available in Tauri. Assignments can be updated from this inspector or bulk-selected apps."
+            incomplete={
+              selected.kind === "winget" || selected.appKind === "store"
+                ? undefined
+                : "Win32 metadata and detection rules save from Overview. Content replace and intunewin packaging are still next. Assignments can be updated from this inspector or bulk-selected apps."
+            }
             onClose={() => onSelect("")}
+            tenantApps={rows}
+            appLinks={relationships.links}
+            appLinksReady={relationships.ready}
+            appLinksError={relationships.error}
+            onAppLinksChanged={() => setRelationshipReload((value) => value + 1)}
+            onSelectApp={onSelect}
           />
         ) : (
           <InspectorEmpty label="Select an app to inspect it in this workspace. Close clears the selection and stays on Apps." />
@@ -2276,10 +2522,37 @@ function AppsList({
       policies={bulkPolicies}
       onClose={selection.closeBulkEditor}
       onSaved={() => {
-        onRefresh();
+        refreshApps();
         selection.clear();
       }}
     />
+    {graph ? (
+      <AppDependencyGraphDialog
+        links={relationships.links}
+        names={appNames}
+        knownIds={knownAppIds}
+        focusId={graph.focusId}
+        selectedId={selectedId}
+        title={title}
+        onSelect={(id) => {
+          onSelect(id);
+          if (graph.focusId) setGraph({ focusId: id });
+        }}
+        onClose={() => setGraph(null)}
+      />
+    ) : null}
+    {enableStoreCreate ? (
+      <CreateStoreAppDialog
+        open={createStoreOpen}
+        onClose={() => setCreateStoreOpen(false)}
+        onCreated={(app) => {
+          setCreateStoreOpen(false);
+          setCreatedStoreApp(app);
+          onSelect(app.id);
+          onRefresh();
+        }}
+      />
+    ) : null}
     </>
   );
 }
@@ -3108,8 +3381,39 @@ function AutopilotProfilesView({
       }),
     [filtered, sort],
   );
+  const filteredIds = useMemo(() => sorted.map((item) => item.id), [sorted]);
+  const selection = useCheckedIds(filteredIds);
+  const checkedProfiles = sorted.filter((item) => selection.checkedIds.has(item.id));
+  const bulkPolicies: CatalogPolicySummary[] = selection.bulkTargetIds.flatMap((id) => {
+    const item = sorted.find((row) => row.id === id);
+    return item ? [{ id: item.id, name: item.displayName }] : [];
+  });
+  const showBulk = selection.bulkEditorOpen && bulkPolicies.length > 0;
   const selected = items.find((item) => item.id === selectedId);
   const countLabel = `${filtered.length} of ${items.length}`;
+  const bulkDelete = (
+    <BulkListActions
+      targets={checkedProfiles.map((item) => ({
+        id: item.id,
+        title: item.displayName,
+        kind: "autopilotProfile",
+      }))}
+      onDeleted={(deleted) => {
+        if (deleted.some((target) => target.id === overlay?.id)) setOverlay(null);
+        if (deleted.some((target) => target.id === selectedId)) onSelect("");
+        selection.clear();
+        void profiles.reload();
+      }}
+    />
+  );
+  const bulkBar = (
+    <BulkAssignBar
+      count={checkedProfiles.length}
+      onEdit={selection.openBulkEditor}
+      onClear={selection.clear}
+      extra={bulkDelete}
+    />
+  );
   const createButton = (
     <WriteActionButton
       type="button"
@@ -3157,6 +3461,7 @@ function AutopilotProfilesView({
         >
           {selected ? (
             <div className="device-list-compact">
+              {bulkBar}
               <CompactObjectList
                 title="Deployment profiles"
                 objectKind="autopilotProfile"
@@ -3183,6 +3488,13 @@ function AutopilotProfilesView({
                     {importButton}
                   </>
                 }
+                checkedIds={selection.checkedIds}
+                onToggleChecked={selection.toggle}
+                allSelected={selection.allSelected}
+                onToggleAll={selection.toggleAll}
+                selectAllIndeterminate={checkedProfiles.length > 0 && !selection.allSelected}
+                selectAllDisabled={sorted.length === 0}
+                selectAllLabel="Select all shown profiles"
               />
             </div>
           ) : (
@@ -3211,6 +3523,7 @@ function AutopilotProfilesView({
               {profiles.error ? (
                 <div className="axis-alert axis-alert-danger">{profiles.error}</div>
               ) : null}
+              {bulkBar}
               <SearchableTable
                 query={query}
                 onQueryChange={setQuery}
@@ -3221,6 +3534,15 @@ function AutopilotProfilesView({
                 <table className="axis-table">
                   <thead>
                     <tr>
+                      <th className="axis-table-check">
+                        <SelectCheckbox
+                          checked={selection.allSelected}
+                          indeterminate={checkedProfiles.length > 0 && !selection.allSelected}
+                          disabled={sorted.length === 0}
+                          label="Select all shown profiles"
+                          onChange={selection.toggleAll}
+                        />
+                      </th>
                       <SortableTh column="name" label="Name" sort={sort} onSort={toggle} />
                       <SortableTh column="join" label="Join type" sort={sort} onSort={toggle} />
                       <SortableTh column="modified" label="Modified" sort={sort} onSort={toggle} />
@@ -3234,6 +3556,13 @@ function AutopilotProfilesView({
                         onClick={() => onSelect(item.id)}
                         {...listTargetProps(item.id, item.displayName, "autopilotProfile")}
                       >
+                        <td className="axis-table-check">
+                          <SelectCheckbox
+                            checked={selection.checkedIds.has(item.id)}
+                            label={`Select ${item.displayName}`}
+                            onChange={() => selection.toggle(item.id)}
+                          />
+                        </td>
                         <td>{item.displayName}</td>
                         <td className="muted">{autopilotProfileJoinLabel(item)}</td>
                         <td className="muted">{formatRelative(item.lastModifiedDateTime)}</td>
@@ -3260,7 +3589,6 @@ function AutopilotProfilesView({
             kind="autopilotProfile"
             id={selected.id}
             fallbackTitle={selected.displayName}
-            incomplete="Assignment writes for Autopilot profiles are not ported yet. Edit join/OOBE settings on Overview; assign groups from the portal or a later pass."
             onClose={() => onSelect("")}
           />
         ) : (
@@ -3278,6 +3606,16 @@ function AutopilotProfilesView({
       }}
     />
     {packImport.dialog}
+    <AssignmentsDialog
+      open={showBulk}
+      kind="autopilotProfile"
+      policies={bulkPolicies}
+      onClose={selection.closeBulkEditor}
+      onSaved={() => {
+        void profiles.reload();
+        selection.clear();
+      }}
+    />
     </>
   );
 }
@@ -3687,9 +4025,17 @@ function PolicyPacksWorkbench({
               title: reference.name,
               meta: baselineModifiedMeta(reference),
               group: `${reference.sourceName} · ${packArtifactKindLabel(reference.artifactKind)}`,
+              selectable: isImportablePackArtifact(reference.artifactKind),
             }))}
             selectedId={selectedId ?? ""}
             onSelect={onSelect}
+            checkedIds={selection.checkedIds}
+            onToggleChecked={selection.toggle}
+            allSelected={selection.allSelected}
+            onToggleAll={selection.toggleAll}
+            selectAllIndeterminate={selection.checkedIds.size > 0 && !selection.allSelected}
+            selectAllDisabled={importableSelectionIds.length === 0}
+            selectAllLabel="Select all importable items"
           />
         ) : (
           <div className="stack">
@@ -4452,11 +4798,10 @@ function TemplateSourceDialog({
                 </label>
               ) : null}
               <label className="axis-check baseline-source-private">
-                <input
-                  type="checkbox"
+                <BooleanToggle
                   checked={Boolean(entry.private)}
-                  onChange={(event) => {
-                    const isPrivate = event.target.checked;
+                  ariaLabel="Private repository"
+                  onChange={(isPrivate) => {
                     patch({ private: isPrivate, token: isPrivate ? entry.token : undefined });
                   }}
                 />

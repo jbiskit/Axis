@@ -1,16 +1,17 @@
 //! Local Axis packs and kits (named `includes` selections).
 //!
-//! Layout (platform first):
+//! Layout (platform first for tenant policy files; applications use the
+//! source-root catalog from the previous host):
 //! ```text
 //! axis-pack.json
 //! kits/
+//! Applications/{Vendor}/{App}/{Version}/PackageInformation/config.json
 //! {platform}/
 //!   enrollment/…
 //!   policies/…
 //!   compliance/…
 //!   endpoint-security/…
 //!   scripts/{platform,remediation,compliance}/…
-//!   applications/       # placeholder
 //! ```
 
 use chrono::Utc;
@@ -730,13 +731,14 @@ pub fn create_local_pack(input: CreateLocalPackInput) -> Result<PackWorkspace, P
     fs::write(root.join(MANIFEST_FILE), manifest_text)?;
 
     fs::create_dir_all(root.join(KITS_DIR))?;
+    // Win32 packages live beside the platform trees, not under them.
+    write_gitkeep(&root.join("Applications").join(".gitkeep"))?;
     for platform in &platforms {
         let base = root.join(platform);
         for folder in [
             "policies",
             "compliance",
             "endpoint-security",
-            "applications",
             "scripts/platform",
             "scripts/remediation",
             "scripts/compliance",
@@ -1186,7 +1188,8 @@ mod tests {
         assert!(!workspace.kits.is_empty());
         assert!(root.join("windows/policies/.gitkeep").is_file());
         assert!(root.join("windows/scripts/platform/.gitkeep").is_file());
-        assert!(root.join("windows/applications/.gitkeep").is_file());
+        assert!(root.join("Applications/.gitkeep").is_file());
+        assert!(!root.join("windows/applications").exists());
         let _ = fs::remove_dir_all(&parent);
     }
 }

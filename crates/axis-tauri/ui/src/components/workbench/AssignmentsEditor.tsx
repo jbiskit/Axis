@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { BooleanToggle } from "./BooleanToggle";
 import {
   assignmentTargetLabel,
   graphHasAllDevicesTarget,
@@ -199,6 +200,7 @@ export function AssignmentsEditor({
   const [supportsSchedule, setSupportsSchedule] = useState(false);
   const [supportsAllDevices, setSupportsAllDevices] = useState(true);
   const [supportsAllUsers, setSupportsAllUsers] = useState(true);
+  const [supportsFilters, setSupportsFilters] = useState(kind !== "autopilotProfile");
   const [loadError, setLoadError] = useState<string | null>(null);
   const [groupQuery, setGroupQuery] = useState("");
   const [groupHits, setGroupHits] = useState<DirectoryGroup[]>([]);
@@ -236,6 +238,7 @@ export function AssignmentsEditor({
         setSupportsSchedule(response.capabilities.supportsSchedule);
         setSupportsAllDevices(response.capabilities.supportsAllDevices !== false);
         setSupportsAllUsers(response.capabilities.supportsAllUsers !== false);
+        setSupportsFilters(response.capabilities.supportsFilters !== false);
         setLoadError(response.error);
       })
       .catch((error: unknown) => {
@@ -737,19 +740,19 @@ export function AssignmentsEditor({
           <p className="muted" style={{ margin: 0 }}>
             Assignments
           </p>
-          {filtersLoading ? (
+          {supportsFilters && filtersLoading ? (
             <p className="muted" style={{ margin: 0 }}>
               Loading filters…
             </p>
-          ) : filtersError ? (
+          ) : supportsFilters && filtersError ? (
             <p className="muted" style={{ margin: 0, color: "var(--axis-danger)" }}>
               {filtersError}
             </p>
-          ) : (
+          ) : supportsFilters ? (
             <p className="muted" style={{ margin: 0 }}>
               {filters.length} filter{filters.length === 1 ? "" : "s"} available
             </p>
-          )}
+          ) : null}
         </div>
         <ul className="assignment-rows">
           {rows.length === 0 ? (
@@ -808,14 +811,14 @@ export function AssignmentsEditor({
                     </select>
                   </label>
                 ) : null}
-                {row.targetKind !== "exclusionGroup" ? (
+                {supportsFilters && row.targetKind !== "exclusionGroup" ? (
                   <div className="assignment-filter-row">
                     <label className="assignment-filter">
                       <span>Filter</span>
                       <select
                         className="axis-input"
                         value={row.filterId ?? ""}
-                        disabled={filters.length === 0}
+                        disabled={filters.length === 0 && !row.filterId}
                         onChange={(event) => setRowFilter(row.key, event.target.value)}
                         aria-label={`Filter for ${assignmentTargetLabel(row)}`}
                       >
@@ -825,6 +828,9 @@ export function AssignmentsEditor({
                             {formatFilterOption(filter)}
                           </option>
                         ))}
+                        {row.filterId && !filters.some((filter) => filter.id === row.filterId) ? (
+                          <option value={row.filterId}>{row.filterName || row.filterId}</option>
+                        ) : null}
                       </select>
                     </label>
                     {row.filterId ? (
@@ -838,11 +844,11 @@ export function AssignmentsEditor({
                       />
                     ) : null}
                   </div>
-                ) : (
+                ) : row.targetKind === "exclusionGroup" ? (
                   <p className="muted" style={{ margin: 0, fontSize: "0.6875rem" }}>
                     Exclusion groups do not use assignment filters.
                   </p>
-                )}
+                ) : null}
                 {supportsSchedule && row.targetKind !== "exclusionGroup" ? (
                   <div className="assignment-schedule">
                     <p className="muted" style={{ margin: "0.35rem 0 0.5rem", fontSize: "0.6875rem" }}>
@@ -910,23 +916,19 @@ export function AssignmentsEditor({
                     <div className="assignment-filter-row">
                       {row.runSchedule?.kind !== "hourly" ? (
                         <label className="axis-check">
-                          <input
-                            type="checkbox"
+                          <BooleanToggle
                             checked={row.runSchedule?.useUtc ?? false}
-                            onChange={(event) =>
-                              setRowScheduleUseUtc(row.key, event.target.checked)
-                            }
+                            ariaLabel={`Use UTC for ${assignmentTargetLabel(row)}`}
+                            onChange={(next) => setRowScheduleUseUtc(row.key, next)}
                           />
                           Use UTC
                         </label>
                       ) : null}
                       <label className="axis-check">
-                        <input
-                          type="checkbox"
+                        <BooleanToggle
                           checked={row.runRemediationScript ?? true}
-                          onChange={(event) =>
-                            setRowRunRemediationScript(row.key, event.target.checked)
-                          }
+                          ariaLabel={`Run remediation script for ${assignmentTargetLabel(row)}`}
+                          onChange={(next) => setRowRunRemediationScript(row.key, next)}
                         />
                         Run remediation script
                       </label>

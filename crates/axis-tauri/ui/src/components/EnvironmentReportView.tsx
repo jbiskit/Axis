@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { BooleanToggle } from "./workbench/BooleanToggle";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useInventory } from "../hooks/useInventory";
 import {
@@ -106,12 +107,7 @@ function SelectionCheck({
 }) {
   return (
     <label className="environment-report-check">
-      <input
-        type="checkbox"
-        checked={checked}
-        disabled={disabled}
-        onChange={(event) => onChange(event.target.checked)}
-      />
+      <BooleanToggle checked={checked} disabled={disabled} ariaLabel={label} onChange={onChange} />
       <span>{label}</span>
     </label>
   );
@@ -130,12 +126,7 @@ function SelectionChip({
 }) {
   return (
     <label className="environment-report-chip">
-      <input
-        type="checkbox"
-        checked={checked}
-        disabled={disabled}
-        onChange={(event) => onChange(event.target.checked)}
-      />
+      <BooleanToggle checked={checked} disabled={disabled} ariaLabel={label} onChange={onChange} />
       <span>{label}</span>
     </label>
   );

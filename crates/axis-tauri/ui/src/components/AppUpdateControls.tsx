@@ -1,3 +1,5 @@
+import { BooleanToggle } from "./workbench/BooleanToggle";
+
 export function AppUpdateControls({
   appVersion,
   autoCheck,
@@ -19,10 +21,10 @@ export function AppUpdateControls({
     <div className={`app-update-controls${compact ? " compact" : ""}`}>
       <p className="app-update-version">Version {appVersion ?? "…"}</p>
       <label className="app-update-auto">
-        <input
-          type="checkbox"
+        <BooleanToggle
           checked={autoCheck}
-          onChange={(event) => onAutoCheckChange(event.target.checked)}
+          ariaLabel="Automatically check for updates"
+          onChange={onAutoCheckChange}
         />
         Automatically check for updates
       </label>

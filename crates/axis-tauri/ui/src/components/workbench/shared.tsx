@@ -208,6 +208,8 @@ export type CompactListItem = {
   meta?: string;
   group?: string;
   kind?: string;
+  /** When false, the row stays visible but is omitted from multi-select. */
+  selectable?: boolean;
 };
 
 export function SearchableTable({
@@ -546,7 +548,7 @@ export function CompactObjectList({
                     }
                   : {})}
               >
-                {onToggleChecked && checkedIds ? (
+                {onToggleChecked && checkedIds && item.selectable !== false ? (
                   <SelectCheckbox
                     checked={checkedIds.has(item.id)}
                     label={`Select ${item.title}`}

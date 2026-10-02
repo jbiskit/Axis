@@ -587,6 +587,7 @@ async fn prepare_catalog_policy(
                 .insert("templateReference".into(), reference.clone());
         }
     }
+    attach_snapshot_assignments(&mut document, &detail);
     Ok(vec![PreparedExportFile {
         dir: format!("{platform}/policies"),
         stem: policy.name.clone(),
@@ -745,7 +746,7 @@ async fn prepare_endpoint_security(
         .await?;
     strip_graph_noise(object.as_object_mut());
     let id = policy.id.clone();
-    let document = json!({
+    let mut document = json!({
         "axisExport": envelope("endpointSecurityIntent", &id, exported_at),
         "displayName": object.get("displayName").cloned().unwrap_or(json!(policy.name)),
         "description": object.get("description").cloned().unwrap_or(json!(policy.description.clone().unwrap_or_default())),
@@ -753,6 +754,26 @@ async fn prepare_endpoint_security(
         "intent": object,
         "settings": settings,
     });
+    match client
+        .fetch_all_pages::<Value>(
+            access_token,
+            &format!("/deviceManagement/intents/{enc}/assignments"),
+            "beta",
+            SETTINGS_PAGE_MAX,
+        )
+        .await
+    {
+        Ok(rows) => {
+            document.as_object_mut().expect("object").insert(
+                "assignments".into(),
+                Value::Array(clean_assignment_rows(&rows)),
+            );
+        }
+        Err(_) => {
+            // Omit the key when the collection cannot be read so restore does not
+            // treat a failed fetch as "this object has no assignments".
+        }
+    }
     Ok(vec![PreparedExportFile {
         dir: "windows/endpoint-security".into(),
         stem: policy.name.clone(),
@@ -834,6 +855,7 @@ fn graph_object_document(detail: &GraphObjectDetail, axis_kind: &str, exported_a
             obj.remove("outOfBoxExperienceSettings");
         }
     }
+    attach_snapshot_assignments(&mut document, detail);
     document
 }
 
@@ -868,6 +890,52 @@ fn strip_graph_noise(object: Option<&mut Map<String, Value>>) {
     }
 }
 
+fn attach_snapshot_assignments(document: &mut Value, detail: &GraphObjectDetail) {
+    let Some(rows) = snapshot_assignment_rows(detail) else {
+        return;
+    };
+    if let Some(map) = document.as_object_mut() {
+        map.insert("assignments".into(), Value::Array(rows));
+    }
+}
+
+/// `None` when the assignment collection could not be read. An empty vec means
+/// the object was exported and had no assignments.
+fn snapshot_assignment_rows(detail: &GraphObjectDetail) -> Option<Vec<Value>> {
+    if detail
+        .warnings
+        .iter()
+        .any(|warning| warning.starts_with("Assignments:"))
+    {
+        return None;
+    }
+    Some(clean_assignment_rows(&detail.assignments))
+}
+
+fn clean_assignment_rows(rows: &[Value]) -> Vec<Value> {
+    rows.iter()
+        .filter_map(|row| {
+            let mut row = row.clone();
+            let map = row.as_object_mut()?;
+            for key in [
+                "id",
+                "@odata.context",
+                "@odata.id",
+                "@odata.editLink",
+                "@odata.etag",
+                "source",
+                "sourceId",
+            ] {
+                map.remove(key);
+            }
+            if map.get("target").is_none() {
+                return None;
+            }
+            Some(row)
+        })
+        .collect()
+}
+
 fn script_meta(
     detail: &GraphObjectDetail,
     script: &TenantScriptSummary,
@@ -875,7 +943,7 @@ fn script_meta(
     exported_at: &str,
     file_name: &str,
 ) -> Value {
-    json!({
+    let mut meta = json!({
         "schema": AXIS_EXPORT_SCHEMA,
         "kind": kind,
         "sourceId": detail.id,
@@ -887,7 +955,9 @@ fn script_meta(
         "publisher": detail.object.get("publisher").and_then(Value::as_str).or(script.publisher.as_deref()),
         "runAs32Bit": detail.object.get("runAs32Bit").cloned(),
         "enforceSignatureCheck": detail.object.get("enforceSignatureCheck").cloned(),
-    })
+    });
+    attach_snapshot_assignments(&mut meta, detail);
+    meta
 }
 
 fn script_file_with_header(meta: &Value, body: &str) -> String {
@@ -1168,6 +1238,64 @@ mod tests {
         assert!(exported.get("assignments").is_none());
         assert_eq!(exported.get("name").and_then(Value::as_str), Some("BitLocker"));
         assert!(exported.get("settings").is_some());
+    }
+
+    #[test]
+    fn snapshot_document_keeps_assignments_off_the_object() {
+        let detail = GraphObjectDetail {
+            id: "p1".into(),
+            kind: "compliancePolicy".into(),
+            title: "BitLocker".into(),
+            object: json!({
+                "displayName": "BitLocker",
+                "assignments": [{ "id": "embedded" }]
+            }),
+            assignments: vec![json!({
+                "id": "a1",
+                "@odata.context": "https://graph.microsoft.com",
+                "target": {
+                    "@odata.type": "#microsoft.graph.groupAssignmentTarget",
+                    "groupId": "g1"
+                }
+            })],
+            settings: None,
+            script_text: None,
+            detection_script_text: None,
+            remediation_script_text: None,
+            extras: None,
+            warnings: Vec::new(),
+        };
+        let document = graph_object_document(&detail, "compliancePolicy", "2026-01-01T00:00:00Z");
+        let rows = document
+            .get("assignments")
+            .and_then(Value::as_array)
+            .expect("assignments");
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].get("id").is_none());
+        assert_eq!(
+            rows[0].pointer("/target/groupId").and_then(Value::as_str),
+            Some("g1")
+        );
+        assert!(document.pointer("/object/assignments").is_none());
+    }
+
+    #[test]
+    fn snapshot_document_omits_assignments_when_fetch_failed() {
+        let detail = GraphObjectDetail {
+            id: "p1".into(),
+            kind: "compliancePolicy".into(),
+            title: "BitLocker".into(),
+            object: json!({ "displayName": "BitLocker" }),
+            assignments: Vec::new(),
+            settings: None,
+            script_text: None,
+            detection_script_text: None,
+            remediation_script_text: None,
+            extras: None,
+            warnings: vec!["Assignments: HTTP 403".into()],
+        };
+        let document = graph_object_document(&detail, "compliancePolicy", "2026-01-01T00:00:00Z");
+        assert!(document.get("assignments").is_none());
     }
 
     #[test]

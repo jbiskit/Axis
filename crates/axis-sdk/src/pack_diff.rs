@@ -353,6 +353,7 @@ fn index_script(
         obj.remove("schema");
         obj.insert("body".into(), Value::String(normalize_script_body(body)));
     }
+    ignore_empty_assignments(&mut comparable);
     let fingerprint = fingerprint_value(&comparable);
     let key = identity_key(&kind, source_id.as_deref(), &display_name, rel);
     Ok(Some(IndexedArtifact {
@@ -419,6 +420,7 @@ fn extract_json_artifact(value: &Value, rel: &str) -> (String, Option<String>, S
 
     let mut comparable = value.clone();
     strip_volatile(&mut comparable);
+    ignore_empty_assignments(&mut comparable);
     (kind, source_id, display_name, comparable)
 }
 
@@ -450,6 +452,20 @@ fn identity_key(kind: &str, source_id: Option<&str>, display_name: &str, rel: &s
         return format!("{kind}::name:{name}");
     }
     format!("{kind}::path:{rel}")
+}
+
+/// Older snapshots omit `assignments`. An empty list is the same fact (nothing assigned),
+/// so it should not mark the object as changed.
+fn ignore_empty_assignments(value: &mut Value) {
+    let Some(map) = value.as_object_mut() else {
+        return;
+    };
+    if map
+        .get("assignments")
+        .is_some_and(|rows| rows.as_array().is_some_and(|rows| rows.is_empty()))
+    {
+        map.remove("assignments");
+    }
 }
 
 fn strip_volatile(value: &mut Value) {
@@ -499,6 +515,24 @@ fn diff_values(left: &Value, right: &Value, path: &str) -> Vec<PackFieldChange> 
                 } else {
                     format!("{path}.{key}")
                 };
+                if key == "assignments" {
+                    let before = l
+                        .get(&key)
+                        .map(summarize_assignment_value)
+                        .unwrap_or_else(|| "Unassigned".into());
+                    let after = r
+                        .get(&key)
+                        .map(summarize_assignment_value)
+                        .unwrap_or_else(|| "Unassigned".into());
+                    if before != after {
+                        out.push(PackFieldChange {
+                            path: "Assignments".into(),
+                            before: Some(before),
+                            after: Some(after),
+                        });
+                    }
+                    continue;
+                }
                 match (l.get(&key), r.get(&key)) {
                     (Some(lv), Some(rv)) => out.extend(diff_values(lv, rv, &child)),
                     (Some(lv), None) => out.push(PackFieldChange {
@@ -517,8 +551,12 @@ fn diff_values(left: &Value, right: &Value, path: &str) -> Vec<PackFieldChange> 
             out
         }
         (Value::Array(l), Value::Array(r)) => {
-            // Prefer identity-aware compare for settings arrays.
-            if path.ends_with("settings") || path.ends_with(".settings") {
+            // Match settings by definition id, including nested choice/group children.
+            if path.ends_with("settings")
+                || path.ends_with(".settings")
+                || array_is_settings(l)
+                || array_is_settings(r)
+            {
                 return diff_settings_arrays(l, r, path);
             }
             if l.len() != r.len() {
@@ -550,26 +588,39 @@ fn diff_settings_arrays(left: &[Value], right: &[Value], path: &str) -> Vec<Pack
     keys.extend(right_map.keys().cloned());
     let mut out = Vec::new();
     for key in keys {
-        let child = format!("{path}[{key}]");
+        let sample = left_map.get(&key).or_else(|| right_map.get(&key));
+        let label = sample
+            .map(|row| setting_label(row, &key))
+            .unwrap_or_else(|| setting_label(&Value::Null, &key));
+        let child = format!("{label} [{key}]");
         match (left_map.get(&key), right_map.get(&key)) {
-            (Some(l), Some(r)) if l != r => {
-                out.push(PackFieldChange {
-                    path: child,
-                    before: Some(summarize_value(l)),
-                    after: Some(summarize_value(r)),
-                });
+            (Some(l), Some(r)) => {
+                let left_clean = clean_setting(l);
+                let right_clean = clean_setting(r);
+                if left_clean == right_clean {
+                    continue;
+                }
+                let mut inner = diff_values(&left_clean, &right_clean, &child);
+                if inner.is_empty() {
+                    inner.push(PackFieldChange {
+                        path: child,
+                        before: Some(summarize_setting(l)),
+                        after: Some(summarize_setting(r)),
+                    });
+                }
+                out.extend(inner);
             }
             (Some(l), None) => out.push(PackFieldChange {
                 path: child,
-                before: Some(summarize_value(l)),
+                before: Some(summarize_setting(l)),
                 after: None,
             }),
             (None, Some(r)) => out.push(PackFieldChange {
                 path: child,
                 before: None,
-                after: Some(summarize_value(r)),
+                after: Some(summarize_setting(r)),
             }),
-            _ => {}
+            (None, None) => {}
         }
     }
     if out.is_empty() && left != right {
@@ -582,18 +633,480 @@ fn diff_settings_arrays(left: &[Value], right: &[Value], path: &str) -> Vec<Pack
     out
 }
 
+fn array_is_settings(rows: &[Value]) -> bool {
+    rows.iter().any(|row| setting_definition_key(row).is_some())
+}
+
 fn settings_by_definition(rows: &[Value]) -> BTreeMap<String, Value> {
     let mut map = BTreeMap::new();
     for (index, row) in rows.iter().enumerate() {
-        let id = row
-            .pointer("/settingInstance/settingDefinitionId")
-            .and_then(Value::as_str)
-            .or_else(|| row.pointer("/settingDefinitionId").and_then(Value::as_str))
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("#{index}"));
+        let id = setting_definition_key(row).unwrap_or_else(|| format!("#{index}"));
         map.insert(id, row.clone());
     }
     map
+}
+
+fn setting_definition_key(row: &Value) -> Option<String> {
+    row.pointer("/settingInstance/settingDefinitionId")
+        .and_then(Value::as_str)
+        .or_else(|| row.pointer("/settingDefinitionId").and_then(Value::as_str))
+        .or_else(|| row.pointer("/definitionId").and_then(Value::as_str))
+        .or_else(|| {
+            row.get("definition")
+                .and_then(|definition| definition.get("id").or_else(|| definition.get("name")))
+                .and_then(Value::as_str)
+        })
+        .map(str::to_string)
+}
+
+const SETTING_NOISE_KEYS: &[&str] = &[
+    "@odata.type",
+    "@odata.id",
+    "@odata.context",
+    "@odata.editLink",
+    "@odata.associationLink",
+    "@odata.navigationLink",
+    "@odata.count",
+    "id",
+    "settingDefinitions",
+    "settingDefinition",
+    "settingInstanceTemplateReference",
+    "settingValueTemplateReference",
+];
+
+fn clean_setting(row: &Value) -> Value {
+    let instance = row.get("settingInstance").unwrap_or(row);
+    strip_setting_noise(instance)
+}
+
+fn strip_setting_noise(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut out = serde_json::Map::new();
+            for (key, child) in map {
+                if SETTING_NOISE_KEYS.iter().any(|noise| key == noise) {
+                    continue;
+                }
+                out.insert(key.clone(), strip_setting_noise(child));
+            }
+            Value::Object(out)
+        }
+        Value::Array(items) => Value::Array(items.iter().map(strip_setting_noise).collect()),
+        other => other.clone(),
+    }
+}
+
+fn setting_label(row: &Value, key: &str) -> String {
+    if let Some(name) = text_field(row, "displayName") {
+        return name;
+    }
+    if let Some(definition) = row.get("definition") {
+        if let Some(name) = text_field(definition, "displayName").or_else(|| text_field(definition, "name"))
+        {
+            return name;
+        }
+    }
+    let instance = row.get("settingInstance").unwrap_or(row);
+    if let Some(name) = text_field(instance, "displayName") {
+        return name;
+    }
+    let id = instance
+        .get("settingDefinitionId")
+        .and_then(Value::as_str)
+        .unwrap_or(key);
+    humanize_setting_id(id)
+}
+
+fn summarize_setting(row: &Value) -> String {
+    if let Some(text) = summarize_admx_setting(row) {
+        return text;
+    }
+    let instance = row.get("settingInstance").unwrap_or(row);
+    let lines = summarize_setting_instance(instance);
+    if lines.is_empty() {
+        return summarize_value(row);
+    }
+    lines.join("\n")
+}
+
+fn summarize_admx_setting(row: &Value) -> Option<String> {
+    if row.get("definition").is_none()
+        && row.get("presentationValues").is_none()
+        && row.get("enabled").is_none()
+    {
+        return None;
+    }
+    if row.get("settingInstance").is_some() {
+        return None;
+    }
+    let state = match row.get("enabled").and_then(Value::as_bool) {
+        Some(true) => "Enabled",
+        Some(false) => "Disabled",
+        None => "Configured",
+    };
+    let mut lines = vec![state.to_string()];
+    if let Some(items) = row.get("presentationValues").and_then(Value::as_array) {
+        for (index, item) in items.iter().take(8).enumerate() {
+            let presentation = item.get("presentation");
+            let label = presentation
+                .and_then(|value| text_field(value, "label").or_else(|| text_field(value, "displayName")))
+                .unwrap_or_else(|| format!("Value {}", index + 1));
+            let value = item
+                .get("value")
+                .map(summarize_value)
+                .unwrap_or_else(|| "—".into());
+            lines.push(format!("  {label}: {value}"));
+        }
+        if items.len() > 8 {
+            lines.push(format!("  … {} more", items.len() - 8));
+        }
+    }
+    Some(lines.join("\n"))
+}
+
+fn summarize_setting_instance(instance: &Value) -> Vec<String> {
+    let definition_id = instance
+        .get("settingDefinitionId")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if let Some(choice) = instance.get("choiceSettingValue") {
+        let raw = choice.get("value").and_then(Value::as_str).unwrap_or("");
+        let mut lines = vec![humanize_option(raw, definition_id)];
+        lines.extend(child_setting_lines(choice.get("children")));
+        return lines;
+    }
+    if let Some(simple) = instance.get("simpleSettingValue") {
+        if let Some(value) = simple.get("value") {
+            return vec![summarize_value(value)];
+        }
+    }
+    if let Some(group) = instance.get("groupSettingValue") {
+        let children = child_setting_lines(group.get("children"));
+        if children.is_empty() {
+            return vec!["Empty group".into()];
+        }
+        return children;
+    }
+    if let Some(items) = collection_values(instance.get("simpleSettingCollectionValue")) {
+        return numbered_values("Value", &items, |item| {
+            summarize_value(item.get("value").unwrap_or(item))
+        });
+    }
+    if let Some(items) = collection_values(instance.get("choiceSettingCollectionValue")) {
+        return numbered_values("Selection", &items, |item| {
+            humanize_option(
+                item.get("value").and_then(Value::as_str).unwrap_or(""),
+                definition_id,
+            )
+        });
+    }
+    if let Some(items) = collection_values(instance.get("groupSettingCollectionValue")) {
+        let mut lines = Vec::new();
+        for (index, group) in items.iter().take(8).enumerate() {
+            lines.push(format!("Group {}", index + 1));
+            lines.extend(child_setting_lines(group.get("children")));
+        }
+        if items.len() > 8 {
+            lines.push(format!("… {} more groups", items.len() - 8));
+        }
+        if lines.is_empty() {
+            lines.push("No groups".into());
+        }
+        return lines;
+    }
+    if let Some(value) = instance.get("value") {
+        return vec![summarize_value(value)];
+    }
+    Vec::new()
+}
+
+fn child_setting_lines(children: Option<&Value>) -> Vec<String> {
+    let Some(Value::Array(items)) = children else {
+        return Vec::new();
+    };
+    let mut lines = Vec::new();
+    for child in items.iter().take(8) {
+        let instance = child.get("settingInstance").unwrap_or(child);
+        let name = setting_label(instance, "Setting");
+        let value = summarize_setting_instance(instance);
+        let value = if value.is_empty() {
+            "Configured".into()
+        } else {
+            value.join(", ")
+        };
+        lines.push(format!("  {name}: {value}"));
+    }
+    if items.len() > 8 {
+        lines.push(format!("  … {} more", items.len() - 8));
+    }
+    lines
+}
+
+fn collection_values(value: Option<&Value>) -> Option<Vec<Value>> {
+    match value? {
+        Value::Array(items) => Some(items.clone()),
+        Value::Object(map) => map.get("value").and_then(Value::as_array).cloned(),
+        _ => None,
+    }
+}
+
+fn numbered_values(
+    label: &str,
+    items: &[Value],
+    value_of: impl Fn(&Value) -> String,
+) -> Vec<String> {
+    if items.is_empty() {
+        return vec![format!("No {label}s")];
+    }
+    let mut lines: Vec<String> = items
+        .iter()
+        .take(8)
+        .enumerate()
+        .map(|(index, item)| format!("{label} {}: {}", index + 1, value_of(item)))
+        .collect();
+    if items.len() > 8 {
+        lines.push(format!("… {} more", items.len() - 8));
+    }
+    lines
+}
+
+fn humanize_option(option_id: &str, definition_id: &str) -> String {
+    let trimmed = option_id.trim();
+    if trimmed.is_empty() {
+        return "Not configured".into();
+    }
+    let rest = trimmed
+        .strip_prefix(&format!("{definition_id}_"))
+        .or_else(|| trimmed.strip_prefix(definition_id))
+        .unwrap_or(trimmed)
+        .trim_matches('_');
+    if rest.is_empty() {
+        return humanize_setting_id(trimmed);
+    }
+    humanize_setting_id(rest)
+}
+
+fn humanize_setting_id(value: &str) -> String {
+    const SKIP: &[&str] = &[
+        "device",
+        "user",
+        "vendor",
+        "msft",
+        "microsoft",
+        "policy",
+        "config",
+        "admx",
+    ];
+    let parts: Vec<&str> = value
+        .split(|ch: char| ch == '_' || ch == '/' || ch == '~')
+        .filter(|part| !part.is_empty())
+        .filter(|part| !SKIP.iter().any(|skip| part.eq_ignore_ascii_case(skip)))
+        .collect();
+    let words = if parts.is_empty() {
+        value.to_string()
+    } else {
+        parts.join(" ")
+    };
+    title_case_words(&words)
+}
+
+fn title_case_words(value: &str) -> String {
+    value
+        .split_whitespace()
+        .map(|word| {
+            let lower = word.to_ascii_lowercase();
+            match lower.as_str() {
+                "true" | "enabled" => "Enabled".into(),
+                "false" | "disabled" => "Disabled".into(),
+                "allow" => "Allow".into(),
+                "block" => "Block".into(),
+                "none" => "None".into(),
+                _ => {
+                    let mut chars = word.chars();
+                    match chars.next() {
+                        Some(first) => first.to_ascii_uppercase().to_string() + chars.as_str(),
+                        None => String::new(),
+                    }
+                }
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn text_field(value: &Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_string)
+}
+
+fn summarize_assignment_value(value: &Value) -> String {
+    match value {
+        Value::Array(items) => summarize_assignment_list(items),
+        Value::Null => "Unassigned".into(),
+        other => summarize_assignment_list(std::slice::from_ref(other)),
+    }
+}
+
+fn summarize_assignment_list(items: &[Value]) -> String {
+    if items.is_empty() {
+        return "Unassigned".into();
+    }
+    let mut lines: Vec<String> = items.iter().map(summarize_assignment_row).collect();
+    lines.sort();
+    lines.dedup();
+    lines.join("\n")
+}
+
+fn summarize_assignment_row(row: &Value) -> String {
+    let target = row.get("target");
+    let odata = target
+        .and_then(|value| value.get("@odata.type"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let group_id = target
+        .and_then(|value| value.get("groupId"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    let group_name = target
+        .and_then(|value| value.get("groupName"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let who = if odata.contains("allLicensedUsersAssignmentTarget") {
+        "All users".to_string()
+    } else if odata.contains("allDevicesAssignmentTarget") {
+        "All devices".to_string()
+    } else if odata.contains("exclusionGroupAssignmentTarget") {
+        format!("Exclude {}", named_target(group_name, group_id))
+    } else if !group_id.is_empty() || group_name.is_some() {
+        format!("Group {}", named_target(group_name, group_id))
+    } else {
+        "Assignment".to_string()
+    };
+
+    let mut line = who;
+    if let Some(intent) = row.get("intent").and_then(Value::as_str).map(str::trim) {
+        if !intent.is_empty() {
+            line.push_str(" · ");
+            line.push_str(intent);
+        }
+    }
+    let filter_type = target
+        .and_then(|value| value.get("deviceAndAppManagementAssignmentFilterType"))
+        .and_then(Value::as_str)
+        .unwrap_or("none");
+    let filter_id = target
+        .and_then(|value| value.get("deviceAndAppManagementAssignmentFilterId"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    if matches!(filter_type, "include" | "exclude") && !filter_id.is_empty() {
+        let filter_name = target
+            .and_then(|value| value.get("filterName"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let verb = if filter_type == "include" {
+            "include filter"
+        } else {
+            "exclude filter"
+        };
+        line.push_str(" · ");
+        line.push_str(verb);
+        line.push(' ');
+        line.push_str(&named_target(filter_name, filter_id));
+    }
+    line
+}
+
+fn named_target(name: Option<&str>, id: &str) -> String {
+    match name {
+        Some(name) => name.to_string(),
+        None if !id.is_empty() => id.to_string(),
+        None => "unknown".into(),
+    }
+}
+
+/// Group and filter ids that appear in assignment field text, so a compare can
+/// replace them with directory display names.
+pub fn assignment_target_ids(report: &PackDiffReport) -> Vec<String> {
+    let mut ids = Vec::new();
+    for object in &report.objects {
+        for change in &object.field_changes {
+            if change.path != "Assignments" {
+                continue;
+            }
+            if let Some(text) = &change.before {
+                push_guids(text, &mut ids);
+            }
+            if let Some(text) = &change.after {
+                push_guids(text, &mut ids);
+            }
+        }
+    }
+    ids
+}
+
+pub fn label_assignment_ids(report: &mut PackDiffReport, names: &std::collections::HashMap<String, String>) {
+    if names.is_empty() {
+        return;
+    }
+    for object in &mut report.objects {
+        for change in &mut object.field_changes {
+            if change.path != "Assignments" {
+                continue;
+            }
+            if let Some(text) = &mut change.before {
+                replace_known_ids(text, names);
+            }
+            if let Some(text) = &mut change.after {
+                replace_known_ids(text, names);
+            }
+        }
+    }
+}
+
+fn replace_known_ids(text: &mut String, names: &std::collections::HashMap<String, String>) {
+    for (id, name) in names {
+        if text.contains(id.as_str()) {
+            *text = text.replace(id.as_str(), name);
+        }
+    }
+}
+
+fn push_guids(text: &str, ids: &mut Vec<String>) {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() < 36 {
+        return;
+    }
+    let mut index = 0;
+    while index + 36 <= chars.len() {
+        let candidate: String = chars[index..index + 36].iter().collect();
+        if is_guid(&candidate) {
+            if !ids.iter().any(|existing| existing.eq_ignore_ascii_case(&candidate)) {
+                ids.push(candidate);
+            }
+            index += 36;
+        } else {
+            index += 1;
+        }
+    }
+}
+
+fn is_guid(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != 36 {
+        return false;
+    }
+    bytes.iter().enumerate().all(|(index, byte)| match index {
+        8 | 13 | 18 | 23 => *byte == b'-',
+        _ => byte.is_ascii_hexdigit(),
+    })
 }
 
 fn summarize_value(value: &Value) -> String {
@@ -699,6 +1212,84 @@ mod tests {
             .objects
             .iter()
             .any(|o| o.change == PackDiffChangeKind::Changed && o.display_name == "Policy A"));
+
+        let _ = fs::remove_dir_all(&left);
+        let _ = fs::remove_dir_all(&right);
+    }
+
+    #[test]
+    fn assignment_diff_names_the_target() {
+        let left = env::temp_dir().join(format!("axis-diff-asg-l-{}", Uuid::new_v4()));
+        let right = env::temp_dir().join(format!("axis-diff-asg-r-{}", Uuid::new_v4()));
+        let _ = fs::remove_dir_all(&left);
+        let _ = fs::remove_dir_all(&right);
+        fs::create_dir_all(left.join("windows/policies")).unwrap();
+        fs::create_dir_all(right.join("windows/policies")).unwrap();
+        let group_id = "11111111-2222-3333-4444-555555555555";
+        write_pack(
+            &left,
+            "windows/policies/a.json",
+            &json!({
+                "axisExport": { "kind": "catalogPolicy", "sourceId": "id-a" },
+                "name": "Policy A",
+                "settings": [{ "settingInstance": { "settingDefinitionId": "s1", "value": "on" } }],
+                "assignments": [{
+                    "target": {
+                        "@odata.type": "#microsoft.graph.groupAssignmentTarget",
+                        "groupId": group_id,
+                        "deviceAndAppManagementAssignmentFilterType": "include",
+                        "deviceAndAppManagementAssignmentFilterId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+                    }
+                }, {
+                    "target": {
+                        "@odata.type": "#microsoft.graph.allDevicesAssignmentTarget"
+                    }
+                }]
+            }),
+        );
+        write_pack(
+            &right,
+            "windows/policies/a.json",
+            &json!({
+                "axisExport": { "kind": "catalogPolicy", "sourceId": "id-a" },
+                "name": "Policy A",
+                "settings": [{ "settingInstance": { "settingDefinitionId": "s1", "value": "on" } }]
+            }),
+        );
+
+        let mut report = diff_pack_roots(&left, &right, "left", "right").unwrap();
+        let change = report
+            .objects
+            .iter()
+            .find(|object| object.display_name == "Policy A")
+            .and_then(|object| object.field_changes.first())
+            .unwrap();
+        assert_eq!(change.path, "Assignments");
+        let before = change.before.as_deref().unwrap();
+        assert!(before.contains("All devices"));
+        assert!(before.contains(&format!("Group {group_id}")));
+        assert!(before.contains("include filter aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"));
+        assert_eq!(change.after.as_deref(), Some("Unassigned"));
+
+        let ids = assignment_target_ids(&report);
+        assert!(ids.iter().any(|id| id.eq_ignore_ascii_case(group_id)));
+        let mut names = std::collections::HashMap::new();
+        names.insert(group_id.to_string(), "Pilot devices".into());
+        names.insert(
+            "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".into(),
+            "Corporate".into(),
+        );
+        label_assignment_ids(&mut report, &names);
+        let before = report
+            .objects
+            .iter()
+            .find(|object| object.display_name == "Policy A")
+            .and_then(|object| object.field_changes.first())
+            .and_then(|change| change.before.as_deref())
+            .unwrap();
+        assert!(before.contains("Group Pilot devices"));
+        assert!(before.contains("include filter Corporate"));
+        assert!(!before.contains(group_id));
 
         let _ = fs::remove_dir_all(&left);
         let _ = fs::remove_dir_all(&right);

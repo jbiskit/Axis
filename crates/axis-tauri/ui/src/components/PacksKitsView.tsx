@@ -12,9 +12,11 @@ import {
 import type { PackArtifactRow, PackKitSummary, PackWorkspace } from "../types/packs";
 import type { BaselineReferenceSourceInput } from "../types/inventory";
 import { WriteActionButton } from "../lib/readOnly";
+import { BooleanToggle } from "./workbench/BooleanToggle";
 import {
   applyGitHubRepoInput,
   GITHUB_FINE_GRAINED_TOKEN_URL,
+  ACTIVE_PACK_SOURCE_KEY,
   isKitPackSource,
   isLocalSource,
   isSourceReady,
@@ -54,8 +56,6 @@ const CORE_CATEGORIES: Array<{ category: string; label: string }> = [
   { category: "script-compliance", label: "Scripts · Compliance" },
   { category: "applications", label: "Applications" },
 ];
-
-const ACTIVE_PACK_KEY = "axis-packs-active-source-id";
 
 function packSourcesOnly(sources: BaselineReferenceSourceInput[]): BaselineReferenceSourceInput[] {
   return sources
@@ -138,7 +138,7 @@ export function PacksKitsView({
   const [activeSourceId, setActiveSourceId] = useState<string | null>(() => {
     if (preferredSourceId?.trim()) return preferredSourceId.trim();
     try {
-      return window.localStorage.getItem(ACTIVE_PACK_KEY);
+      return window.localStorage.getItem(ACTIVE_PACK_SOURCE_KEY);
     } catch {
       return null;
     }
@@ -223,7 +223,7 @@ export function PacksKitsView({
       setActiveSourceId(id);
       if (id) {
         try {
-          window.localStorage.setItem(ACTIVE_PACK_KEY, id);
+          window.localStorage.setItem(ACTIVE_PACK_SOURCE_KEY, id);
         } catch {
           /* ignore */
         }
@@ -311,7 +311,7 @@ export function PacksKitsView({
       setActiveSourceId(source.id ?? null);
       if (source.id) {
         try {
-          window.localStorage.setItem(ACTIVE_PACK_KEY, source.id);
+          window.localStorage.setItem(ACTIVE_PACK_SOURCE_KEY, source.id);
         } catch {
           /* ignore */
         }
@@ -610,14 +610,14 @@ export function PacksKitsView({
             />
           </label>
           <label className="packs-kits-check">
-            <input
-              type="checkbox"
+            <BooleanToggle
               checked={githubDraft.private === true}
-              onChange={(event) =>
+              ariaLabel="Private repository"
+              onChange={(isPrivate) =>
                 setGithubDraft((current) => ({
                   ...current,
-                  private: event.target.checked,
-                  token: event.target.checked ? current.token : undefined,
+                  private: isPrivate,
+                  token: isPrivate ? current.token : undefined,
                 }))
               }
             />
