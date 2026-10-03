@@ -1,14 +1,16 @@
 //! Client containers — user-chosen folders that scope Axis work to one Entra tenant.
 //!
-//! Layout:
+//! Layout. The folder you pick is the parent. Axis creates a subfolder named
+//! for the client and stores the container there:
 //! ```text
-//! Contoso/
-//!   axis-client.json
-//!   snapshots/
-//!     2026-09-14T103045Z/
-//!       manifest.json
-//!       pack/     # tenant pack export
-//!       report/   # standard environment as-built (html + markdown)
+//! Clients/
+//!   Contoso Ltd/
+//!     axis-client.json
+//!     snapshots/
+//!       2026-09-14T103045Z/
+//!         manifest.json
+//!         pack/     # tenant pack export
+//!         report/   # standard environment as-built (html + markdown)
 //! ```
 
 use chrono::{DateTime, Duration, Utc};
@@ -134,6 +136,40 @@ fn now_rfc3339() -> String {
     Utc::now().to_rfc3339()
 }
 
+/// Folder name for a new container. Keeps the client name, and replaces
+/// characters Windows rejects in a path.
+fn container_folder_name(name: &str) -> Result<String, ClientContainerError> {
+    let mut cleaned = String::new();
+    for ch in name.trim().chars() {
+        if matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') || ch.is_control() {
+            cleaned.push('-');
+        } else {
+            cleaned.push(ch);
+        }
+    }
+    let cleaned = cleaned.trim().trim_end_matches(['.', ' ']).trim().to_string();
+    if cleaned.is_empty() || cleaned == "." || cleaned == ".." {
+        return Err(ClientContainerError::Message(
+            "That client name cannot be used as a folder name.".into(),
+        ));
+    }
+    let stem = cleaned
+        .split('.')
+        .next()
+        .unwrap_or("")
+        .to_ascii_uppercase();
+    const RESERVED: &[&str] = &[
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
+        "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+    if RESERVED.contains(&stem.as_str()) {
+        return Err(ClientContainerError::Message(
+            "That client name cannot be used as a folder name.".into(),
+        ));
+    }
+    Ok(cleaned)
+}
+
 fn slugify_id(name: &str) -> String {
     let mut out = String::new();
     for ch in name.trim().chars() {
@@ -207,13 +243,14 @@ pub fn write_manifest(
     Ok(())
 }
 
-/// Create a new client container in an empty (or new) folder.
+/// Create a new client container in a subfolder of `parent`, named for the client.
+/// Returns that subfolder. Snapshots and later catalog files are stored there.
 pub fn create_container(
-    root: &Path,
+    parent: &Path,
     name: &str,
     tenant_id: &str,
     primary_domain: Option<&str>,
-) -> Result<ClientContainerManifest, ClientContainerError> {
+) -> Result<(PathBuf, ClientContainerManifest), ClientContainerError> {
     let name = name.trim();
     let tenant_id = tenant_id.trim();
     if name.is_empty() {
@@ -227,19 +264,39 @@ pub fn create_container(
         ));
     }
 
-    if root.is_file() {
+    if parent.is_file() {
         return Err(ClientContainerError::Message(
             "That path is a file. Choose a folder.".into(),
         ));
     }
 
-    if manifest_path(root).is_file() {
+    if manifest_path(parent).is_file() {
         return Err(ClientContainerError::Message(
             "That folder already has an axis-client.json. Open it instead.".into(),
         ));
     }
 
-    // Allow empty dirs or dirs that only have unrelated files — but warn if snapshots already exist.
+    let folder = container_folder_name(name)?;
+    let root = parent.join(&folder);
+    if manifest_path(&root).is_file() {
+        return Err(ClientContainerError::Message(format!(
+            "A container named {folder} is already in that folder. Open it instead."
+        )));
+    }
+    if root.is_file() {
+        return Err(ClientContainerError::Message(format!(
+            "A file named {folder} is already in that folder."
+        )));
+    }
+    if root.is_dir() {
+        let occupied = fs::read_dir(&root)?.any(|entry| entry.is_ok());
+        if occupied {
+            return Err(ClientContainerError::Message(format!(
+                "A folder named {folder} already exists and is not empty."
+            )));
+        }
+    }
+
     let now = now_rfc3339();
     let manifest = ClientContainerManifest {
         schema: CLIENT_SCHEMA.into(),
@@ -255,8 +312,8 @@ pub fn create_container(
         last_snapshot_at: None,
         stale_prompt: None,
     };
-    write_manifest(root, &manifest)?;
-    Ok(manifest)
+    write_manifest(&root, &manifest)?;
+    Ok((root, manifest))
 }
 
 pub fn open_container(root: &Path) -> Result<ClientContainerManifest, ClientContainerError> {
@@ -542,7 +599,7 @@ mod tests {
     fn create_open_snooze_roundtrip() {
         let dir = env::temp_dir().join(format!("axis-client-{}", Uuid::new_v4()));
         let _ = fs::remove_dir_all(&dir);
-        let manifest = create_container(
+        let (root, manifest) = create_container(
             &dir,
             "Contoso Ltd",
             "11111111-2222-3333-4444-555555555555",
@@ -550,16 +607,18 @@ mod tests {
         )
         .expect("create");
         assert_eq!(manifest.name, "Contoso Ltd");
-        assert!(manifest_path(&dir).is_file());
+        assert_eq!(root, dir.join("Contoso Ltd"));
+        assert!(manifest_path(&root).is_file());
+        assert!(!manifest_path(&dir).is_file());
 
-        let opened = open_container(&dir).expect("open");
+        let opened = open_container(&root).expect("open");
         assert_eq!(opened.id, manifest.id);
 
         let (stale, reason) = evaluate_stale(&opened, 14);
         assert!(stale);
         assert!(reason.unwrap().contains("No snapshot"));
 
-        let snoozed = snooze_stale_prompt(&dir, 7).expect("snooze");
+        let snoozed = snooze_stale_prompt(&root, 7).expect("snooze");
         let (stale_after, _) = evaluate_stale(&snoozed, 14);
         assert!(!stale_after);
 

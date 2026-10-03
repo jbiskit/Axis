@@ -8,6 +8,7 @@ import {
 import { tokenForSource } from "../lib/baselines/sources";
 import { navigate } from "../lib/route";
 import { useWriteGate } from "../lib/readOnly";
+import { CloseButton } from "./ui/CloseButton";
 import {
   fetchBaselineExport,
   fetchPackArtifactText,
@@ -163,9 +164,7 @@ export function BaselineImportDialog({
               {packArtifactKindLabel(reference.artifactKind)}
             </p>
           </div>
-          <button type="button" className="axis-btn" disabled={saving} onClick={onClose}>
-            Close
-          </button>
+          <CloseButton onClick={onClose} disabled={saving} />
         </div>
         {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
         {loading ? <p className="muted">Downloading pack export…</p> : null}
@@ -392,9 +391,7 @@ export function BaselineBulkImportDialog({
               Import {references.length} pack item{references.length === 1 ? "" : "s"}
             </h2>
           </div>
-          <button type="button" className="axis-btn" disabled={saving} onClick={onClose}>
-            Close
-          </button>
+          <CloseButton onClick={onClose} disabled={saving} />
         </div>
         {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
         {progress ? <p className="muted">{progress}</p> : null}

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { applyPackKit, planPackKitApply } from "../lib/tauri";
 import { WriteActionButton } from "../lib/readOnly";
+import { CloseButton } from "./ui/CloseButton";
 import type { KitApplyMode, KitApplyPlan, KitApplyPlanItem, KitApplyResult } from "../types/packs";
 
 function statusLabel(status: KitApplyPlanItem["status"]): string {
@@ -177,9 +178,13 @@ export function ApplyKitDialog({
             <p className="axis-kicker">Apply kit</p>
             <h2 id="apply-kit-title">{kitName}</h2>
           </div>
-          <button type="button" className="axis-btn" onClick={onClose} disabled={busy}>
-            {result ? "Close" : "Cancel"}
-          </button>
+          {result ? (
+            <CloseButton onClick={onClose} disabled={busy} />
+          ) : (
+            <button type="button" className="axis-btn" onClick={onClose} disabled={busy}>
+              Cancel
+            </button>
+          )}
         </div>
 
         {!result ? (

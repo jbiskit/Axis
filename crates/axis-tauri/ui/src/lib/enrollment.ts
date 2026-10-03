@@ -10,6 +10,7 @@ export const ENROLLMENT_AUTOPILOT_DEVICES_PATH =
   "/intune/enrollment/windows/autopilot/devices";
 export const ENROLLMENT_AUTOPILOT_PROFILES_PATH =
   "/intune/enrollment/windows/autopilot/profiles";
+export const GET_STARTED_AUTOPILOT_PATH = "/intune/get-started/autopilot";
 export const ENROLLMENT_ESP_PATH = "/intune/enrollment/windows/esp";
 export const ENROLLMENT_WINDOWS_HELLO_PATH = "/intune/enrollment/windows/windows-hello";
 export const ENROLLMENT_PLATFORM_RESTRICTIONS_PATH =

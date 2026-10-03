@@ -10,7 +10,7 @@ Microsoft cloud posture console. **Axis** is a **Tauri desktop** app — there i
 | Axis Purview | Planned | |
 | Axis Security | Planned | |
 
-After device-code sign-in, the desktop window opens the Intune workspace.
+After browser sign-in, the desktop window opens the Intune workspace.
 
 Desktop how-to (auth, env vars, layout): [`crates/axis-tauri/README.md`](crates/axis-tauri/README.md).
 
@@ -28,7 +28,7 @@ There is no `engines` field in `crates/axis-tauri/ui/package.json`. Versions bel
 
 Rust workspace members (`Cargo.toml` at the repo root):
 
-- `crates/axis-sdk` — device-code auth + Graph
+- `crates/axis-sdk` — browser sign-in + Graph
 - `crates/axis-tauri/src-tauri` — Tauri backend (binary name `axis`)
 
 ## Setup
@@ -133,7 +133,7 @@ Desktop auth details: [`crates/axis-tauri/README.md`](crates/axis-tauri/README.m
 ```
 Cargo.toml                         # Rust workspace
 crates/
-  axis-sdk/                        # Rust: device-code + Graph
+  axis-sdk/                        # Rust: browser sign-in + Graph
   axis-tauri/
     src-tauri/                     # Tauri backend + tauri.conf.json (do not run cargo tauri here)
     ui/                            # Vite + React desktop frontend

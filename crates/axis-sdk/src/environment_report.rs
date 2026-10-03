@@ -14,6 +14,7 @@ use crate::inventory::{
 };
 use crate::compliance_status::device_status_overview_path;
 use crate::object_detail::{fetch_graph_object_detail, GraphObjectDetail};
+use crate::object_metadata::{mobile_app_relationships, MobileAppDeleteLink};
 use crate::pack_export::graph_fetch_concurrency;
 use crate::policy_health::{
     fetch_app_install_health, fetch_configuration_policy_health, index_app_install,
@@ -263,6 +264,7 @@ struct AppInventory {
     by_mechanism: Vec<(String, u32, u32)>,
     failing: Vec<(String, String, u32)>,
     cards: Vec<ReportCard>,
+    relationships: Vec<MobileAppDeleteLink>,
 }
 
 pub async fn generate_environment_report(
@@ -730,10 +732,27 @@ pub async fn generate_environment_report(
                     && EnvironmentReportSelection::allows_id(&selection.app_ids, &app.id)
             })
             .collect();
+        let relationship_ids: Vec<String> = apps
+            .iter()
+            .filter(|app| app_may_have_relationships(app))
+            .map(|app| app.id.clone())
+            .collect();
         let (inventory, ids) =
             collect_app_inventory(access_token, &apps, &on_progress, &mut warnings).await;
         app_inventory = inventory;
         app_group_ids = ids;
+        if !relationship_ids.is_empty() {
+            on_progress(progress(
+                "apps",
+                0,
+                0,
+                "Loading application dependencies…",
+            ));
+            match mobile_app_relationships(access_token, &relationship_ids).await {
+                Ok(links) => app_inventory.relationships = links,
+                Err(error) => warnings.push(format!("Application dependencies: {error}")),
+            }
+        }
     }
 
     on_progress(progress("assignments", 0, 0, "Resolving group names…"));
@@ -861,6 +880,7 @@ fn empty_app_inventory() -> AppInventory {
         by_mechanism: Vec::new(),
         failing: Vec::new(),
         cards: Vec::new(),
+        relationships: Vec::new(),
     }
 }
 
@@ -3131,6 +3151,7 @@ async fn collect_app_inventory<F: Fn(EnvironmentReportProgress)>(
             by_mechanism,
             failing,
             cards,
+            relationships: Vec::new(),
         },
         group_ids,
     )
@@ -3426,10 +3447,20 @@ fn render_html(
     }
 
     if platform_object_count(&layout.cross_platform.sections) > 0 {
-        body.push_str(&render_platform_chapter(&layout.cross_platform, glance, true));
+        body.push_str(&render_platform_chapter(
+            &layout.cross_platform,
+            glance,
+            true,
+            &apps.relationships,
+        ));
     }
     for platform in &layout.platforms {
-        body.push_str(&render_platform_chapter(platform, glance, false));
+        body.push_str(&render_platform_chapter(
+            platform,
+            glance,
+            false,
+            &apps.relationships,
+        ));
     }
 
     if !warnings.is_empty() {
@@ -3760,10 +3791,397 @@ fn render_summary_section(
     render_fold("fold chapter", "summary", "Summary", None, true, &inner)
 }
 
+fn app_may_have_relationships(app: &MobileAppSummary) -> bool {
+    let type_name = app
+        .odata_type
+        .as_deref()
+        .unwrap_or("")
+        .trim_start_matches('#')
+        .to_ascii_lowercase();
+    if type_name.is_empty()
+        || type_name.contains("winget")
+        || type_name.contains("store")
+        || type_name.contains("office")
+        || type_name.contains("edge")
+    {
+        return false;
+    }
+    type_name.contains("win32")
+        || type_name.contains("lobapp")
+        || type_name.contains("msi")
+        || type_name.contains("macosdmg")
+        || type_name.contains("macospkg")
+        || type_name.contains("macoslob")
+}
+
+fn links_touching_cards<'a>(
+    cards: &'a [ReportCard],
+    links: &'a [MobileAppDeleteLink],
+) -> Vec<&'a MobileAppDeleteLink> {
+    let ids: HashSet<String> = cards
+        .iter()
+        .map(|card| card.source_id.to_ascii_lowercase())
+        .collect();
+    links
+        .iter()
+        .filter(|link| {
+            ids.contains(&link.source_id.to_ascii_lowercase())
+                || ids.contains(&link.target_id.to_ascii_lowercase())
+        })
+        .collect()
+}
+
+fn dependency_name(id: &str, fallback: &str, names: &HashMap<String, String>) -> String {
+    if let Some(name) = names.get(&id.to_ascii_lowercase()) {
+        let trimmed = name.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    let fallback = fallback.trim();
+    if fallback.is_empty() {
+        id.to_string()
+    } else {
+        fallback.to_string()
+    }
+}
+
+fn card_label(card: &ReportCard) -> String {
+    let version = card
+        .metadata
+        .iter()
+        .find(|row| row.name == "Version")
+        .map(|row| row.value.trim())
+        .filter(|value| !value.is_empty());
+    match version {
+        Some(version) => format!("{} · {version}", card.title),
+        None => card.title.clone(),
+    }
+}
+
+fn card_names(cards: &[ReportCard]) -> HashMap<String, String> {
+    cards
+        .iter()
+        .map(|card| (card.source_id.to_ascii_lowercase(), card_label(card)))
+        .collect()
+}
+
+fn label_parts(label: &str) -> (&str, Option<&str>) {
+    match label.rfind(" · ") {
+        Some(at) if at > 0 => {
+            let version = label[at + " · ".len()..].trim();
+            if version.is_empty() {
+                (label, None)
+            } else {
+                (&label[..at], Some(version))
+            }
+        }
+        _ => (label, None),
+    }
+}
+
+fn describe_app_link(link: &MobileAppDeleteLink, names: &HashMap<String, String>) -> String {
+    let parent = dependency_name(&link.source_id, &link.source_name, names);
+    let child = dependency_name(&link.target_id, &link.target_name, names);
+    if link.relationship == "supersedence" {
+        if link.relationship_type == "replace" {
+            format!("{parent} supersedes and replaces {child}.")
+        } else {
+            format!("{parent} supersedes {child}.")
+        }
+    } else if link.relationship_type == "autoInstall" {
+        format!("{child} is a dependency for {parent}. Intune installs {child} automatically before {parent}.")
+    } else {
+        format!("{child} is a dependency for {parent}. {parent} requires {child} to be installed already.")
+    }
+}
+
+fn short_app_name(name: &str) -> String {
+    let text = name.trim();
+    let text = if text.is_empty() { "App" } else { text };
+    let mut chars = text.chars();
+    let mut short = String::new();
+    for _ in 0..23 {
+        match chars.next() {
+            Some(ch) => short.push(ch),
+            None => return text.to_string(),
+        }
+    }
+    if chars.next().is_some() {
+        short.push('…');
+        short
+    } else {
+        text.to_string()
+    }
+}
+
+struct PlacedAppNode {
+    name: String,
+    x: f64,
+    y: f64,
+}
+
+fn layout_dependency_links(
+    links: &[&MobileAppDeleteLink],
+    names: &HashMap<String, String>,
+) -> (Vec<(String, PlacedAppNode)>, f64, f64) {
+    const NODE_W: f64 = 176.0;
+    const NODE_H: f64 = 52.0;
+    const COL_GAP: f64 = 88.0;
+    const ROW_GAP: f64 = 18.0;
+    const PAD: f64 = 22.0;
+
+    let mut nodes: HashMap<String, (String, String)> = HashMap::new();
+    for link in links {
+        for (id, fallback) in [
+            (link.source_id.as_str(), link.source_name.as_str()),
+            (link.target_id.as_str(), link.target_name.as_str()),
+        ] {
+            let key = id.to_ascii_lowercase();
+            nodes.entry(key).or_insert_with(|| {
+                (
+                    id.to_string(),
+                    dependency_name(id, fallback, names),
+                )
+            });
+        }
+    }
+    let mut children: HashMap<String, Vec<String>> = HashMap::new();
+    for link in links {
+        let parent = link.source_id.to_ascii_lowercase();
+        let child = link.target_id.to_ascii_lowercase();
+        let list = children.entry(parent).or_default();
+        if !list.iter().any(|existing| existing == &child) {
+            list.push(child);
+        }
+    }
+    let mut ranks: HashMap<String, i32> = HashMap::new();
+    let mut visiting = HashSet::new();
+    fn rank_of(
+        id: &str,
+        children: &HashMap<String, Vec<String>>,
+        ranks: &mut HashMap<String, i32>,
+        visiting: &mut HashSet<String>,
+    ) -> i32 {
+        if let Some(cached) = ranks.get(id) {
+            return *cached;
+        }
+        if !visiting.insert(id.to_string()) {
+            return 0;
+        }
+        let mut value = 0;
+        if let Some(next) = children.get(id) {
+            for child in next {
+                value = value.max(rank_of(child, children, ranks, visiting) + 1);
+            }
+        }
+        visiting.remove(id);
+        ranks.insert(id.to_string(), value);
+        value
+    }
+    let ids: Vec<String> = nodes.keys().cloned().collect();
+    for id in &ids {
+        rank_of(id, &children, &mut ranks, &mut visiting);
+    }
+    let min_rank = ranks.values().copied().min().unwrap_or(0).min(0);
+    let mut columns: BTreeMap<i32, Vec<String>> = BTreeMap::new();
+    for id in nodes.keys() {
+        let column = ranks.get(id).copied().unwrap_or(0) - min_rank;
+        columns.entry(column).or_default().push(id.clone());
+    }
+    let mut max_rows = 1usize;
+    let mut max_rank = 0i32;
+    for (column, list) in &mut columns {
+        list.sort_by(|left, right| {
+            nodes
+                .get(left)
+                .map(|(_, name)| name.as_str())
+                .unwrap_or("")
+                .to_lowercase()
+                .cmp(
+                    &nodes
+                        .get(right)
+                        .map(|(_, name)| name.as_str())
+                        .unwrap_or("")
+                        .to_lowercase(),
+                )
+        });
+        max_rows = max_rows.max(list.len());
+        max_rank = max_rank.max(*column);
+    }
+    let mut placed = Vec::new();
+    for (column, list) in &columns {
+        for (index, id) in list.iter().enumerate() {
+            let Some((_, name)) = nodes.get(id) else {
+                continue;
+            };
+            placed.push((
+                id.clone(),
+                PlacedAppNode {
+                    name: name.clone(),
+                    x: PAD + f64::from(*column) * (NODE_W + COL_GAP),
+                    y: PAD + index as f64 * (NODE_H + ROW_GAP),
+                },
+            ));
+        }
+    }
+    let width = PAD * 2.0 + f64::from(max_rank + 1) * NODE_W + f64::from(max_rank) * COL_GAP;
+    let height = PAD * 2.0 + max_rows as f64 * NODE_H + (max_rows.saturating_sub(1) as f64) * ROW_GAP;
+    (placed, width, height)
+}
+
+fn render_dependency_graph(
+    platform_id: &str,
+    cards: &[ReportCard],
+    relationships: &[MobileAppDeleteLink],
+) -> String {
+    let links = links_touching_cards(cards, relationships);
+    if links.is_empty() {
+        return String::new();
+    }
+    let names = card_names(cards);
+    let (placed, width, height) = layout_dependency_links(&links, &names);
+    let arrow = format!("dep-arrow-{platform_id}");
+    let arrow_super = format!("dep-arrow-super-{platform_id}");
+    let mut svg = format!(
+        r#"<svg width="{width}" height="{height}" role="img" aria-label="Dependency graph"><defs><marker id="{arrow}" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M 0 0 L 8 4 L 0 8 z" class="app-dep-arrow" /></marker><marker id="{arrow_super}" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M 0 0 L 8 4 L 0 8 z" class="app-dep-arrow is-supersedence" /></marker></defs>"#
+    );
+    {
+    let placed_by_id: HashMap<String, &PlacedAppNode> = placed
+        .iter()
+        .map(|(id, node)| (id.clone(), node))
+        .collect();
+    for (index, link) in links.iter().enumerate() {
+        let Some(child) = placed_by_id.get(&link.target_id.to_ascii_lowercase()) else {
+            continue;
+        };
+        let Some(parent) = placed_by_id.get(&link.source_id.to_ascii_lowercase()) else {
+            continue;
+        };
+        let same: Vec<usize> = links
+            .iter()
+            .enumerate()
+            .filter(|(_, other)| {
+                other.source_id.eq_ignore_ascii_case(&link.source_id)
+                    && other.target_id.eq_ignore_ascii_case(&link.target_id)
+            })
+            .map(|(pair_index, _)| pair_index)
+            .collect();
+        let pos = same.iter().position(|pair_index| *pair_index == index).unwrap_or(0) as f64;
+        let offset = (pos - (same.len() as f64 - 1.0) / 2.0) * 8.0;
+        let x1 = child.x + 176.0;
+        let y1 = child.y + 26.0 + offset;
+        let x2 = parent.x;
+        let y2 = parent.y + 26.0 + offset;
+        let mid = (x1 + x2) / 2.0;
+        let supersedes = link.relationship == "supersedence";
+        let class = if supersedes {
+            "app-dep-edge is-supersedence"
+        } else {
+            "app-dep-edge"
+        };
+        let marker = if supersedes { &arrow_super } else { &arrow };
+        svg.push_str(&format!(
+            r#"<path d="M {x1} {y1} C {mid} {y1}, {mid} {y2}, {x2} {y2}" class="{class}" marker-end="url(#{marker})"><title>{}</title></path>"#,
+            escape_html(&describe_app_link(link, &names))
+        ));
+    }
+    }
+    for (_, node) in &placed {
+        let (name, version) = label_parts(&node.name);
+        let name_y = if version.is_some() { node.y + 20.0 } else { node.y + 26.0 };
+        svg.push_str(&format!(
+            r#"<g><title>{}</title><rect x="{}" y="{}" width="176" height="52" rx="8" class="app-dep-node" /><text x="{}" y="{name_y}" text-anchor="middle" dominant-baseline="central" class="app-dep-node-label">{}</text>"#,
+            escape_html(&node.name),
+            node.x,
+            node.y,
+            node.x + 88.0,
+            escape_html(&short_app_name(name))
+        ));
+        if let Some(version) = version {
+            svg.push_str(&format!(
+                r#"<text x="{}" y="{}" text-anchor="middle" dominant-baseline="central" class="app-dep-node-version">{}</text>"#,
+                node.x + 88.0,
+                node.y + 38.0,
+                escape_html(&short_app_name(version))
+            ));
+        }
+        svg.push_str("</g>");
+    }
+    svg.push_str("</svg>");
+    let mut list = String::from("<ul>");
+    for link in &links {
+        list.push_str(&format!(
+            "<li>{}</li>",
+            escape_html(&describe_app_link(link, &names))
+        ));
+    }
+    list.push_str("</ul>");
+    format!(
+        r#"<figure class="app-dep"><figcaption>Dependencies</figcaption><p class="narrative">The app on the left is the dependency. The arrow points to the app that requires it. A dashed arrow is supersedence and points to the newer app.</p><div class="app-dep-graph">{svg}</div>{list}</figure>"#
+    )
+}
+
+fn md_dependency_graph(cards: &[ReportCard], relationships: &[MobileAppDeleteLink]) -> String {
+    let links = links_touching_cards(cards, relationships);
+    if links.is_empty() {
+        return String::new();
+    }
+    let names = card_names(cards);
+    let mut ids: Vec<String> = Vec::new();
+    let mut labels: HashMap<String, String> = HashMap::new();
+    for link in &links {
+        for (id, fallback) in [
+            (link.source_id.as_str(), link.source_name.as_str()),
+            (link.target_id.as_str(), link.target_name.as_str()),
+        ] {
+            let key = id.to_ascii_lowercase();
+            if !labels.contains_key(&key) {
+                ids.push(key.clone());
+                labels.insert(key, dependency_name(id, fallback, &names));
+            }
+        }
+    }
+    let mut out = String::from("#### Dependencies\n\nThe app on the left is the dependency. The arrow points to the app that requires it. A dashed arrow is supersedence.\n\n```mermaid\nflowchart LR\n");
+    for (index, key) in ids.iter().enumerate() {
+        let label = labels
+            .get(key)
+            .map(|name| name.replace('"', "'"))
+            .unwrap_or_default();
+        out.push_str(&format!("  n{index}[\"{label}\"]\n"));
+    }
+    for link in &links {
+        let child = ids
+            .iter()
+            .position(|id| id == &link.target_id.to_ascii_lowercase());
+        let parent = ids
+            .iter()
+            .position(|id| id == &link.source_id.to_ascii_lowercase());
+        let (Some(child), Some(parent)) = (child, parent) else {
+            continue;
+        };
+        if link.relationship == "supersedence" {
+            out.push_str(&format!("  n{child} -.-> n{parent}\n"));
+        } else {
+            out.push_str(&format!("  n{child} --> n{parent}\n"));
+        }
+    }
+    out.push_str("```\n\n");
+    for link in &links {
+        out.push_str(&format!(
+            "- {}\n",
+            escape_markdown(&describe_app_link(link, &names))
+        ));
+    }
+    out.push('\n');
+    out
+}
+
 fn render_platform_chapter(
     platform: &PlatformSections,
     glance: &TenantGlance,
     is_cross: bool,
+    relationships: &[MobileAppDeleteLink],
 ) -> String {
     let id = slug(&platform.name);
     let count = platform_object_count(&platform.sections);
@@ -3803,8 +4221,16 @@ fn render_platform_chapter(
             continue;
         };
         let mut section_body = String::new();
+        let app_labels = if section == SECTION_APPS {
+            card_names(cards)
+        } else {
+            HashMap::new()
+        };
+        if section == SECTION_APPS {
+            section_body.push_str(&render_dependency_graph(&id, cards, relationships));
+        }
         for card in cards {
-            section_body.push_str(&render_card(card));
+            section_body.push_str(&render_card(card, relationships, &app_labels));
         }
         inner.push_str(&render_fold(
             "fold platform-block",
@@ -3955,7 +4381,134 @@ fn stat(label: &str, value: &str) -> String {
     )
 }
 
-fn render_card(card: &ReportCard) -> String {
+fn app_object_dependency_groups(
+    card: &ReportCard,
+    relationships: &[MobileAppDeleteLink],
+    known_names: &HashMap<String, String>,
+) -> Vec<(&'static str, Vec<String>)> {
+    if card.section != SECTION_APPS {
+        return Vec::new();
+    }
+    let id = card.source_id.to_ascii_lowercase();
+    let links: Vec<&MobileAppDeleteLink> = relationships
+        .iter()
+        .filter(|link| {
+            link.source_id.eq_ignore_ascii_case(&id) || link.target_id.eq_ignore_ascii_case(&id)
+        })
+        .collect();
+    if links.is_empty() {
+        return Vec::new();
+    }
+    let mut names = known_names.clone();
+    names.insert(id.clone(), card_label(card));
+    for link in &links {
+        names
+            .entry(link.source_id.to_ascii_lowercase())
+            .or_insert_with(|| link.source_name.clone());
+        names
+            .entry(link.target_id.to_ascii_lowercase())
+            .or_insert_with(|| link.target_name.clone());
+    }
+    let mut requires = Vec::new();
+    let mut dependency_for = Vec::new();
+    let mut supersedes = Vec::new();
+    let mut superseded_by = Vec::new();
+    for link in &links {
+        let parent = dependency_name(&link.source_id, &link.source_name, &names);
+        let child = dependency_name(&link.target_id, &link.target_name, &names);
+        let is_source = link.source_id.eq_ignore_ascii_case(&id);
+        if link.relationship == "supersedence" {
+            if is_source {
+                supersedes.push(if link.relationship_type == "replace" {
+                    format!("{child} — this app replaces it.")
+                } else {
+                    format!("{child} — this app supersedes it.")
+                });
+            } else {
+                superseded_by.push(if link.relationship_type == "replace" {
+                    format!("{parent} replaces this app.")
+                } else {
+                    format!("{parent} supersedes this app.")
+                });
+            }
+        } else if is_source {
+            requires.push(if link.relationship_type == "autoInstall" {
+                format!("{child} — Intune installs it automatically before this app.")
+            } else {
+                format!("{child} — this app requires it to be installed already.")
+            });
+        } else if link.relationship_type == "autoInstall" {
+            dependency_for.push(format!(
+                "{parent} — Intune installs this app automatically before {parent}."
+            ));
+        } else {
+            dependency_for.push(format!(
+                "{parent} — {parent} requires this app to be installed already."
+            ));
+        }
+    }
+    let mut groups = Vec::new();
+    for (label, mut rows) in [
+        ("Requires", requires),
+        ("Dependency for", dependency_for),
+        ("Supersedes", supersedes),
+        ("Superseded by", superseded_by),
+    ] {
+        if rows.is_empty() {
+            continue;
+        }
+        rows.sort_by(|left, right| left.to_lowercase().cmp(&right.to_lowercase()));
+        groups.push((label, rows));
+    }
+    groups
+}
+
+fn app_object_dependencies_html(
+    card: &ReportCard,
+    relationships: &[MobileAppDeleteLink],
+    known_names: &HashMap<String, String>,
+) -> String {
+    let groups = app_object_dependency_groups(card, relationships, known_names);
+    if groups.is_empty() {
+        return String::new();
+    }
+    let mut html = String::from(r#"<div class="app-object-deps"><h5>Dependencies</h5>"#);
+    for (label, rows) in groups {
+        html.push_str(&format!("<p><strong>{}</strong></p><ul>", escape_html(label)));
+        for row in rows {
+            html.push_str(&format!("<li>{}</li>", escape_html(&row)));
+        }
+        html.push_str("</ul>");
+    }
+    html.push_str("</div>");
+    html
+}
+
+fn app_object_dependencies_md(
+    card: &ReportCard,
+    relationships: &[MobileAppDeleteLink],
+    known_names: &HashMap<String, String>,
+) -> String {
+    let groups = app_object_dependency_groups(card, relationships, known_names);
+    if groups.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("##### Dependencies\n\n");
+    for (label, rows) in groups {
+        out.push_str(&format!("**{label}**\n\n"));
+        for row in rows {
+            out.push_str(&format!("- {}\n", escape_markdown(&row)));
+        }
+        out.push('\n');
+    }
+    out
+}
+
+fn render_card(
+    card: &ReportCard,
+    relationships: &[MobileAppDeleteLink],
+    known_names: &HashMap<String, String>,
+) -> String {
     let mut html = format!(
         r#"<article class="card">
 <header>
@@ -3973,6 +4526,7 @@ fn render_card(card: &ReportCard) -> String {
         },
     );
     html.push_str(&render_card_status_strip(card));
+    html.push_str(&app_object_dependencies_html(card, relationships, known_names));
     if let Some(note) = &card.note {
         html.push_str(&format!("<p class=\"note\">{}</p>", escape_html(note)));
     }
@@ -4208,11 +4762,21 @@ fn render_markdown(
     }
 
     if platform_object_count(&layout.cross_platform.sections) > 0 {
-        out.push_str(&md_platform_chapter(&layout.cross_platform, glance, true));
+        out.push_str(&md_platform_chapter(
+            &layout.cross_platform,
+            glance,
+            true,
+            &apps.relationships,
+        ));
         out.push('\n');
     }
     for platform in &layout.platforms {
-        out.push_str(&md_platform_chapter(platform, glance, false));
+        out.push_str(&md_platform_chapter(
+            platform,
+            glance,
+            false,
+            &apps.relationships,
+        ));
         out.push('\n');
     }
 
@@ -4477,6 +5041,7 @@ fn md_platform_chapter(
     platform: &PlatformSections,
     glance: &TenantGlance,
     is_cross: bool,
+    relationships: &[MobileAppDeleteLink],
 ) -> String {
     let id = slug(&platform.name);
     let count = platform_object_count(&platform.sections);
@@ -4528,8 +5093,16 @@ fn md_platform_chapter(
             cards.len(),
             slug(section)
         ));
+        let app_labels = if section == SECTION_APPS {
+            card_names(cards)
+        } else {
+            HashMap::new()
+        };
+        if section == SECTION_APPS {
+            out.push_str(&md_dependency_graph(cards, relationships));
+        }
         for card in cards {
-            out.push_str(&md_card(card));
+            out.push_str(&md_card(card, relationships, &app_labels));
             out.push('\n');
         }
     }
@@ -4662,7 +5235,11 @@ fn md_simple_table(headers: &[&str], rows: &[Vec<String>]) -> String {
     out
 }
 
-fn md_card(card: &ReportCard) -> String {
+fn md_card(
+    card: &ReportCard,
+    relationships: &[MobileAppDeleteLink],
+    known_names: &HashMap<String, String>,
+) -> String {
     let mut out = format!(
         "#### {}\n\n*{} · {}*\n\n",
         escape_markdown(&card.title),
@@ -4673,6 +5250,7 @@ fn md_card(card: &ReportCard) -> String {
         out.push_str(&format!("{}\n\n", escape_markdown(&card.description)));
     }
     out.push_str(&md_card_status_strip(card));
+    out.push_str(&app_object_dependencies_md(card, relationships, known_names));
     if let Some(note) = &card.note {
         out.push_str(&format!("> {}\n\n", escape_markdown(note)));
     }
@@ -4948,7 +5526,21 @@ details.fold.chapter > .fold-body > details.fold.platform-block:first-child {
 .fold-body { padding: .35rem 0 .15rem .2rem; }
 .toc ol { padding-left: 1.1rem; }
 .toc ol ol { margin: .25rem 0 .4rem; }
-.toc a { color: var(--text); text-decoration: none; }
+.toc a, .toc a[data-doclink] { color: var(--text); text-decoration: none; cursor: pointer; }
+.app-object-deps { margin: .75rem 0 .15rem; padding-top: .65rem; border-top: 1px solid var(--surface); }
+.app-object-deps h5 { margin: 0 0 .35rem; font-size: .72rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.app-object-deps p { margin: .45rem 0 .15rem; font-size: .85rem; }
+.app-object-deps ul { margin: 0 0 .15rem; padding-left: 1.1rem; }
+.app-object-deps li { margin: .15rem 0; font-size: .85rem; color: var(--sub); }
+.app-dep { margin: 0 0 1.25rem; }
+.app-dep-graph { overflow: auto; margin: .35rem 0 .75rem; }
+.app-dep-edge { fill: none; stroke: var(--blue); stroke-width: 1.6; }
+.app-dep-edge.is-supersedence { stroke: var(--peach); stroke-dasharray: 5 4; }
+.app-dep-arrow { fill: var(--blue); }
+.app-dep-arrow.is-supersedence { fill: var(--peach); }
+.app-dep-node { fill: var(--base); stroke: var(--overlay); }
+.app-dep-node-label { fill: var(--text); font-size: 12px; font-family: ui-sans-serif, system-ui, "Segoe UI", sans-serif; }
+.app-dep-node-version { fill: var(--muted); font-size: 10px; font-family: ui-sans-serif, system-ui, "Segoe UI", sans-serif; }
 .toc span { color: var(--muted); }
 .warnings { color: var(--yellow); }
 .card {
@@ -5011,6 +5603,10 @@ a:focus { outline: 2px solid var(--blue); outline-offset: 2px; }
   details.fold > summary::before { content: none; }
   .card { break-inside: avoid; box-shadow: none; }
   .toc a { color: #000; }
+  .app-dep-node { fill: #fff; stroke: #ccc; }
+  .app-dep-node-label { fill: #111; }
+  .app-dep-edge { stroke: #1d4e89; }
+  .app-dep-arrow { fill: #1d4e89; }
   table th, table td { border-top-color: #ddd; }
 }
 "#;
@@ -5032,12 +5628,17 @@ const REPORT_JS: &str = r#"
     if (el) reveal(el);
   }
   document.addEventListener("click", function (event) {
-    var link = event.target.closest("a[href^='#']");
+    var link = event.target.closest("a[href^='#'], a[data-doclink]");
     if (!link) return;
-    var id = (link.getAttribute("href") || "").replace(/^#/, "");
+    event.preventDefault();
+    var id = link.getAttribute("data-doclink");
+    if (!id) {
+      var raw = (link.getAttribute("href") || "").replace(/^#/, "");
+      try { id = decodeURIComponent(raw); } catch (err) { id = raw; }
+    }
     var el = id ? document.getElementById(id) : null;
     if (el) reveal(el);
-  });
+  }, true);
   window.addEventListener("hashchange", revealHash);
   revealHash();
 })();
@@ -5134,7 +5735,7 @@ mod tests {
             app_install: None,
             note: None,
         };
-        let md = md_card(&card);
+        let md = md_card(&card, &[], &HashMap::new());
         assert!(md.contains(r#"BitLocker \*strict\*"#));
         assert!(md.contains("Require device encryption"));
         assert!(md.contains("Enabled"));

@@ -60,13 +60,14 @@ const CHAPTER_OPTIONS: { key: keyof EnvironmentReportSelection; label: string }[
 const CONTENT_OPTIONS: {
   key: "policies" | "updates" | "apps" | "enrollment" | "scripts";
   label: string;
+  noun?: string;
   idsKey?: "policyIds" | "appIds" | "enrollmentIds" | "scriptIds";
 }[] = [
-  { key: "policies", label: "Policies", idsKey: "policyIds" },
+  { key: "policies", label: "Policies", noun: "policy", idsKey: "policyIds" },
   { key: "updates", label: "Updates" },
-  { key: "apps", label: "Apps", idsKey: "appIds" },
-  { key: "enrollment", label: "Enrollment", idsKey: "enrollmentIds" },
-  { key: "scripts", label: "Scripts", idsKey: "scriptIds" },
+  { key: "apps", label: "Apps", noun: "app", idsKey: "appIds" },
+  { key: "enrollment", label: "Enrollment", noun: "enrollment object", idsKey: "enrollmentIds" },
+  { key: "scripts", label: "Scripts", noun: "script", idsKey: "scriptIds" },
 ];
 
 const PLATFORM_OPTIONS: { key: keyof EnvironmentReportSelection; label: string }[] = [
@@ -92,6 +93,16 @@ function pathToFileUrl(path: string): string {
     return `file://${normalized}`;
   }
   return `file:///${normalized}`;
+}
+
+const PREVIEW_LINK_GUARD = `<script>(function(){function reveal(el){var node=el;while(node){if(node.tagName==="DETAILS")node.open=true;node=node.parentElement;}el.scrollIntoView({block:"start"});}document.addEventListener("click",function(event){var link=event.target.closest&&event.target.closest("a[href^='#'], a[data-doclink]");if(!link)return;event.preventDefault();var id=link.getAttribute("data-doclink");if(!id){var raw=(link.getAttribute("href")||"").replace(/^#/,"");try{id=decodeURIComponent(raw);}catch(err){id=raw;}}var target=id?document.getElementById(id):null;if(target)reveal(target);},true);})();</script>`;
+
+function previewDocument(html: string): string {
+  const guarded = html.replace(/<a href="#([^"]*)">/g, '<a data-doclink="$1" tabindex="0">');
+  if (guarded.includes("</body>")) {
+    return guarded.replace("</body>", `${PREVIEW_LINK_GUARD}</body>`);
+  }
+  return `${guarded}${PREVIEW_LINK_GUARD}`;
 }
 
 function SelectionCheck({
@@ -125,10 +136,15 @@ function SelectionChip({
   onChange: (next: boolean) => void;
 }) {
   return (
-    <label className="environment-report-chip">
-      <BooleanToggle checked={checked} disabled={disabled} ariaLabel={label} onChange={onChange} />
-      <span>{label}</span>
-    </label>
+    <button
+      type="button"
+      className={`environment-report-chip${checked ? " is-on" : ""}`}
+      aria-pressed={checked}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+    >
+      {label}
+    </button>
   );
 }
 
@@ -153,7 +169,7 @@ function policyKindLabel(kind: string, platforms?: string | null): string {
 }
 
 function ReportItemPicker({
-  allLabel,
+  noun,
   allMode,
   selectedIds,
   rows,
@@ -164,7 +180,7 @@ function ReportItemPicker({
   onAllChange,
   onSelectedIdsChange,
 }: {
-  allLabel: string;
+  noun: string;
   allMode: boolean;
   selectedIds: string[];
   rows: PickerRow[];
@@ -193,13 +209,35 @@ function ReportItemPicker({
 
   return (
     <div className="environment-report-item-picker">
-      <SelectionCheck
-        label={allLabel}
-        checked={allMode}
-        disabled={disabled}
-        onChange={onAllChange}
-      />
-      {!allMode ? (
+      <div className="environment-report-scope" role="group" aria-label={`Which ${noun} to include`}>
+        <button
+          type="button"
+          className={allMode ? "is-on" : ""}
+          aria-pressed={allMode}
+          disabled={disabled}
+          onClick={() => {
+            if (!allMode) onAllChange(true);
+          }}
+        >
+          Everything
+        </button>
+        <button
+          type="button"
+          className={allMode ? "" : "is-on"}
+          aria-pressed={!allMode}
+          disabled={disabled}
+          onClick={() => {
+            if (allMode) onAllChange(false);
+          }}
+        >
+          Choose
+        </button>
+      </div>
+      {allMode ? (
+        <p className="muted environment-report-item-picker-status">
+          {`Every ${noun} in the selected platforms is included.`}
+        </p>
+      ) : (
         <div className="environment-report-item-picker-body">
           <div className="environment-report-item-picker-toolbar">
             <input
@@ -267,7 +305,7 @@ function ReportItemPicker({
             {`${selected.size} selected${truncated ? " · list may be truncated" : ""}`}
           </p>
         </div>
-      ) : null}
+      )}
     </div>
   );
 }
@@ -499,68 +537,78 @@ export function EnvironmentReportView({
     : null;
 
   const isAllMode = (ids: string[] | null | undefined) => ids == null;
+  const canGenerate =
+    selection.summary ||
+    selection.devices ||
+    selection.groups ||
+    selection.policies ||
+    selection.updates ||
+    selection.apps ||
+    selection.enrollment ||
+    selection.scripts;
+  const snapshotLabel =
+    report == null
+      ? null
+      : report.warnings.length > 0
+        ? `${report.objectCount} objects · ${report.warnings.length} note${report.warnings.length === 1 ? "" : "s"} in the document`
+        : `${report.objectCount} objects in this snapshot`;
 
   return (
     <div className="stack environment-report">
       <PageHeader
         title="Environment report"
-        description="A portable HTML or Markdown as-built of how Intune is configured today. Choose what to include, set who the report is for, generate a snapshot, preview it here, then save a single file to share, archive, or print."
-        actions={
-          <>
-            <button
-              type="button"
-              className="axis-btn axis-btn-primary"
-              onClick={() => void generate()}
-              disabled={!signedIn || busy}
-            >
-              {busy ? "Generating…" : report ? "Regenerate" : "Generate"}
-            </button>
-            <button type="button" className="axis-btn" onClick={() => void save()} disabled={!report || busy}>
-              Save HTML
-            </button>
-            <button
-              type="button"
-              className="axis-btn"
-              onClick={() => void saveMarkdown()}
-              disabled={!report || busy}
-            >
-              Save as Markdown
-            </button>
-            {savedPath ? (
-              <button type="button" className="axis-btn" onClick={() => void openSaved()}>
-                Open file
-              </button>
-            ) : null}
-          </>
-        }
+        description="A point-in-time as-built of this tenant. Set who it is for, choose what goes in, then generate a preview you can save."
       />
       {signedIn ? (
         <div className="environment-report-options axis-panel axis-panel-padded">
-          <label className="environment-report-field">
-            <span>Prepared for</span>
-            <input
-              className="axis-input"
-              type="text"
-              value={preparedFor}
-              onChange={(event) => setPreparedFor(event.target.value)}
-              placeholder={defaultPreparedFor ?? "Organization or customer name"}
-              disabled={busy}
-            />
-          </label>
-          <label className="environment-report-field">
-            <span>Prepared by</span>
-            <input
-              className="axis-input"
-              type="text"
-              value={preparedBy}
-              onChange={(event) => setPreparedBy(event.target.value)}
-              placeholder={defaultPreparedBy ?? "Your name or team"}
-              disabled={busy}
-            />
-          </label>
+          <div className="environment-report-identity">
+            <label className="environment-report-field">
+              <span>Prepared for</span>
+              <input
+                className="axis-input"
+                type="text"
+                value={preparedFor}
+                onChange={(event) => setPreparedFor(event.target.value)}
+                placeholder={defaultPreparedFor ?? "Organization or customer name"}
+                disabled={busy}
+              />
+            </label>
+            <label className="environment-report-field">
+              <span>Prepared by</span>
+              <input
+                className="axis-input"
+                type="text"
+                value={preparedBy}
+                onChange={(event) => setPreparedBy(event.target.value)}
+                placeholder={defaultPreparedBy ?? "Your name or team"}
+                disabled={busy}
+              />
+            </label>
+            <div className="environment-report-generate">
+              <button
+                type="button"
+                className="axis-btn axis-btn-primary"
+                onClick={() => void generate()}
+                disabled={!canGenerate || busy}
+              >
+                {busy ? "Generating…" : report ? "Regenerate" : "Generate report"}
+              </button>
+              <p className="muted environment-report-generate-note">
+                {canGenerate
+                  ? "This reads the signed-in tenant and builds a snapshot. A large tenant can take a few minutes. Saved files include script source."
+                  : "Turn on at least one chapter or area before generating."}
+              </p>
+            </div>
+          </div>
           <div className="environment-report-content">
             <div className="environment-report-content-head">
-              <span>Include in report</span>
+              <div>
+                <span>What to include</span>
+                <p className="muted environment-report-hint">
+                  Chapters open the document. Platforms limit the areas below. Each area can include every object, or
+                  only the ones you choose.
+                </p>
+              </div>
               <div className="environment-report-content-actions">
                 <button type="button" className="axis-btn axis-btn-ghost" onClick={selectAllContent} disabled={busy}>
                   Select all
@@ -570,26 +618,36 @@ export function EnvironmentReportView({
                 </button>
               </div>
             </div>
+            <div className="environment-report-include-grid">
+              <fieldset className="environment-report-fieldset" disabled={busy}>
+                <legend>Chapters</legend>
+                <div className="environment-report-chips">
+                  {CHAPTER_OPTIONS.map((option) => (
+                    <SelectionChip
+                      key={option.key}
+                      label={option.label}
+                      checked={Boolean(selection[option.key])}
+                      onChange={(next) => setSelectionKey(option.key, next)}
+                    />
+                  ))}
+                </div>
+              </fieldset>
+              <fieldset className="environment-report-fieldset" disabled={busy}>
+                <legend>Platforms</legend>
+                <div className="environment-report-chips">
+                  {PLATFORM_OPTIONS.map((option) => (
+                    <SelectionChip
+                      key={option.key}
+                      label={option.label}
+                      checked={Boolean(selection[option.key])}
+                      onChange={(next) => setSelectionKey(option.key, next)}
+                    />
+                  ))}
+                </div>
+              </fieldset>
+            </div>
             <fieldset className="environment-report-fieldset" disabled={busy}>
-              <legend>Chapters</legend>
-              <div className="environment-report-chips">
-                {CHAPTER_OPTIONS.map((option) => (
-                  <SelectionChip
-                    key={option.key}
-                    label={option.label}
-                    checked={Boolean(selection[option.key])}
-                    onChange={(next) => setSelectionKey(option.key, next)}
-                  />
-                ))}
-              </div>
-            </fieldset>
-            <fieldset className="environment-report-fieldset" disabled={busy}>
-              <legend>Content</legend>
-              <p className="muted environment-report-hint">
-                Applied across selected platforms. Policies includes catalog, compliance, Endpoint Security, and Group
-                Policy. Enrollment includes connectors and Autopilot when Windows is selected and All enrollment is on.
-                Uncheck All on a surface to pick specific objects.
-              </p>
+              <legend>Areas</legend>
               <div className="environment-report-content-list">
                 {CONTENT_OPTIONS.map((option) => {
                   const categoryOn = Boolean(selection[option.key]);
@@ -598,7 +656,9 @@ export function EnvironmentReportView({
                   return (
                     <div
                       key={option.key}
-                      className={`environment-report-content-block${categoryOn ? " is-active" : ""}`}
+                      className={`environment-report-content-block${categoryOn ? " is-active" : ""}${
+                        categoryOn && manualCount != null ? " is-picking" : ""
+                      }`}
                     >
                       <div className="environment-report-content-block-head">
                         <SelectionCheck
@@ -607,14 +667,12 @@ export function EnvironmentReportView({
                           onChange={(next) => setSelectionKey(option.key, next)}
                         />
                         {categoryOn && manualCount != null ? (
-                          <span className="environment-report-count">
-                            {manualCount} selected
-                          </span>
+                          <span className="environment-report-count">{manualCount} selected</span>
                         ) : null}
                       </div>
-                      {option.idsKey && categoryOn ? (
+                      {option.idsKey && option.noun && categoryOn ? (
                         <ReportItemPicker
-                          allLabel={`All ${option.label.toLowerCase()}`}
+                          noun={option.noun}
                           allMode={isAllMode(selection[option.idsKey])}
                           selectedIds={selection[option.idsKey] ?? []}
                           rows={
@@ -663,19 +721,6 @@ export function EnvironmentReportView({
                 })}
               </div>
             </fieldset>
-            <fieldset className="environment-report-fieldset" disabled={busy}>
-              <legend>Platforms</legend>
-              <div className="environment-report-chips">
-                {PLATFORM_OPTIONS.map((option) => (
-                  <SelectionChip
-                    key={option.key}
-                    label={option.label}
-                    checked={Boolean(selection[option.key])}
-                    onChange={(next) => setSelectionKey(option.key, next)}
-                  />
-                ))}
-              </div>
-            </fieldset>
           </div>
         </div>
       ) : (
@@ -683,35 +728,33 @@ export function EnvironmentReportView({
       )}
       {progressLabel ? <p className="muted">{progressLabel}</p> : null}
       {error ? <p className="axis-alert axis-alert-warning">{error}</p> : null}
-      {savedPath ? <p className="muted">Saved to {savedPath}</p> : null}
       {report ? (
-        <>
-          {report.warnings.length > 0 ? (
-            <p className="muted">
-              {report.objectCount} objects · {report.warnings.length} note
-              {report.warnings.length === 1 ? "" : "s"} in the document
-            </p>
-          ) : (
-            <p className="muted">{report.objectCount} objects in this snapshot</p>
-          )}
+        <section className="environment-report-output">
+          <div className="environment-report-output-bar">
+            <p className="muted">{snapshotLabel}</p>
+            <div className="environment-report-output-actions">
+              <button type="button" className="axis-btn" onClick={() => void save()} disabled={busy}>
+                Save HTML
+              </button>
+              <button type="button" className="axis-btn" onClick={() => void saveMarkdown()} disabled={busy}>
+                Save Markdown
+              </button>
+              {savedPath ? (
+                <button type="button" className="axis-btn" onClick={() => void openSaved()}>
+                  Open file
+                </button>
+              ) : null}
+            </div>
+          </div>
+          {savedPath ? <p className="muted">Saved to {savedPath}</p> : null}
           <iframe
             className="environment-report-preview"
             title="As-built preview"
-            sandbox=""
-            srcDoc={report.html}
+            sandbox="allow-scripts"
+            srcDoc={previewDocument(report.html)}
           />
-        </>
-      ) : (
-        <div className="axis-panel axis-panel-padded">
-          <p style={{ margin: 0, fontWeight: 500 }}>No snapshot yet</p>
-          <p className="muted" style={{ margin: "0.5rem 0 0", fontSize: "0.8125rem", lineHeight: 1.45 }}>
-            This is a point-in-time as-built, not a live Graph view. Catalog policies are expanded one
-            by one, so a large tenant can take a few minutes. Deselect heavy surfaces (Apps, Policies,
-            Scripts) or platforms you do not need before generating. Saved HTML and Markdown include
-            script source — treat them as sensitive.
-          </p>
-        </div>
-      )}
+        </section>
+      ) : null}
     </div>
   );
 }

@@ -13,6 +13,7 @@ import {
 } from "../../lib/tauri";
 import type { AssignmentDraft, PickedJsonFile } from "../../types/inventory";
 import { AssignmentsEditor } from "./AssignmentsEditor";
+import { CloseButton } from "../ui/CloseButton";
 
 const EMPTY_GRAPH_ASSIGNMENTS: Record<string, unknown>[] = [];
 const IMPORT_ASSIGNMENT_TARGETS = [{ id: "catalog-import-draft", title: "Imported policies" }];
@@ -221,9 +222,7 @@ export function CatalogFileImportDialog({
               you import.
             </p>
           </div>
-          <button type="button" className="axis-btn" disabled={saving} onClick={closeDialog}>
-            Close
-          </button>
+          <CloseButton onClick={closeDialog} disabled={saving} />
         </div>
         {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
         {progress ? <p className="muted">{progress}</p> : null}

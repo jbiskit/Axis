@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { updateAutopilotDeviceGroupTag } from "../../lib/tauri";
+import { CloseButton } from "../ui/CloseButton";
 
 export type AutopilotGroupTagTarget = {
   id: string;
@@ -93,9 +94,7 @@ export function AutopilotGroupTagDialog({
               clear the tag.
             </p>
           </div>
-          <button type="button" className="axis-btn" onClick={onClose} disabled={busy}>
-            Close
-          </button>
+          <CloseButton onClick={onClose} disabled={busy} />
         </div>
         <label className="axis-field" style={{ display: "grid", gap: "0.35rem", marginTop: "1rem" }}>
           <span>Group tag</span>

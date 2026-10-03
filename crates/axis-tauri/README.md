@@ -16,7 +16,7 @@ Full setup (rustup, Tauri CLI, `npm install`): run `./scripts/setup.sh` from the
 ```
 Cargo.toml                          # workspace root (repo)
 crates/
-  axis-sdk/                         # Rust SDK: device-code auth + Graph
+  axis-sdk/                         # Rust SDK: browser sign-in + Graph
   axis-tauri/
     src-tauri/                      # Tauri backend + tauri.conf.json
     ui/                             # Vite + React + TypeScript frontend
@@ -96,14 +96,14 @@ The folder that contains `axis.exe` must be writable. Axis cannot overwrite a ru
 
 ## Auth
 
-Device-code sign-in uses a **single** public client (default: Microsoft Graph Command Line Tools `14d82eec-204b-4c2f-b7e8-296a70dab67e`). Axis always requests the write-capable delegated scope set. Entra still returns the union of permissions already granted for that client; Graph 403s are the write gate, not a Read-only product mode.
+Sign-in opens the system browser (authorization code + PKCE, reply on `http://localhost`). The public client is Microsoft Graph Command Line Tools (`14d82eec-204b-4c2f-b7e8-296a70dab67e`) or a customer app registration. Read and Admin choose the delegated scope set. Entra can still return scopes already granted for that client.
 
 | Variable | Purpose |
 |----------|---------|
-| `AXIS_DEVICE_CODE_CLIENT_ID` | Public client for device-code. If unset, Graph CLI. |
+| `AXIS_DEVICE_CODE_CLIENT_ID` | Public client when the sign-in choice is Microsoft Graph. If unset, Graph CLI. |
 | `AXIS_AZURE_TENANT_ID` | Limit sign-in to a tenant (default: `organizations`) |
 
-The **refresh token** is persisted in the OS credential store (`com.axis.desktop` / `entra-device-code` — Windows Credential Manager via keyring). It is **not** stored in this git repo. The access token stays in process memory and is refreshed as needed. Granted scopes are not stored separately; they are read from the access token `scp` claim (shown on Overview). LAPS/BitLocker *reveal* still uses Read scopes (`DeviceLocalCredential.Read.All`, `BitlockerKey.Read.All`).
+Each app keeps its own **refresh token** in the OS credential store (`com.axis.desktop`, one entry per client id — Windows Credential Manager via keyring). Sign out leaves those entries in place and returns to the sign-in list. Tokens are **not** stored in this git repo. The access token stays in process memory and is refreshed as needed. Granted scopes are not stored separately; they are read from the access token `scp` claim (shown on Overview). LAPS/BitLocker *reveal* still uses Read scopes (`DeviceLocalCredential.Read.All`, `BitlockerKey.Read.All`).
 
 On startup and sign-out, Axis also deletes leftover Credential Manager entries under `dev.policyforge.desktop` and `com.policyforge.desktop`.
 
@@ -113,7 +113,7 @@ Nav items marked **planned** in `ui/src/lib/nav.ts` are not implemented yet. Inv
 
 | Area | Status |
 |------|--------|
-| Device-code auth, token refresh, session restore via keyring | Live |
+| Browser sign-in, token refresh, session restore via keyring | Live |
 | Overview (glance: org, devices, inventory families, conflicts, audit) | Live Graph |
 | Devices list + detail, remote actions, LAPS / BitLocker | Live |
 | Scripts / compliance scripts / remediations | Live (Graph list + inspector; editors limited) |

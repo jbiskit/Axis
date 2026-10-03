@@ -4,6 +4,7 @@ import { useWriteGate, WriteActionButton } from "../../lib/readOnly";
 import { navigate } from "../../lib/route";
 import { importPackJsonDocument, pickJsonFiles } from "../../lib/tauri";
 import type { PickedJsonFile } from "../../types/inventory";
+import { CloseButton } from "../ui/CloseButton";
 
 export type NativeJsonImportCreated = {
   id: string;
@@ -309,9 +310,7 @@ export function NativeJsonImportDialog({
                 "Choose Axis pack JSON or Graph Export JSON from an object inspector. Objects are created unassigned."}
             </p>
           </div>
-          <button type="button" className="axis-btn" disabled={saving} onClick={closeDialog}>
-            Close
-          </button>
+          <CloseButton onClick={closeDialog} disabled={saving} />
         </div>
 
         <div className="axis-seg" role="tablist" aria-label="Import source" style={{ marginBottom: "0.85rem" }}>

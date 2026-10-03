@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 const SERVICE: &str = "com.axis.desktop";
 const ACCOUNT: &str = "entra-device-code";
 const MODE_ACCOUNT: &str = "entra-session-mode";
+const INDEX_ACCOUNT: &str = "entra-session-index";
 /// Pre-rebrand Credential Manager services. Sign-out and startup delete these
 /// so leftover entries are not orphaned.
 const LEGACY_SERVICES: &[&str] = &["dev.policyforge.desktop", "com.policyforge.desktop"];
@@ -90,8 +91,47 @@ impl PersistedSession {
     }
 }
 
-fn entry() -> Result<keyring::Entry, keyring::Error> {
-    keyring::Entry::new(SERVICE, ACCOUNT)
+/// A saved sign-in without the refresh token. The landing page lists these.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredClient {
+    pub client_id: String,
+    #[serde(default)]
+    pub account_name: Option<String>,
+    #[serde(default)]
+    pub tenant_id: Option<String>,
+    #[serde(default)]
+    pub tenant_name: Option<String>,
+    /// Default verified domain, such as `contoso.onmicrosoft.com`.
+    #[serde(default)]
+    pub tenant_domain: Option<String>,
+    #[serde(default)]
+    pub mode: SessionMode,
+    #[serde(default)]
+    pub extra_scopes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionIndex {
+    version: u32,
+    #[serde(default)]
+    signed_out: bool,
+    #[serde(default)]
+    last_client_id: Option<String>,
+    #[serde(default)]
+    clients: Vec<StoredClient>,
+}
+
+impl Default for SessionIndex {
+    fn default() -> Self {
+        Self {
+            version: VERSION,
+            signed_out: false,
+            last_client_id: None,
+            clients: Vec::new(),
+        }
+    }
 }
 
 fn log_store(message: &str) {
@@ -99,34 +139,17 @@ fn log_store(message: &str) {
 }
 
 pub fn save(session: &PersistedSession) {
-    if session.refresh_token.is_empty() {
-        log_store("skip save: empty refresh token");
+    if session.refresh_token.is_empty() || session.client_id.is_empty() {
+        log_store("skip save: empty refresh token or client id");
         return;
     }
-    let Ok(json) = serde_json::to_string(session) else {
-        log_store("skip save: could not serialize session");
-        return;
-    };
-    let entry = match entry() {
-        Ok(entry) => entry,
-        Err(error) => {
-            log_store(&format!("credential store unavailable on save: {error}"));
-            return;
-        }
-    };
-    // UTF-8 secret (not set_password): Windows CredWrite caps the blob at 2560
-    // bytes and set_password UTF-16-encodes, which halves the usable length.
-    match entry.set_secret(json.as_bytes()) {
-        Ok(()) => log_store(&format!(
-            "saved device session ({} bytes, token not logged)",
-            json.len()
-        )),
-        Err(error) => {
-            log_store(&format!(
-                "full session save failed ({error}); trying compact payload"
-            ));
-            save_compact(&entry, session);
-        }
+    write_session_secret(&client_account(&session.client_id), session);
+    let mut index = load_index();
+    index.signed_out = false;
+    index.last_client_id = Some(session.client_id.clone());
+    upsert_client(&mut index, session);
+    if write_index(&index).is_err() {
+        log_store("failed to save the sign-in list");
     }
 }
 
@@ -154,7 +177,193 @@ fn save_compact(entry: &keyring::Entry, session: &PersistedSession) {
 }
 
 pub fn load() -> Option<PersistedSession> {
-    let entry = match entry() {
+    let index = load_index();
+    if index.signed_out {
+        log_store("stored sign-ins kept; startup stays signed out");
+        return None;
+    }
+    let id = index.last_client_id?;
+    load_client(&id)
+}
+
+pub fn load_client(client_id: &str) -> Option<PersistedSession> {
+    read_session_secret(&client_account(client_id))
+}
+
+pub fn list_clients() -> Vec<StoredClient> {
+    let index = load_index();
+    let mut clients = index.clients;
+    if let Some(last) = index.last_client_id {
+        clients.sort_by(|left, right| {
+            let left_last = left.client_id.eq_ignore_ascii_case(&last);
+            let right_last = right.client_id.eq_ignore_ascii_case(&last);
+            right_last.cmp(&left_last)
+        });
+    }
+    clients
+}
+
+pub fn find_client(client_id: &str) -> Option<StoredClient> {
+    load_index().clients.into_iter().find(|client| {
+        client.client_id.eq_ignore_ascii_case(client_id)
+    })
+}
+
+pub fn mark_signed_out() {
+    let mut index = load_index();
+    index.signed_out = true;
+    if write_index(&index).is_err() {
+        log_store("failed to record sign-out");
+    }
+}
+
+/// Drop one app's refresh token and keep it on the sign-in list.
+pub fn drop_refresh_token(client_id: &str) {
+    delete_account(SERVICE, &client_account(client_id));
+    delete_legacy_if_client(client_id);
+    let mut index = load_index();
+    index.signed_out = true;
+    if write_index(&index).is_err() {
+        log_store("failed to record a dropped refresh token");
+    }
+}
+
+pub fn forget_client(client_id: &str) {
+    delete_account(SERVICE, &client_account(client_id));
+    delete_legacy_if_client(client_id);
+    let mut index = load_index();
+    index.clients.retain(|client| !client.client_id.eq_ignore_ascii_case(client_id));
+    if index
+        .last_client_id
+        .as_deref()
+        .is_some_and(|id| id.eq_ignore_ascii_case(client_id))
+    {
+        index.last_client_id = index.clients.first().map(|client| client.client_id.clone());
+    }
+    if write_index(&index).is_err() {
+        log_store("failed to update the sign-in list after remove");
+    }
+}
+
+/// Legacy single-session accounts. Each app now has its own credential.
+fn stored_accounts() -> [&'static str; 2] {
+    [ACCOUNT, MODE_ACCOUNT]
+}
+
+fn client_account(client_id: &str) -> String {
+    format!("entra-client-{}", client_id.trim().to_ascii_lowercase())
+}
+
+fn upsert_client(index: &mut SessionIndex, session: &PersistedSession) {
+    let previous = index.clients.iter().find(|client| {
+        client.client_id.eq_ignore_ascii_case(&session.client_id)
+    });
+    let record = StoredClient {
+        client_id: session.client_id.clone(),
+        account_name: session
+            .account_name
+            .clone()
+            .or_else(|| previous.and_then(|client| client.account_name.clone())),
+        tenant_id: session.tenant_id.clone(),
+        tenant_name: previous.and_then(|client| client.tenant_name.clone()),
+        tenant_domain: previous.and_then(|client| client.tenant_domain.clone()),
+        mode: session.mode,
+        extra_scopes: session.extra_scopes.clone(),
+    };
+    if let Some(existing) = index.clients.iter_mut().find(|client| {
+        client.client_id.eq_ignore_ascii_case(&record.client_id)
+    }) {
+        *existing = record;
+    } else {
+        index.clients.push(record);
+    }
+}
+
+pub fn set_tenant_name(tenant_id: &str, tenant_name: &str) {
+    set_tenant_label(tenant_id, Some(tenant_name), None);
+}
+
+/// Remember a readable tenant name and default domain for every saved app in that tenant.
+pub fn set_tenant_label(tenant_id: &str, tenant_name: Option<&str>, tenant_domain: Option<&str>) {
+    let name = tenant_name.map(str::trim).filter(|value| !value.is_empty());
+    let domain = tenant_domain.map(str::trim).filter(|value| !value.is_empty());
+    if tenant_id.trim().is_empty() || (name.is_none() && domain.is_none()) {
+        return;
+    }
+    let mut index = load_index();
+    let mut changed = false;
+    for client in &mut index.clients {
+        if client
+            .tenant_id
+            .as_deref()
+            .is_some_and(|stored| stored.eq_ignore_ascii_case(tenant_id))
+        {
+            if let Some(name) = name {
+                if client.tenant_name.as_deref() != Some(name) {
+                    client.tenant_name = Some(name.to_string());
+                    changed = true;
+                }
+            }
+            if let Some(domain) = domain {
+                if client.tenant_domain.as_deref() != Some(domain) {
+                    client.tenant_domain = Some(domain.to_string());
+                    changed = true;
+                }
+            }
+        }
+    }
+    if changed && write_index(&index).is_err() {
+        log_store("failed to save the tenant name on saved sign-ins");
+    }
+}
+
+/// Replace one app's refresh token without changing which session is active.
+pub fn replace_client_token(session: &PersistedSession) {
+    if session.refresh_token.is_empty() || session.client_id.is_empty() {
+        return;
+    }
+    write_session_secret(&client_account(&session.client_id), session);
+    let mut index = load_index();
+    let signed_out = index.signed_out;
+    let last_client_id = index.last_client_id.clone();
+    upsert_client(&mut index, session);
+    index.signed_out = signed_out;
+    index.last_client_id = last_client_id;
+    if write_index(&index).is_err() {
+        log_store("failed to update a saved sign-in token");
+    }
+}
+
+fn write_session_secret(account: &str, session: &PersistedSession) {
+    let Ok(json) = serde_json::to_string(session) else {
+        log_store("skip save: could not serialize session");
+        return;
+    };
+    let entry = match keyring::Entry::new(SERVICE, account) {
+        Ok(entry) => entry,
+        Err(error) => {
+            log_store(&format!("credential store unavailable on save: {error}"));
+            return;
+        }
+    };
+    // UTF-8 secret (not set_password): Windows CredWrite caps the blob at 2560
+    // bytes and set_password UTF-16-encodes, which halves the usable length.
+    match entry.set_secret(json.as_bytes()) {
+        Ok(()) => log_store(&format!(
+            "saved device session ({} bytes, token not logged)",
+            json.len()
+        )),
+        Err(error) => {
+            log_store(&format!(
+                "full session save failed ({error}); trying compact payload"
+            ));
+            save_compact(&entry, session);
+        }
+    }
+}
+
+fn read_session_secret(account: &str) -> Option<PersistedSession> {
+    let entry = match keyring::Entry::new(SERVICE, account) {
         Ok(entry) => entry,
         Err(error) => {
             log_store(&format!("credential store unavailable on load: {error}"));
@@ -163,10 +372,7 @@ pub fn load() -> Option<PersistedSession> {
     };
     let bytes = match entry.get_secret() {
         Ok(bytes) => bytes,
-        Err(keyring::Error::NoEntry) => {
-            log_store("no stored device session");
-            return None;
-        }
+        Err(keyring::Error::NoEntry) => return None,
         Err(error) => {
             log_store(&format!("failed to load device session: {error}"));
             return None;
@@ -180,10 +386,7 @@ pub fn load() -> Option<PersistedSession> {
         }
     };
     match serde_json::from_str(&json) {
-        Ok(session) => {
-            log_store("loaded device session from credential store");
-            Some(session)
-        }
+        Ok(session) => Some(session),
         Err(error) => {
             log_store(&format!("stored session JSON is invalid: {error}"));
             None
@@ -191,9 +394,49 @@ pub fn load() -> Option<PersistedSession> {
     }
 }
 
-/// Keyring accounts this app writes under a service. Sign-out must delete all of them.
-fn stored_accounts() -> [&'static str; 2] {
-    [ACCOUNT, MODE_ACCOUNT]
+fn load_legacy() -> Option<PersistedSession> {
+    read_session_secret(ACCOUNT)
+}
+
+fn delete_legacy_if_client(client_id: &str) {
+    if let Some(legacy) = load_legacy() {
+        if legacy.client_id.eq_ignore_ascii_case(client_id) {
+            delete_account(SERVICE, ACCOUNT);
+        }
+    }
+}
+
+fn load_index() -> SessionIndex {
+    if let Some(index) = read_index() {
+        return index;
+    }
+    let mut index = SessionIndex::default();
+    if let Some(legacy) = load_legacy() {
+        if !legacy.client_id.is_empty() && !legacy.refresh_token.is_empty() {
+            write_session_secret(&client_account(&legacy.client_id), &legacy);
+            index.signed_out = false;
+            index.last_client_id = Some(legacy.client_id.clone());
+            upsert_client(&mut index, &legacy);
+            if write_index(&index).is_ok() {
+                delete_account(SERVICE, ACCOUNT);
+                log_store("moved the saved sign-in onto the app list");
+            }
+        }
+    }
+    index
+}
+
+fn read_index() -> Option<SessionIndex> {
+    let entry = keyring::Entry::new(SERVICE, INDEX_ACCOUNT).ok()?;
+    let bytes = entry.get_secret().ok()?;
+    let json = String::from_utf8(bytes).ok()?;
+    serde_json::from_str(&json).ok()
+}
+
+fn write_index(index: &SessionIndex) -> Result<(), ()> {
+    let json = serde_json::to_string(index).map_err(|_| ())?;
+    let entry = keyring::Entry::new(SERVICE, INDEX_ACCOUNT).map_err(|_| ())?;
+    entry.set_secret(json.as_bytes()).map_err(|_| ())
 }
 
 fn delete_account(service: &str, account: &str) {
@@ -228,7 +471,15 @@ pub fn purge_legacy() {
     }
 }
 
+/// Full wipe of saved sign-ins. Sign-out does not call this; the landing page
+/// keeps each app's credential.
+#[allow(dead_code)]
 pub fn delete() {
+    let index = load_index();
+    for client in &index.clients {
+        delete_account(SERVICE, &client_account(&client.client_id));
+    }
+    delete_account(SERVICE, INDEX_ACCOUNT);
     for account in stored_accounts() {
         delete_account(SERVICE, account);
     }

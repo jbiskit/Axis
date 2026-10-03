@@ -30,8 +30,9 @@ Local-only surfaces (baselines, template files) are exempt.
 Place a surface by what it is, then by platform.
 
 - **Manage** is for objects that exist in the signed-in tenant and are managed there: devices, apps, enrollment, policies, policy sets, compliance, endpoint security, and update profiles.
+- **Get Started** is for wizards and starter kits. Those runs create tenant objects, and the objects they create stay under Manage.
 - Anything that exists beyond one tenant goes under **Library**. That includes local packs, catalogs, template files, and other generalized libraries.
-- Local Win32 packages live at `Applications/{Vendor}/{App}/{Version}` in the open client container, or in a local repo chosen when no container is open. Closing a container does not keep writing into that folder.
+- Creating a client container adds a subfolder named for that client under the folder you pick. The open container is that subfolder. The local app catalog shows that tenant catalog and the Global Folder side by side. Packages live at `Applications/{Vendor}/{App}/{Version}` in the catalog they belong to. Closing a container does not keep writing into that folder.
 - A platform-specific entry nests under that platform. Windows Store apps live under Apps → Windows, not in a cross-platform Tools list.
 
 ## Lists and controls

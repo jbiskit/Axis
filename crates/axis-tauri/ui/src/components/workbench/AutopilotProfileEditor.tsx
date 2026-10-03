@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  autopilotDeviceNameProblem,
+  autopilotProfileNameProblem,
   draftFromAutopilotObject,
   draftsEqualAutopilot,
   toUpdateAutopilotInput,
@@ -80,7 +82,13 @@ export function AutopilotProfileEditor({
 
   useInspectorSaveAction({
     onSave: () => void save(),
-    disabled: busy || !dirty || readOnly || !odataType,
+    disabled:
+      busy ||
+      !dirty ||
+      readOnly ||
+      !odataType ||
+      Boolean(autopilotProfileNameProblem(draft.displayName)) ||
+      Boolean(autopilotDeviceNameProblem(draft.deviceNameTemplate)),
     busy,
     label: dirty ? "Save profile" : undefined,
   });

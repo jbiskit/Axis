@@ -67,7 +67,7 @@ impl ClientContainerRuntime {
         tenant_id: &str,
         primary_domain: Option<&str>,
     ) -> Result<ClientContainerManifest, String> {
-        let manifest =
+        let (path, manifest) =
             create_container(&path, name, tenant_id, primary_domain).map_err(|e| e.to_string())?;
         if let Ok(mut guard) = self.active.lock() {
             *guard = Some(path.clone());

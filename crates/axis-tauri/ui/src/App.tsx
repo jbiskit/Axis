@@ -1,5 +1,5 @@
 import { AppShell } from "./components/AppShell";
-import { ContextSwapDialog } from "./components/ContextSwapDialog";
+import { ContextSwapDialog, MissingContextDialog } from "./components/ContextSwapDialog";
 import { CreateClientContainerDialog } from "./components/CreateClientContainerDialog";
 import { IntuneWorkspace } from "./components/IntuneWorkspace";
 import { LoginScreen } from "./components/LoginScreen";
@@ -79,8 +79,13 @@ export default function App() {
     return (
       <>
         <LoginScreen
-          deviceCode={session.deviceCode}
-          onLogin={session.login}
+          browserSignIn={session.browserSignIn}
+          storedSignIns={session.storedSignIns}
+          onLogin={(mode, extraScopes, clientId) =>
+            session.login(mode, extraScopes, { clientId })
+          }
+          onUseStored={(client) => session.useStored(client)}
+          onForgetStored={(clientId) => session.forgetStored(clientId)}
           onCancel={() => {
             void session.cancelLogin();
           }}
@@ -103,6 +108,7 @@ export default function App() {
         accountName={session.accountName}
         organizationName={session.glance?.organizationName ?? null}
         mode={session.mode}
+        usesGraphSignIn={session.usesGraphSignIn}
         readOnlyScopeExceedsRequest={session.readOnlyScopeExceedsRequest}
         exceededWriteScopes={session.exceededWriteScopes}
         appVersion={updater.appVersion}
@@ -150,11 +156,24 @@ export default function App() {
         />
       </AppShell>
       <UnsavedLeaveGuard />
-      {session.contextSwapActive && session.deviceCode && session.contextSwapTargetMode ? (
+      {session.contextSwapActive && session.contextSwapTargetMode ? (
         <ContextSwapDialog
           targetMode={session.contextSwapTargetMode}
-          deviceCode={session.deviceCode}
           onCancel={() => void session.cancelLogin()}
+        />
+      ) : null}
+      {session.missingContextTarget ? (
+        <MissingContextDialog
+          targetMode={session.missingContextTarget}
+          onSignInWithGraph={() => void session.signInMissingContextWithGraph()}
+          onSignOutToCreate={() => {
+            requestLeave(() => {
+              clearShellBannerDismissals();
+              window.location.hash = "/intune";
+              void session.signOutToCreateRegistration();
+            });
+          }}
+          onClose={session.dismissMissingContext}
         />
       ) : null}
       {client.createPath ? (

@@ -9,6 +9,7 @@ import { READ_ONLY_WRITE_HINT, useReadOnly } from "../../lib/readOnly";
 import { fetchGraphObjectDetail } from "../../lib/tauri";
 import type { CatalogPolicySummary } from "../../types/inventory";
 import { AssignmentsEditor } from "./AssignmentsEditor";
+import { CloseButton } from "../ui/CloseButton";
 
 export function useCheckedIds(visibleIds: readonly string[]) {
   const [checkedIds, setCheckedIds] = useState<Set<string>>(() => new Set());
@@ -262,9 +263,7 @@ export function AssignmentsDialog({
                     .join(", ")} +${policies.length - 8} more`}
             </p>
           </div>
-          <button type="button" className="axis-btn" onClick={onClose}>
-            Close
-          </button>
+          <CloseButton onClick={onClose} />
         </div>
         {loadError ? <div className="axis-alert axis-alert-warning">{loadError}</div> : null}
         {seed == null ? (
