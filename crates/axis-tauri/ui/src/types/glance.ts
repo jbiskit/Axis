@@ -93,14 +93,25 @@ export type TenantGlance = {
   fetchedAt: string;
 };
 
-export type DeviceCodePrompt = {
+export type BrowserSignIn = {
   flowId: string;
-  userCode: string;
-  verificationUri: string;
-  message: string;
-  intervalSeconds: number;
-  expiresInSeconds: number;
+  authorizeUrl: string;
 };
+
+export type StoredSignIn = {
+  clientId: string;
+  accountName?: string | null;
+  tenantId?: string | null;
+  tenantName?: string | null;
+  tenantDomain?: string | null;
+  mode: SessionMode;
+  extraScopes: string[];
+  graphCommandLine: boolean;
+};
+
+export type StoredSignInOutcome =
+  | { status: "signedIn"; accountName?: string | null; mode: SessionMode }
+  | { status: "needsBrowser"; clientId: string; mode: SessionMode; extraScopes: string[] };
 
 export type SessionMode = "admin" | "read";
 
@@ -123,6 +134,7 @@ export type SessionStatus = {
   readOnlyScopeExceedsRequest: boolean;
   exceededWriteScopes?: string[];
   tenantId?: string | null;
+  clientId?: string | null;
 };
 
 export type GlanceResponse = {

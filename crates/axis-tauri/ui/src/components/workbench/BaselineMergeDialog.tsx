@@ -18,6 +18,7 @@ import { tokenForSource } from "../../lib/baselines/sources";
 import { createSettingsCatalogPolicy, fetchBaselineExport } from "../../lib/tauri";
 import { navigate } from "../../lib/route";
 import type { BaselineReferenceSourceInput, E8BaselineReference } from "../../types/inventory";
+import { CloseButton } from "../ui/CloseButton";
 
 type MergeReference = E8BaselineReference & { sourceId: string; sourceName: string };
 
@@ -259,9 +260,7 @@ export function BaselineMergeDialog({
               choose which source value to keep. The result is created unassigned.
             </p>
           </div>
-          <button type="button" className="axis-btn" disabled={saving} onClick={onClose}>
-            Close
-          </button>
+          <CloseButton onClick={onClose} disabled={saving} />
         </div>
 
         {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}

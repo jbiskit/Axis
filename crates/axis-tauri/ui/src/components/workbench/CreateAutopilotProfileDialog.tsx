@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  autopilotDeviceNameProblem,
+  autopilotProfileNameProblem,
   defaultAutopilotProfileDraft,
   toCreateAutopilotInput,
   type AutopilotProfileDraft,
@@ -7,6 +9,7 @@ import {
 import { createAutopilotProfile } from "../../lib/tauri";
 import type { AutopilotProfile } from "../../types/inventory";
 import { AutopilotProfileForm } from "./AutopilotProfileForm";
+import { CloseButton } from "../ui/CloseButton";
 
 export function CreateAutopilotProfileDialog({
   open,
@@ -29,8 +32,11 @@ export function CreateAutopilotProfileDialog({
   }, [open]);
 
   const canSave = useMemo(
-    () => !busy && draft.displayName.trim().length > 0,
-    [busy, draft.displayName],
+    () =>
+      !busy &&
+      !autopilotProfileNameProblem(draft.displayName) &&
+      !autopilotDeviceNameProblem(draft.deviceNameTemplate),
+    [busy, draft.displayName, draft.deviceNameTemplate],
   );
 
   async function create() {
@@ -76,9 +82,7 @@ export function CreateAutopilotProfileDialog({
               later. Assign groups after create.
             </p>
           </div>
-          <button type="button" className="axis-btn" onClick={onClose} disabled={busy}>
-            Close
-          </button>
+          <CloseButton onClick={onClose} disabled={busy} />
         </div>
         {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
         <div style={{ maxHeight: "min(70vh, 40rem)", overflow: "auto", paddingRight: "0.25rem" }}>

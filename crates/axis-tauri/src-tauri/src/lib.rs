@@ -1,7 +1,7 @@
 use axis_sdk::{
     decode_access_token_claims, fetch_managed_device_list,
-    fetch_tenant_glance, AuthManager, DeviceCodePrompt, DeviceCodeTokens, ManagedDeviceList,
-    PollResult, SessionMode, TenantGlance,
+    fetch_tenant_glance, AuthManager, BrowserSignIn, ManagedDeviceList,
+    PollResult, SessionMode, SessionTokens, StoredSignIn, StoredSignInOutcome, TenantGlance,
 };
 use serde::Serialize;
 use std::sync::Arc;
@@ -32,6 +32,7 @@ struct SessionStatus {
     read_only_scope_exceeds_request: bool,
     exceeded_write_scopes: Vec<String>,
     tenant_id: Option<String>,
+    client_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -43,33 +44,34 @@ struct GlanceResponse {
 }
 
 #[tauri::command]
-async fn device_login_start(
+async fn browser_login_start(
     state: State<'_, AppState>,
     mode: Option<String>,
     extra_scopes: Option<String>,
-) -> Result<DeviceCodePrompt, String> {
+    client_id: Option<String>,
+) -> Result<BrowserSignIn, String> {
     let requested = mode.as_deref().map(SessionMode::parse).transpose()?;
     state
         .auth
-        .start_device_code_flow(requested, extra_scopes.as_deref())
+        .start_browser_sign_in(requested, extra_scopes.as_deref(), client_id.as_deref())
         .await
         .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-async fn device_login_cancel(state: State<'_, AppState>, flow_id: String) -> Result<(), String> {
-    state.auth.cancel_device_code_flow(&flow_id).await;
+async fn browser_login_cancel(state: State<'_, AppState>, flow_id: String) -> Result<(), String> {
+    state.auth.cancel_browser_sign_in(&flow_id).await;
     Ok(())
 }
 
 #[tauri::command]
-async fn device_login_poll(
+async fn browser_login_wait(
     state: State<'_, AppState>,
     flow_id: String,
 ) -> Result<PollResult, String> {
     let result = state
         .auth
-        .poll_device_code_flow(&flow_id)
+        .wait_browser_sign_in(&flow_id)
         .await
         .map_err(|error| error.to_string())?;
 
@@ -105,13 +107,14 @@ async fn device_session_status(state: State<'_, AppState>) -> Result<SessionStat
         read_only_scope_exceeds_request,
         exceeded_write_scopes,
         tenant_id: state.auth.session_tenant_id().await,
+        client_id: state.auth.session_client_id().await,
     })
 }
 
 #[tauri::command]
 async fn device_session_token(
     state: State<'_, AppState>,
-) -> Result<Option<DeviceCodeTokens>, String> {
+) -> Result<Option<SessionTokens>, String> {
     state
         .auth
         .get_session_token()
@@ -201,6 +204,46 @@ async fn fetch_managed_devices(state: State<'_, AppState>) -> Result<DevicesResp
 }
 
 #[tauri::command]
+async fn remember_tenant_name(
+    state: State<'_, AppState>,
+    tenant_id: String,
+    tenant_name: String,
+) -> Result<(), String> {
+    state.auth.remember_tenant_name(&tenant_id, &tenant_name);
+    Ok(())
+}
+
+#[tauri::command]
+async fn list_stored_sign_ins(state: State<'_, AppState>) -> Result<Vec<StoredSignIn>, String> {
+    Ok(state.auth.list_stored_sign_ins().await)
+}
+
+#[tauri::command]
+async fn use_stored_sign_in(
+    state: State<'_, AppState>,
+    client_id: String,
+) -> Result<StoredSignInOutcome, String> {
+    let outcome = state
+        .auth
+        .use_stored_sign_in(&client_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    if let StoredSignInOutcome::SignedIn { account_name, .. } = &outcome {
+        *state.account_name.lock().await = account_name.clone();
+    }
+    Ok(outcome)
+}
+
+#[tauri::command]
+async fn forget_stored_sign_in(
+    state: State<'_, AppState>,
+    client_id: String,
+) -> Result<(), String> {
+    state.auth.forget_stored_sign_in(&client_id).await;
+    Ok(())
+}
+
+#[tauri::command]
 async fn sign_out(state: State<'_, AppState>) -> Result<(), String> {
     state.auth.end_session().await;
     *state.account_name.lock().await = None;
@@ -253,9 +296,13 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            device_login_start,
-            device_login_poll,
-            device_login_cancel,
+            browser_login_start,
+            browser_login_wait,
+            browser_login_cancel,
+            remember_tenant_name,
+            list_stored_sign_ins,
+            use_stored_sign_in,
+            forget_stored_sign_in,
             device_session_status,
             device_session_token,
             fetch_glance,
@@ -298,6 +345,7 @@ pub fn run() {
             commands::list_catalog_apps_cmd,
             commands::create_catalog_app_cmd,
             commands::copy_catalog_app_version_cmd,
+            commands::delete_catalog_apps_cmd,
             commands::catalog_dependency_chain_cmd,
             commands::read_catalog_app_config_cmd,
             commands::save_catalog_app_config_cmd,
@@ -306,6 +354,8 @@ pub fn run() {
             commands::find_catalog_upload_matches_cmd,
             commands::link_catalog_dependency_cmd,
             commands::unlink_mobile_app_dependency_cmd,
+            commands::link_mobile_app_supersedence_cmd,
+            commands::unlink_mobile_app_supersedence_cmd,
             commands::upload_catalog_intunewin_cmd,
             commands::pick_app_icon_cmd,
             commands::read_local_app_icon_cmd,
@@ -367,6 +417,7 @@ pub fn run() {
             commands::create_enrollment_platform_restriction_cmd,
             commands::create_enrollment_limit_cmd,
             commands::create_autopilot_profile_cmd,
+            commands::create_domain_join_profile_cmd,
             commands::update_autopilot_profile_cmd,
             commands::update_win32_app_cmd,
             commands::search_store_catalog_cmd,

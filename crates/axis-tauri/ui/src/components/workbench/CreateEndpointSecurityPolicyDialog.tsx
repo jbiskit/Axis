@@ -25,6 +25,7 @@ import { SettingDescription } from "./SettingDescription";
 import { SettingDraftEditor } from "./SettingDraftEditor";
 import { SettingValueDiff } from "./SettingValueDiff";
 import { templateDisplayLabel } from "../../lib/catalogPolicyProfile";
+import { CloseButton } from "../ui/CloseButton";
 
 type PendingEdit = {
   detail: CatalogSettingDetail;
@@ -408,9 +409,7 @@ export function CreateEndpointSecurityPolicyDialog({
             <p className="axis-kicker">Create Endpoint Security policy</p>
             <h2 id="create-es-policy-title">New policy</h2>
           </div>
-          <button type="button" className="axis-btn" disabled={busy} onClick={onClose}>
-            Close
-          </button>
+          <CloseButton onClick={onClose} disabled={busy} />
         </div>
         {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
         {profilesError ? <div className="axis-alert axis-alert-danger">{profilesError}</div> : null}

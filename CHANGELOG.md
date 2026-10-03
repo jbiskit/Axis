@@ -4,7 +4,26 @@ Notable user-facing changes to Axis are recorded here.
 
 ## [Unreleased]
 
-Add release notes here before preparing the next version.
+### Changed
+
+- Sign-in opens the system browser and returns to `http://localhost`. Device-code sign-in is gone. Microsoft Graph and a customer app registration both still work, and the refresh token stays in Credential Manager.
+- The sign-in screen lists each app that already has a saved credential, grouped by tenant. Each group is named with the organization and its default domain. A tenant can keep a read-only registration and a read-and-write registration side by side. Sign out keeps the saved credentials.
+- Swapping context on an app registration switches to the other saved registration for that tenant. If that registration is not saved, Axis says so and offers Microsoft Graph sign-in or a new registration for the other access mode. Microsoft Graph still requests the new scopes.
+- Environment report setup is a short sequence: who the report is for, which chapters, platforms, and areas to include, then generate. An area is either everything in that area or a list you choose.
+- An Apps section in the environment report draws the dependency and supersedence graph for the apps in that section. Each app card lists what it requires, which apps it is a dependency for, and any supersedence. Markdown includes the same lines and a Mermaid diagram. Those labels include the app version.
+- The dependency viewer shows each app's version on the graph node and in the relationship lines.
+- A live tenant app can supersede another Win32 app, or be superseded by one. Uninstall previous turns the link into a replace. Update leaves the older app in place.
+- A new local catalog app gets two PowerShell detection scripts. `detection.ps1` checks the uninstall registry for the app name and a version greater than or equal to the catalog version. `detection-name.ps1` checks the name only. Copying a version updates `$version` in `detection.ps1`.
+- Checked local catalog versions can be deleted. Axis removes those package folders, removes an empty vendor or application folder left behind, and drops dependency links that pointed at them. Intune is left unchanged.
+- A new client container is created as a subfolder named for that client. Snapshots and local applications are stored in that subfolder. The folder you pick stays the parent.
+- The local app catalog lists the Global Folder and the open tenant catalog together. New tenant app and New global app sit on those panes. Copies and deletes stay in the catalog the application belongs to.
+- Get Started is a nav heading for wizards and starter kits. The Autopilot wizard lives there. It creates the deployment profile, the group assignment, and, for Hybrid, the domain join profile. The Intune Connector for Active Directory stays an advisory to finish on a server.
+- A new dynamic group in the Autopilot wizard can take an optional Order ID. The membership rule then also requires `[OrderID]:` to match that value.
+- Autopilot profile create checks the name before calling Graph. Intune rejects characters such as a hyphen with an empty DeviceEnrollmentFE 400. Invalid profile names and device name templates are marked on the field.
+
+### Fixed
+
+- Contents links in an environment report preview stay inside the document. Following one no longer replaces the preview or leaves the report page.
 
 ## [0.1.7] - 2026-10-02
 

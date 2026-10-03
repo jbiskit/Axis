@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
-  DeviceCodePrompt,
+  BrowserSignIn,
+  StoredSignIn,
+  StoredSignInOutcome,
   DevicesResponse,
   GlanceResponse,
   IntuneAuditLogResponse,
@@ -66,22 +68,43 @@ import type {
   WindowsUpdatePolicy,
 } from "../types/inventory";
 
-export async function deviceLoginStart(
+export async function browserLoginStart(
   mode: SessionMode = "read",
   extraScopes?: string,
-): Promise<DeviceCodePrompt> {
-  return invoke<DeviceCodePrompt>("device_login_start", {
+  clientId?: string | null,
+): Promise<BrowserSignIn> {
+  return invoke<BrowserSignIn>("browser_login_start", {
     mode,
     extraScopes: extraScopes?.trim() ? extraScopes : null,
+    clientId: clientId?.trim() ? clientId.trim() : null,
   });
 }
 
-export async function deviceLoginPoll(flowId: string): Promise<PollResult> {
-  return invoke<PollResult>("device_login_poll", { flowId });
+export async function browserLoginWait(flowId: string): Promise<PollResult> {
+  return invoke<PollResult>("browser_login_wait", { flowId });
 }
 
-export async function deviceLoginCancel(flowId: string): Promise<void> {
-  return invoke("device_login_cancel", { flowId });
+export async function browserLoginCancel(flowId: string): Promise<void> {
+  return invoke("browser_login_cancel", { flowId });
+}
+
+export async function rememberTenantName(
+  tenantId: string,
+  tenantName: string,
+): Promise<void> {
+  return invoke("remember_tenant_name", { tenantId, tenantName });
+}
+
+export async function listStoredSignIns(): Promise<StoredSignIn[]> {
+  return invoke<StoredSignIn[]>("list_stored_sign_ins");
+}
+
+export async function useStoredSignIn(clientId: string): Promise<StoredSignInOutcome> {
+  return invoke<StoredSignInOutcome>("use_stored_sign_in", { clientId });
+}
+
+export async function forgetStoredSignIn(clientId: string): Promise<void> {
+  return invoke("forget_stored_sign_in", { clientId });
 }
 
 export async function deviceSessionStatus(): Promise<SessionStatus> {
@@ -369,6 +392,28 @@ export async function unlinkMobileAppDependency(input: {
   });
 }
 
+export async function linkMobileAppSupersedence(input: {
+  newerAppId: string;
+  olderAppId: string;
+  replace: boolean;
+}): Promise<void> {
+  return invoke("link_mobile_app_supersedence_cmd", {
+    newerAppId: input.newerAppId,
+    olderAppId: input.olderAppId,
+    replace: input.replace,
+  });
+}
+
+export async function unlinkMobileAppSupersedence(input: {
+  newerAppId: string;
+  olderAppId: string;
+}): Promise<void> {
+  return invoke("unlink_mobile_app_supersedence_cmd", {
+    newerAppId: input.newerAppId,
+    olderAppId: input.olderAppId,
+  });
+}
+
 export type CatalogDependencyChain = {
   nodes: CatalogDependencyNode[];
   cycle?: string | null;
@@ -535,6 +580,16 @@ export async function saveCatalogAppConfig(input: {
   return invoke("save_catalog_app_config_cmd", {
     sourceRoot: input.sourceRoot?.trim() || null,
     input: { appPath: input.appPath, config: input.config },
+  });
+}
+
+export async function deleteCatalogApps(input: {
+  sourceRoot: string;
+  appPaths: string[];
+}): Promise<string[]> {
+  return invoke("delete_catalog_apps_cmd", {
+    sourceRoot: input.sourceRoot,
+    appPaths: input.appPaths,
   });
 }
 
@@ -916,6 +971,17 @@ export async function createAutopilotProfile(
   input: CreateAutopilotProfileInput,
 ): Promise<{ profile: AutopilotProfile | null; error: string | null }> {
   return invoke("create_autopilot_profile_cmd", { input });
+}
+
+export async function createDomainJoinProfile(input: {
+  displayName: string;
+  description?: string | null;
+  domainName: string;
+  organizationalUnit?: string | null;
+  computerNamePrefix: string;
+  computerNameRandomCharCount: number;
+}): Promise<{ profile: { id: string; displayName: string } | null; error: string | null }> {
+  return invoke("create_domain_join_profile_cmd", { input });
 }
 
 export async function updateAutopilotProfile(

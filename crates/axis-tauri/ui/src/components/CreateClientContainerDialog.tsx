@@ -17,6 +17,8 @@ export function CreateClientContainerDialog({
 }) {
   const [name, setName] = useState(defaultName?.trim() || "");
   const [domain, setDomain] = useState("");
+  const folderName = containerFolderName(name);
+  const containerPath = folderName ? joinPath(folderPath, folderName) : "";
 
   return (
     <div
@@ -36,12 +38,16 @@ export function CreateClientContainerDialog({
           </button>
         </div>
         <p className="muted" style={{ margin: 0 }}>
-          Axis will write <code className="mono-code">axis-client.json</code> into this folder and
-          bind it 1:1 to the signed-in Entra tenant.
+          Axis creates a folder named for this client inside the folder you chose, and stores the
+          container there. It stays bound 1:1 to the signed-in Entra tenant.
         </p>
         <label className="device-field" style={{ marginTop: "0.85rem" }}>
-          Folder
+          Parent folder
           <input className="axis-input" value={folderPath} readOnly />
+        </label>
+        <label className="device-field" style={{ marginTop: "0.65rem" }}>
+          Container folder
+          <input className="axis-input" value={containerPath} readOnly />
         </label>
         <label className="device-field" style={{ marginTop: "0.65rem" }}>
           Client name
@@ -87,4 +93,19 @@ export function CreateClientContainerDialog({
       </div>
     </div>
   );
+}
+
+function containerFolderName(name: string): string {
+  const cleaned = name
+    .trim()
+    .replace(/[<>:"/\\|?*\u0000-\u001F]/g, "-")
+    .replace(/[.\s]+$/g, "")
+    .trim();
+  if (!cleaned || cleaned === "." || cleaned === "..") return "";
+  return cleaned;
+}
+
+function joinPath(parent: string, name: string): string {
+  const sep = parent.includes("\\") ? "\\" : "/";
+  return `${parent.replace(/[\\/]+$/, "")}${sep}${name}`;
 }

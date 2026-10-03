@@ -56,6 +56,7 @@ import { withTransientItem } from "../lib/duplicateObject";
 import {
   ENROLLMENT_AUTOPILOT_PATH,
   ENROLLMENT_AUTOPILOT_DEVICES_PATH,
+  GET_STARTED_AUTOPILOT_PATH,
   ENROLLMENT_AUTOPILOT_PROFILES_PATH,
   ENROLLMENT_ESP_PATH,
   ENROLLMENT_LIMIT_RESTRICTIONS_PATH,
@@ -136,6 +137,7 @@ import { SettingsCatalogWorkbench } from "./SettingsCatalogWorkbench";
 import { TenantOverview } from "./TenantOverview";
 import { WriteActivityView } from "./WriteActivityView";
 import { EnvironmentReportView } from "./EnvironmentReportView";
+import { GetStartedAutopilotView } from "./GetStartedAutopilotView";
 import { LocalCatalogView } from "./LocalCatalogView";
 import { PacksKitsView } from "./PacksKitsView";
 import { GraphObjectInspector } from "./workbench/GraphObjectInspector";
@@ -178,6 +180,7 @@ import {
   WorkspaceSplit,
 } from "./workbench/shared";
 import type { ManagedDeviceSummary } from "../types/glance";
+import { CloseButton } from "./ui/CloseButton";
 
 function LoadedInventoryBanner({ truncated }: { truncated?: boolean }) {
   if (!truncated) return null;
@@ -383,6 +386,16 @@ export function IntuneWorkspace({
     );
   }
 
+  if (pathname === GET_STARTED_AUTOPILOT_PATH) {
+    return (
+      <GetStartedAutopilotView
+        onOpenProfile={(id) =>
+          navigate(hrefWithParam(ENROLLMENT_AUTOPILOT_PROFILES_PATH, new URLSearchParams(), "profile", id))
+        }
+      />
+    );
+  }
+
   if (pathname.startsWith("/intune/enrollment")) {
     // Legacy bookmarks → platform-driven Windows Autopilot routes.
     if (pathname === "/intune/enrollment/autopilot" || pathname === "/intune/enrollment/windows") {
@@ -442,6 +455,10 @@ export function IntuneWorkspace({
           }
         />
       );
+    }
+
+    if (pathname === "/intune/enrollment/windows/autopilot/get-started") {
+      return <EnrollmentPathRedirect to={GET_STARTED_AUTOPILOT_PATH} />;
     }
 
     if (pathname === ENROLLMENT_AUTOPILOT_PROFILES_PATH) {
@@ -4458,9 +4475,7 @@ function PolicyPacksWorkbench({
                       Import to Intune
                     </WriteActionButton>
                   ) : null}
-                  <button type="button" className="axis-btn" onClick={() => onSelect("")}>
-                    Close
-                  </button>
+                  <CloseButton onClick={() => onSelect("")} />
                 </div>
               }
             />

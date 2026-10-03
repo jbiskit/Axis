@@ -61,6 +61,7 @@ import { graphLargeIcon } from "../../lib/appIcon";
 import { isWin32LobApp } from "../../lib/win32App";
 import { isWinGetApp } from "../../lib/storeApp";
 import { AutopilotOverviewSections } from "./AutopilotOverviewSections";
+import { CloseButton } from "../ui/CloseButton";
 
 type InspectorTab = "overview" | "status" | "assignments" | "devices" | "payload";
 
@@ -207,9 +208,7 @@ function ExportJsonDialog({
             <button type="button" className="axis-btn" onClick={() => void copyJson()}>
               {copied ? "Copied" : "Copy JSON"}
             </button>
-            <button type="button" className="axis-btn" onClick={onClose}>
-              Close
-            </button>
+            <CloseButton onClick={onClose} />
           </div>
         </div>
         {copyError ? <div className="axis-alert axis-alert-danger">{copyError}</div> : null}
@@ -818,9 +817,6 @@ export function GraphObjectInspector({
                 Pop out
               </button>
             ) : null}
-            <button type="button" className="axis-btn" onClick={handleClose}>
-              {popout ? "Close window" : "Close"}
-            </button>
             {portalHref ? (
               <OpenInIntune href={portalHref} label={detail?.title ?? fallbackTitle} />
             ) : null}
@@ -832,6 +828,13 @@ export function GraphObjectInspector({
               }}
               onDeleted={() => handleClose()}
             />
+            {popout ? (
+              <button type="button" className="axis-btn" onClick={handleClose}>
+                Close window
+              </button>
+            ) : (
+              <CloseButton onClick={handleClose} />
+            )}
           </div>
         }
       />

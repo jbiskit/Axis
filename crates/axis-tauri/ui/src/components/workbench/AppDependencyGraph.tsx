@@ -3,15 +3,18 @@ import type { MobileAppSummary } from "../../types/inventory";
 import { useReadOnly } from "../../lib/readOnly";
 import {
   linkCatalogDependency,
+  linkMobileAppSupersedence,
   listMobileAppRelationships,
   unlinkMobileAppDependency,
+  unlinkMobileAppSupersedence,
   type MobileAppDeleteLink,
 } from "../../lib/tauri";
 import { BooleanToggle } from "./BooleanToggle";
 import { Pane } from "./Win32AppEditor";
+import { CloseButton } from "../ui/CloseButton";
 
 const NODE_W = 176;
-const NODE_H = 40;
+const NODE_H = 52;
 const COL_GAP = 88;
 const ROW_GAP = 18;
 const PAD = 22;
@@ -82,7 +85,7 @@ export function useTenantAppRelationships(apps: MobileAppSummary[], reloadKey: n
 }
 
 export function appNameMap(apps: MobileAppSummary[]): Map<string, string> {
-  return new Map(apps.map((app) => [app.id.toLowerCase(), app.displayName]));
+  return new Map(apps.map((app) => [app.id.toLowerCase(), appWithVersion(app)]));
 }
 
 function named(id: string, fallback: string, names: Map<string, string>): string {
@@ -178,6 +181,15 @@ function connectedLinks(focusId: string | null, links: MobileAppDeleteLink[]): M
 function shortName(name: string): string {
   const text = name.trim() || "App";
   return text.length > 24 ? `${text.slice(0, 23)}…` : text;
+}
+
+function labelParts(label: string): { name: string; version: string } {
+  const marker = " · ";
+  const at = label.lastIndexOf(marker);
+  if (at <= 0) return { name: label, version: "" };
+  const version = label.slice(at + marker.length).trim();
+  if (!version) return { name: label, version: "" };
+  return { name: label.slice(0, at), version };
 }
 
 type PlacedNode = { id: string; name: string; x: number; y: number };
@@ -305,6 +317,40 @@ function linkedAppLabel(
   const match = apps.find((item) => item.id.toLowerCase() === id.toLowerCase());
   if (match) return appWithVersion(match);
   return named(id, fallback, names);
+}
+
+function SupersedenceEditRow({
+  title,
+  replace,
+  disabled,
+  busy,
+  onReplace,
+  onRemove,
+}: {
+  title: string;
+  replace: boolean;
+  disabled: boolean;
+  busy: boolean;
+  onReplace: (next: boolean) => void;
+  onRemove: () => void;
+}) {
+  return (
+    <div className="app-dep-row">
+      <strong>{title}</strong>
+      <label className="app-dep-auto">
+        <BooleanToggle
+          checked={replace}
+          disabled={disabled || busy}
+          ariaLabel={`Uninstall ${title} when it is superseded`}
+          onChange={onReplace}
+        />
+        <span>Uninstall previous</span>
+      </label>
+      <button type="button" className="axis-btn" disabled={disabled || busy} onClick={onRemove}>
+        Remove
+      </button>
+    </div>
+  );
 }
 
 function DependencyEditRow({
@@ -462,8 +508,18 @@ export function AppDependencyPane({
 
   if (!canOwn && !touched) return null;
 
+  const appId = app.id.toLowerCase();
+  const supersedes = other.filter(
+    (link) => link.relationship === "supersedence" && link.sourceId.toLowerCase() === appId,
+  );
+  const supersededBy = other.filter(
+    (link) => link.relationship === "supersedence" && link.targetId.toLowerCase() === appId,
+  );
+  const leftover = other.filter((link) => link.relationship !== "supersedence");
   const takenChildren = new Set(requires.map((link) => link.targetId.toLowerCase()));
   const takenParents = new Set(dependencyFor.map((link) => link.sourceId.toLowerCase()));
+  const takenSupersedes = new Set(supersedes.map((link) => link.targetId.toLowerCase()));
+  const takenSupersededBy = new Set(supersededBy.map((link) => link.sourceId.toLowerCase()));
   const byName = (left: MobileAppSummary, right: MobileAppSummary) =>
     left.displayName.localeCompare(right.displayName);
   const childChoices = apps
@@ -491,7 +547,7 @@ export function AppDependencyPane({
 
   const summary = dependencySummary(app.id, links, names);
   return (
-    <Pane title="Dependencies" hint={!ready && !touched ? "Checking…" : summary || "None"}>
+    <Pane title="Dependencies and supersedence" hint={!ready && !touched ? "Checking…" : summary || "None"}>
       {error ? <p className="muted">{relationshipErrorText(error)}</p> : null}
       {saveError ? <p className="axis-alert axis-alert-danger">{saveError}</p> : null}
       {!ready && !touched ? <p className="muted">Checking dependencies…</p> : null}
@@ -599,9 +655,131 @@ export function AppDependencyPane({
             }
           />
         </div>
-        {other.length > 0 ? (
+        {canOwn || supersedes.length > 0 ? (
+          <div className="app-dep-section">
+            <p className="app-dep-section-label">This app supersedes</p>
+            {supersedes.map((link) => {
+              const older = linkedAppLabel(link.targetId, link.targetName, apps, names);
+              const key = `supersede:${link.targetId}`;
+              return (
+                <SupersedenceEditRow
+                  key={key}
+                  title={older}
+                  replace={link.relationshipType === "replace"}
+                  disabled={readOnly || busyKey != null}
+                  busy={busyKey === key}
+                  onReplace={(replace) =>
+                    void save(key, () =>
+                      linkMobileAppSupersedence({
+                        newerAppId: app.id,
+                        olderAppId: link.targetId,
+                        replace,
+                      }),
+                    )
+                  }
+                  onRemove={() =>
+                    void save(key, () =>
+                      unlinkMobileAppSupersedence({
+                        newerAppId: app.id,
+                        olderAppId: link.targetId,
+                      }),
+                    )
+                  }
+                />
+              );
+            })}
+            {canOwn ? (
+              <AddDependency
+                label="Supersede an app"
+                apps={apps
+                  .filter((candidate) => {
+                    const id = candidate.id.toLowerCase();
+                    return (
+                      isWin32DependencyApp(candidate) &&
+                      id !== appId &&
+                      !takenSupersedes.has(id) &&
+                      !takenSupersededBy.has(id)
+                    );
+                  })
+                  .sort(byName)}
+                disabled={readOnly || !ready || busyKey != null}
+                onAdd={(olderAppId) =>
+                  void save(`add-supersede:${olderAppId}`, () =>
+                    linkMobileAppSupersedence({
+                      newerAppId: app.id,
+                      olderAppId,
+                      replace: false,
+                    }),
+                  )
+                }
+              />
+            ) : null}
+          </div>
+        ) : null}
+        {canOwn || supersededBy.length > 0 ? (
+          <div className="app-dep-section">
+            <p className="app-dep-section-label">Superseded by</p>
+            {supersededBy.map((link) => {
+              const newer = linkedAppLabel(link.sourceId, link.sourceName, apps, names);
+              const key = `superseded:${link.sourceId}`;
+              return (
+                <SupersedenceEditRow
+                  key={key}
+                  title={newer}
+                  replace={link.relationshipType === "replace"}
+                  disabled={readOnly || busyKey != null}
+                  busy={busyKey === key}
+                  onReplace={(replace) =>
+                    void save(key, () =>
+                      linkMobileAppSupersedence({
+                        newerAppId: link.sourceId,
+                        olderAppId: app.id,
+                        replace,
+                      }),
+                    )
+                  }
+                  onRemove={() =>
+                    void save(key, () =>
+                      unlinkMobileAppSupersedence({
+                        newerAppId: link.sourceId,
+                        olderAppId: app.id,
+                      }),
+                    )
+                  }
+                />
+              );
+            })}
+            {canOwn ? (
+              <AddDependency
+                label="Superseded by"
+                apps={apps
+                  .filter((candidate) => {
+                    const id = candidate.id.toLowerCase();
+                    return (
+                      isWin32DependencyApp(candidate) &&
+                      id !== appId &&
+                      !takenSupersededBy.has(id) &&
+                      !takenSupersedes.has(id)
+                    );
+                  })
+                  .sort(byName)}
+                disabled={readOnly || !ready || busyKey != null}
+                onAdd={(newerAppId) =>
+                  void save(`add-superseded:${newerAppId}`, () =>
+                    linkMobileAppSupersedence({
+                      newerAppId,
+                      olderAppId: app.id,
+                      replace: false,
+                    }),
+                  )
+                }
+              />
+            ) : null}
+          </div>
+        ) : null}
+        {leftover.length > 0 ? (
           <ul className="app-dep-lines">
-            {other.map((link) => (
+            {leftover.map((link) => (
               <li key={`${link.sourceId}|${link.targetId}|${link.relationship}|${link.relationshipType}`}>
                 {describeAppLink(link, names)}
               </li>
@@ -661,9 +839,7 @@ export function AppDependencyGraphDialog({
             <p className="axis-kicker">Dependencies</p>
             <h2 id="app-dep-graph-title">{focusName ? `${focusName} dependencies` : title}</h2>
           </div>
-          <button type="button" className="axis-btn" onClick={onClose}>
-            Close
-          </button>
+          <CloseButton onClick={onClose} />
         </div>
         {visible.length === 0 ? (
           <p className="muted">No dependency or supersedence links in this view.</p>
@@ -713,6 +889,7 @@ export function AppDependencyGraphDialog({
                 {layout.placed.map((node) => {
                   const known = knownIds.has(node.id.toLowerCase());
                   const selected = selectedId?.toLowerCase() === node.id.toLowerCase();
+                  const parts = labelParts(node.name);
                   return (
                     <g
                       key={node.id}
@@ -730,14 +907,15 @@ export function AppDependencyGraphDialog({
                         rx={8}
                         className={selected ? "app-dep-node is-selected" : "app-dep-node"}
                       />
-                      <text
-                        x={node.x + NODE_W / 2}
-                        y={node.y + NODE_H / 2}
-                        textAnchor="middle"
-                        dominantBaseline="central"
-                        className="app-dep-node-label"
-                      >
-                        {shortName(node.name)}
+                      <text textAnchor="middle" className="app-dep-node-label">
+                        <tspan x={node.x + NODE_W / 2} y={node.y + (parts.version ? 20 : NODE_H / 2)}>
+                          {shortName(parts.name)}
+                        </tspan>
+                        {parts.version ? (
+                          <tspan x={node.x + NODE_W / 2} y={node.y + 38} className="app-dep-node-version">
+                            {shortName(parts.version)}
+                          </tspan>
+                        ) : null}
                       </text>
                     </g>
                   );

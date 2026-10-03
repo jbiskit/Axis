@@ -5,6 +5,7 @@ import {
 } from "../../lib/enrollmentLimits";
 import { createEnrollmentLimit } from "../../lib/tauri";
 import type { CatalogPolicySummary } from "../../types/inventory";
+import { CloseButton } from "../ui/CloseButton";
 
 export function CreateEnrollmentLimitDialog({
   open,
@@ -81,9 +82,7 @@ export function CreateEnrollmentLimitDialog({
               users / All devices).
             </p>
           </div>
-          <button type="button" className="axis-btn" onClick={onClose}>
-            Close
-          </button>
+          <CloseButton onClick={onClose} />
         </div>
         {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
         <div className="stack" style={{ gap: "0.75rem" }}>

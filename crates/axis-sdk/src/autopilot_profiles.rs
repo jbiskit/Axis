@@ -120,25 +120,97 @@ fn is_hybrid_odata(odata: &str) -> bool {
     odata.to_ascii_lowercase().contains("activedirectory")
 }
 
+fn name_error(message: impl Into<String>) -> GraphError {
+    GraphError::Request {
+        status: 400,
+        code: None,
+        message: message.into(),
+        permission_related: false,
+    }
+}
+
+/// Intune accepts letters, numbers, spaces, and a short punctuation set.
+/// A hyphen in the profile name comes back as an opaque DeviceEnrollmentFE 400.
+fn autopilot_name_char_ok(ch: char) -> bool {
+    ch.is_alphanumeric()
+        || matches!(
+            ch,
+            ' ' | ':' | '"' | '?' | '.' | '@' | '$' | '&' | '_' | '[' | ']' | '{' | '}' | '|' | '\\'
+        )
+}
+
 fn validate_display_name(name: &str) -> Result<&str, GraphError> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
-        return Err(GraphError::Request {
-            status: 400,
-            code: None,
-            message: "Display name is required.".into(),
-            permission_related: false,
-        });
+        return Err(name_error("Display name is required."));
     }
     if trimmed.len() > 200 {
-        return Err(GraphError::Request {
-            status: 400,
-            code: None,
-            message: "Display name must be 200 characters or fewer.".into(),
-            permission_related: false,
-        });
+        return Err(name_error("Display name must be 200 characters or fewer."));
+    }
+    if trimmed.chars().any(|ch| !autopilot_name_char_ok(ch)) {
+        return Err(name_error(
+            "Autopilot profile name can use letters, numbers, spaces, and : \" ? . @ $ & _ [ ] { } | \\.",
+        ));
     }
     Ok(trimmed)
+}
+
+fn validate_device_name_template(template: &str) -> Result<(), GraphError> {
+    let template = template.trim();
+    if template.is_empty() {
+        return Ok(());
+    }
+    let serial = "%SERIAL%";
+    let serial_count = template.matches(serial).count();
+    if serial_count > 1 {
+        return Err(name_error(
+            "Device name template can include %SERIAL% once.",
+        ));
+    }
+    let mut rest = template.to_string();
+    let mut rand_digits = 0usize;
+    if let Some(start) = template.find("%RAND:") {
+        if serial_count > 0 {
+            return Err(name_error(
+                "Device name template can include %SERIAL% or %RAND:n%, not both.",
+            ));
+        }
+        let after = &template[start + "%RAND:".len()..];
+        let digits: String = after.chars().take_while(|ch| ch.is_ascii_digit()).collect();
+        let marker = format!("%RAND:{digits}%");
+        if digits.is_empty() || !template.contains(&marker) || template.matches("%RAND:").count() != 1 {
+            return Err(name_error(
+                "Device name template random text uses %RAND:n%, where n is the number of digits.",
+            ));
+        }
+        rand_digits = digits.parse().unwrap_or(0);
+        if !(1..=15).contains(&rand_digits) {
+            return Err(name_error(
+                "Device name template random length must be from 1 to 15.",
+            ));
+        }
+        rest = template.replacen(&marker, "", 1);
+    } else if serial_count == 1 {
+        rest = template.replacen(serial, "", 1);
+    }
+    if rest.chars().any(|ch| !ch.is_ascii_alphanumeric() && ch != '-') {
+        return Err(name_error(
+            "Device name template can use letters, digits, hyphens, %SERIAL%, and %RAND:n%.",
+        ));
+    }
+    let literal_len = rest.chars().count();
+    let generated_len = literal_len + rand_digits;
+    if generated_len > 15 || (serial_count == 0 && rand_digits == 0 && literal_len > 15) {
+        return Err(name_error(
+            "Device name template must generate 15 characters or fewer.",
+        ));
+    }
+    if serial_count == 0 && rand_digits == 0 && !rest.chars().any(|ch| ch.is_ascii_alphabetic()) {
+        return Err(name_error(
+            "Device name template needs a letter, %SERIAL%, or %RAND:n%.",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_oobe(oobe: &AutopilotOobeDraft) -> Result<(), GraphError> {
@@ -165,15 +237,20 @@ fn validate_oobe(oobe: &AutopilotOobeDraft) -> Result<(), GraphError> {
 }
 
 fn oobe_body(oobe: &AutopilotOobeDraft) -> Value {
-    json!({
+    let usage = oobe.device_usage_type.trim();
+    let mut body = json!({
         "@odata.type": "#microsoft.graph.outOfBoxExperienceSetting",
-        "userType": oobe.user_type.trim(),
-        "deviceUsageType": oobe.device_usage_type.trim(),
+        "deviceUsageType": usage,
         "privacySettingsHidden": oobe.privacy_settings_hidden,
         "eulaHidden": oobe.eula_hidden,
         "keyboardSelectionPageSkipped": oobe.keyboard_selection_page_skipped,
         "escapeLinkHidden": oobe.escape_link_hidden,
-    })
+    });
+    // Self-deploying profiles reject userType with an opaque DeviceEnrollmentFE 400.
+    if usage != "shared" {
+        body["userType"] = Value::String(oobe.user_type.trim().to_string());
+    }
+    body
 }
 
 fn esp_body(esp: &AutopilotEspDraft) -> Value {
@@ -438,12 +515,20 @@ pub fn create_autopilot_profile_body(input: &CreateAutopilotProfileInput) -> Res
         }
         body["description"] = Value::String(description.to_string());
     }
+    if input.join_kind == AutopilotJoinKind::Hybrid
+        && input.oobe.device_usage_type.trim() == "shared"
+    {
+        return Err(name_error(
+            "Self-deploying mode is available for Microsoft Entra join.",
+        ));
+    }
     if let Some(template) = input
         .device_name_template
         .as_ref()
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
     {
+        validate_device_name_template(template)?;
         body["deviceNameTemplate"] = Value::String(template.to_string());
     }
     if input.join_kind == AutopilotJoinKind::Hybrid {
@@ -488,7 +573,10 @@ pub fn update_autopilot_profile_body(input: &UpdateAutopilotProfileInput) -> Res
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
     {
-        Some(template) => Value::String(template.to_string()),
+        Some(template) => {
+            validate_device_name_template(template)?;
+            Value::String(template.to_string())
+        }
         None => Value::Null,
     };
     if is_hybrid_odata(&odata) {
@@ -564,8 +652,29 @@ pub async fn create_autopilot_profile(
             "beta",
             &body,
         )
-        .await?;
+        .await
+        .map_err(|error| annotate_autopilot_create_error(error, &body))?;
     summary_from_created(&created)
+}
+
+fn annotate_autopilot_create_error(error: GraphError, body: &Value) -> GraphError {
+    match error {
+        GraphError::Request {
+            status: 400,
+            code,
+            message,
+            permission_related,
+        } => GraphError::Request {
+            status: 400,
+            code,
+            permission_related,
+            message: format!(
+                "{message}\nPOST /deviceManagement/windowsAutopilotDeploymentProfiles\n{}",
+                serde_json::to_string(body).unwrap_or_default()
+            ),
+        },
+        other => other,
+    }
 }
 
 pub async fn update_autopilot_profile(

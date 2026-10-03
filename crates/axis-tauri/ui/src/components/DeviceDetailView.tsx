@@ -12,6 +12,7 @@ import type {
   ManagedDeviceDetail,
   PolicySettingIssue,
 } from "../types/inventory";
+import { CloseButton } from "./ui/CloseButton";
 import { DeviceActionsBar } from "./devices/DeviceActionsBar";
 import { DeviceBaselineCompare } from "./devices/DeviceBaselineCompare";
 import { DeviceHardwareDetailsPanel } from "./devices/DeviceHardwareDetailsPanel";
@@ -421,20 +422,17 @@ export function DeviceDetailView({
               Pop out
             </button>
           ) : null}
-          <button
-            type="button"
-            className="axis-btn"
-            onClick={() => {
-              if (popout) void closeThisWindow();
-              else onClose();
-            }}
-          >
-            {popout ? "Close window" : "Close"}
-          </button>
           <OpenInIntune href={intuneDeviceUrl(device.id)} label={device.deviceName} />
           <button type="button" className="axis-btn" onClick={() => void loadDevice({ force: true })}>
             Refresh
           </button>
+          {popout ? (
+            <button type="button" className="axis-btn" onClick={() => void closeThisWindow()}>
+              Close window
+            </button>
+          ) : (
+            <CloseButton onClick={onClose} />
+          )}
         </div>
       </div>
 

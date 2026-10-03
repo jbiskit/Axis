@@ -412,8 +412,34 @@ select:disabled {
   padding: 0;
 }
 
-.axis-btn-icon img {
+.axis-btn-icon img,
+.axis-btn-icon svg {
   display: block;
+}
+
+.assignment-dialog-head:has(.axis-btn-close),
+.page-header:has(.axis-btn-close),
+.device-inspector-head:has(.axis-btn-close) {
+  position: relative;
+  align-items: flex-start;
+  padding-right: 2.35rem;
+}
+
+.axis-btn-close {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 2;
+  color: var(--axis-danger);
+  border-color: color-mix(in srgb, var(--axis-danger) 45%, var(--axis-border));
+  background: var(--axis-danger-soft);
+}
+
+.axis-btn-close:hover:not(:disabled),
+.axis-btn-close:focus-visible {
+  color: var(--axis-danger);
+  border-color: var(--axis-danger);
+  background: color-mix(in srgb, var(--axis-danger) 22%, var(--axis-base));
 }
 
 .axis-btn-icon-check {

@@ -32,12 +32,109 @@ const SKIP_WALK_DIRS: &[&str] = &[
     ".appforge-cache",
 ];
 
-const DETECTION_SCRIPT_STUB: &str = "# Detection script for Intune Win32 app.
-# Exit 0 = detected (installed). Non-zero = not detected.
-# Replace this stub with real detection logic before upload.
+fn ps_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
 
+fn detection_name_script(display_name: &str) -> String {
+    let name = ps_literal(display_name);
+    format!(
+        r#"# Check that the app is installed (registry detection).
+# Exit 0 when an uninstall key DisplayName matches. Exit 1 otherwise.
+# Intune counts the app as detected only when the script exits 0 and writes to the output stream.
+
+$applicationDisplayName = {name}
+$uninstallRoots = @(
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+    'HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+)
+$application = Get-ChildItem -Path $uninstallRoots -ErrorAction SilentlyContinue |
+    Get-ItemProperty -ErrorAction SilentlyContinue |
+    Where-Object {{ $_.DisplayName -match [regex]::Escape($applicationDisplayName) }} |
+    Select-Object -First 1
+
+if ($application) {{
+    Write-Output 'Installed'
+    exit 0
+}}
+
+Write-Output 'Not Installed'
 exit 1
-";
+"#
+    )
+}
+
+fn detection_version_script(display_name: &str, version: &str) -> String {
+    let name = ps_literal(display_name);
+    let version = ps_literal(version);
+    format!(
+        r#"# Check for a specific version (registry detection).
+# Exit 0 when DisplayName matches and DisplayVersion is greater than or equal to $version.
+# Exit 1 when the app is missing or older.
+# A name-only check, without a version, is in detection-name.ps1.
+# Intune counts the app as detected only when the script exits 0 and writes to the output stream.
+
+$applicationDisplayName = {name}
+$version = {version}
+$uninstallRoots = @(
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+    'HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+)
+$applicationDetection = Get-ChildItem -Path $uninstallRoots -ErrorAction SilentlyContinue |
+    Get-ItemProperty -ErrorAction SilentlyContinue |
+    Where-Object {{ $_.DisplayName -match [regex]::Escape($applicationDisplayName) }} |
+    Select-Object -First 1 DisplayName, DisplayVersion
+
+if ($applicationDetection) {{
+    Write-Output "$($applicationDisplayName) detected as installed with version $($applicationDetection.DisplayVersion)"
+    if ($applicationDetection.DisplayVersion -ge $version) {{
+        # -lt less than
+        # -eq equal to
+        # -gt greater than
+        # -ge greater than or equal to
+        # -le less than or equal to
+        Write-Output "$($applicationDisplayName) is up to date"
+        exit 0
+    }}
+    Write-Output "$($applicationDisplayName) is not up to date"
+    exit 1
+}}
+
+Write-Output "$($applicationDisplayName) is not installed"
+exit 1
+"#
+    )
+}
+
+fn stamp_detection_version(package_info: &Path, version: &str) {
+    let path = package_info.join("detection.ps1");
+    let Ok(text) = fs::read_to_string(&path) else {
+        return;
+    };
+    let mut changed = false;
+    let mut out = String::new();
+    for line in text.split_inclusive('\n') {
+        let trimmed = line.trim_start().trim_end_matches(['\r', '\n']);
+        if trimmed.starts_with("$version ") || trimmed.starts_with("$version=") {
+            let ending = if line.ends_with("\r\n") {
+                "\r\n"
+            } else if line.ends_with('\n') {
+                "\n"
+            } else {
+                ""
+            };
+            out.push_str("$version = ");
+            out.push_str(&ps_literal(version));
+            out.push_str(ending);
+            changed = true;
+        } else {
+            out.push_str(line);
+        }
+    }
+    if changed {
+        let _ = fs::write(path, out);
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum AppCatalogError {
@@ -171,7 +268,14 @@ pub fn create_catalog_app(input: CreateCatalogAppInput) -> Result<CatalogAppSumm
     if !marker.exists() {
         fs::write(marker, b"")?;
     }
-    fs::write(package_info.join("detection.ps1"), DETECTION_SCRIPT_STUB)?;
+    fs::write(
+        package_info.join("detection.ps1"),
+        detection_version_script(&name, &version),
+    )?;
+    fs::write(
+        package_info.join("detection-name.ps1"),
+        detection_name_script(&name),
+    )?;
     let publisher = input
         .publisher
         .as_deref()
@@ -391,6 +495,7 @@ pub fn copy_catalog_app_version(
             let mut written = serde_json::to_string_pretty(&value)?;
             written.push('\n');
             fs::write(&config_path, written)?;
+            stamp_detection_version(&dest.join(PACKAGE_INFO_DIR), &new_version);
         }
     }
     let app_name = parent
@@ -407,6 +512,118 @@ pub fn copy_catalog_app_version(
         &format!("{vendor}/{app_name}/{new_version}"),
         true,
     ))
+}
+
+/// Remove catalog package folders. Each path must be a version directory under
+/// `Applications` that still has `PackageInformation/config.json`. Empty vendor
+/// and application folders left behind are removed. `Applications` itself stays.
+pub fn delete_catalog_apps(
+    source_root: &str,
+    app_paths: &[String],
+) -> Result<Vec<String>, AppCatalogError> {
+    let root = assert_source_root(source_root)?;
+    if app_paths.is_empty() {
+        return Err(AppCatalogError::Message(
+            "Choose an application to delete.".into(),
+        ));
+    }
+    let apps_root = root.join(APPLICATIONS_DIR);
+    let mut targets: Vec<(PathBuf, String)> = Vec::new();
+    let mut seen = HashSet::new();
+    for raw in app_paths {
+        let app = package_dir(raw)?;
+        let relative = normalize_dependency_path(&relative_catalog_path(&root, &app)?);
+        if relative.is_empty() || !app.join(PACKAGE_INFO_DIR).join(CONFIG_FILE).is_file() {
+            return Err(AppCatalogError::Message(format!(
+                "That folder is not a catalog application: {}",
+                app.display()
+            )));
+        }
+        if seen.insert(relative.to_ascii_lowercase()) {
+            targets.push((app, relative));
+        }
+    }
+    let deleted: Vec<String> = targets.iter().map(|(_, relative)| relative.clone()).collect();
+    for (app, relative) in &targets {
+        fs::remove_dir_all(app).map_err(|error| {
+            AppCatalogError::Message(format!("Could not delete {relative}: {error}"))
+        })?;
+        if let Some(parent) = app.parent() {
+            prune_empty_catalog_dirs(parent, &apps_root);
+        }
+    }
+    let deleted_keys: HashSet<String> = deleted.iter().map(|path| path.to_ascii_lowercase()).collect();
+    let _ = drop_deleted_dependencies(&root, &deleted_keys);
+    Ok(deleted)
+}
+
+fn prune_empty_catalog_dirs(start: &Path, apps_root: &Path) {
+    let Ok(apps_root) = apps_root.canonicalize() else {
+        return;
+    };
+    let mut current = start.to_path_buf();
+    loop {
+        let Ok(canonical) = current.canonicalize() else {
+            return;
+        };
+        if canonical == apps_root || !canonical.starts_with(&apps_root) {
+            return;
+        }
+        let Ok(mut entries) = fs::read_dir(&canonical) else {
+            return;
+        };
+        if entries.next().is_some() {
+            return;
+        }
+        if fs::remove_dir(&canonical).is_err() {
+            return;
+        }
+        let Some(parent) = canonical.parent() else {
+            return;
+        };
+        current = parent.to_path_buf();
+    }
+}
+
+fn drop_deleted_dependencies(root: &Path, deleted: &HashSet<String>) -> Result<(), AppCatalogError> {
+    let apps_root = root.join(APPLICATIONS_DIR);
+    if !apps_root.is_dir() {
+        return Ok(());
+    }
+    let mut apps = Vec::new();
+    discover_apps(&apps_root, "", &mut apps)?;
+    for app in apps {
+        let config_path = PathBuf::from(&app.local_path)
+            .join(PACKAGE_INFO_DIR)
+            .join(CONFIG_FILE);
+        let Ok(text) = fs::read_to_string(&config_path) else {
+            continue;
+        };
+        let Ok(mut value) = serde_json::from_str::<Value>(&text) else {
+            continue;
+        };
+        let Some(items) = value.get_mut("dependencies").and_then(Value::as_array_mut) else {
+            continue;
+        };
+        let before = items.len();
+        items.retain(|item| {
+            dependency_path(item)
+                .map(|path| !deleted.contains(&path.to_ascii_lowercase()))
+                .unwrap_or(true)
+        });
+        if items.len() == before {
+            continue;
+        }
+        if items.is_empty() {
+            if let Some(object) = value.as_object_mut() {
+                object.remove("dependencies");
+            }
+        }
+        let mut written = serde_json::to_string_pretty(&value)?;
+        written.push('\n');
+        fs::write(config_path, written)?;
+    }
+    Ok(())
 }
 
 fn discover_apps(

@@ -622,6 +622,58 @@ export function draftsEqualAutopilot(
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
+const AUTOPILOT_NAME_CHARS = /[\p{L}\p{N} :"?.@$&_[\]{}|\\]/u;
+
+export function autopilotProfileNameProblem(name: string): string | null {
+  const trimmed = name.trim();
+  if (!trimmed) return "Enter a profile name.";
+  if (trimmed.length > 200) return "Profile name must be 200 characters or fewer.";
+  if ([...trimmed].some((ch) => !AUTOPILOT_NAME_CHARS.test(ch))) {
+    return 'Autopilot profile name can use letters, numbers, spaces, and : " ? . @ $ & _ [ ] { } | \\.';
+  }
+  return null;
+}
+
+/** Empty is allowed. Otherwise the template must match what Intune will accept. */
+export function autopilotDeviceNameProblem(template: string): string | null {
+  const value = template.trim();
+  if (!value) return null;
+  const serial = "%SERIAL%";
+  const serialCount = value.split(serial).length - 1;
+  if (serialCount > 1) return "Device name template can include %SERIAL% once.";
+  let rest = value;
+  let randDigits = 0;
+  if (value.includes("%RAND:")) {
+    if (serialCount > 0) {
+      return "Device name template can include %SERIAL% or %RAND:n%, not both.";
+    }
+    const start = value.indexOf("%RAND:");
+    const digits = /^\d+/.exec(value.slice(start + "%RAND:".length))?.[0] ?? "";
+    const marker = `%RAND:${digits}%`;
+    if (!digits || !value.includes(marker) || value.split("%RAND:").length - 1 !== 1) {
+      return "Device name template random text uses %RAND:n%, where n is the number of digits.";
+    }
+    randDigits = Number(digits);
+    if (!Number.isInteger(randDigits) || randDigits < 1 || randDigits > 15) {
+      return "Device name template random length must be from 1 to 15.";
+    }
+    rest = value.replace(marker, "");
+  } else if (serialCount === 1) {
+    rest = value.replace(serial, "");
+  }
+  if ([...rest].some((ch) => !/[A-Za-z0-9-]/.test(ch))) {
+    return "Device name template can use letters, digits, hyphens, %SERIAL%, and %RAND:n%.";
+  }
+  const literalLen = [...rest].length;
+  if (literalLen + randDigits > 15) {
+    return "Device name template must generate 15 characters or fewer.";
+  }
+  if (serialCount === 0 && randDigits === 0 && ![...rest].some((ch) => /[A-Za-z]/.test(ch))) {
+    return "Device name template needs a letter, %SERIAL%, or %RAND:n%.";
+  }
+  return null;
+}
+
 export function toCreateAutopilotInput(draft: AutopilotProfileDraft) {
   return {
     displayName: draft.displayName.trim(),

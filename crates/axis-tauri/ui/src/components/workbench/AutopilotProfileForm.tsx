@@ -5,6 +5,8 @@ import {
   AUTOPILOT_JOIN_OPTIONS,
   AUTOPILOT_USAGE_OPTIONS,
   AUTOPILOT_USER_TYPE_OPTIONS,
+  autopilotDeviceNameProblem,
+  autopilotProfileNameProblem,
 } from "../../lib/autopilotProfile";
 import { AutopilotLocaleField } from "./AutopilotLocaleField";
 import { BooleanToggle } from "./BooleanToggle";
@@ -12,21 +14,28 @@ import { BooleanToggle } from "./BooleanToggle";
 function Field({
   label,
   hint,
+  error,
   children,
 }: {
   label: string;
   hint?: string;
+  error?: string | null;
   children: ReactNode;
 }) {
   return (
     <label className="device-field">
       {label}
-      {hint ? (
+      {hint && !error ? (
         <span className="muted" style={{ display: "block", fontSize: "0.7rem", marginBottom: "0.25rem" }}>
           {hint}
         </span>
       ) : null}
       {children}
+      {error ? (
+        <span className="setting-field-error" role="alert">
+          {error}
+        </span>
+      ) : null}
     </label>
   );
 }
@@ -68,17 +77,20 @@ export function AutopilotProfileForm({
   disabled?: boolean;
 }) {
   const hybrid = draft.joinKind === "hybrid";
+  const nameError = draft.displayName.trim() ? autopilotProfileNameProblem(draft.displayName) : null;
+  const deviceNameError = autopilotDeviceNameProblem(draft.deviceNameTemplate);
   return (
     <div className="stack" style={{ gap: "1rem" }}>
       <section className="stack" style={{ gap: "0.75rem" }}>
         <h3 style={{ margin: 0, fontSize: "0.9rem" }}>Basics</h3>
-        <Field label="Name">
+        <Field label="Name" error={nameError}>
           <input
-            className="axis-input"
+            className={`axis-input${nameError ? " is-invalid" : ""}`}
             value={draft.displayName}
             disabled={disabled}
+            aria-invalid={nameError ? true : undefined}
             onChange={(event) => onChange({ displayName: event.target.value })}
-            placeholder="e.g. Corporate laptops — Entra"
+            placeholder="Corporate laptops"
           />
         </Field>
         <Field label="Description">
@@ -142,14 +154,16 @@ export function AutopilotProfileForm({
         </Field>
         <Field
           label="Device name template"
-          hint="Optional. Generated names are limited to 15 characters (e.g. AX-%SERIAL%)."
+          hint="Optional. Letters, digits, and hyphens, plus %SERIAL% or %RAND:n%. The generated name is 15 characters or fewer."
+          error={deviceNameError}
         >
           <input
-            className="axis-input"
+            className={`axis-input${deviceNameError ? " is-invalid" : ""}`}
             value={draft.deviceNameTemplate}
             disabled={disabled}
+            aria-invalid={deviceNameError ? true : undefined}
             onChange={(event) => onChange({ deviceNameTemplate: event.target.value })}
-            placeholder="Not configured"
+            placeholder="AX-%SERIAL%"
           />
         </Field>
       </section>

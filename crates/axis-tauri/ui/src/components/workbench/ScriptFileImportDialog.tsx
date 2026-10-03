@@ -5,6 +5,7 @@ import { assignObjectAssignments, createTenantScript, pickScriptFiles } from "..
 import type { AssignmentDraft, PickedTextFile, TenantScriptSummary } from "../../types/inventory";
 import { AssignmentsEditor } from "./AssignmentsEditor";
 import { ScriptRunSettingsFields } from "./ScriptRunSettingsFields";
+import { CloseButton } from "../ui/CloseButton";
 
 const EMPTY_GRAPH_ASSIGNMENTS: Record<string, unknown>[] = [];
 const IMPORT_ASSIGNMENT_TARGETS = [{ id: "script-import-draft", title: "Imported scripts" }];
@@ -156,9 +157,7 @@ export function ScriptFileImportDialog({
               The assignment list below is applied to every script you import.
             </p>
           </div>
-          <button type="button" className="axis-btn" disabled={saving} onClick={closeDialog}>
-            Close
-          </button>
+          <CloseButton onClick={closeDialog} disabled={saving} />
         </div>
         {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
         {progress ? <p className="muted">{progress}</p> : null}

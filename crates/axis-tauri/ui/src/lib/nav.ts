@@ -210,6 +210,12 @@ export const INTUNE_NAV: NavItem[] = [
   { href: "/intune/reports", label: "Environment report", icon: "reports", section: "Workspace" },
   { href: "/intune/client", label: "Compare & restore", icon: "baselines", section: "Workspace" },
   {
+    href: "/intune/get-started/autopilot",
+    label: "Autopilot",
+    icon: "enrollment",
+    section: "Get Started",
+  },
+  {
     href: "/intune/devices",
     label: "Devices",
     icon: "devices",

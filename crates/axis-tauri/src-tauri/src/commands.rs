@@ -9,6 +9,7 @@ use axis_sdk::{
     duplicate_graph_object, update_autopilot_device_properties, fetch_windows_autopilot_settings,
     sync_windows_autopilot_devices, WindowsAutopilotSettings,
     create_autopilot_profile, update_autopilot_profile, CreateAutopilotProfileInput,
+    create_domain_join_profile, CreateDomainJoinInput, CreatedDomainJoinProfile,
     UpdateAutopilotProfileInput, update_win32_app, UpdateWin32AppInput,
     create_winget_app, fetch_store_catalog_manifest, search_store_catalog, update_winget_app,
     CreateWinGetAppInput, UpdateWinGetAppInput,
@@ -29,10 +30,10 @@ use axis_sdk::{
     PackExportOptions, PackExportProgress, PackExportResult, SelectedExportResult,
     create_empty_kit, create_local_pack, open_pack_workspace, open_pack_workspace_from_source,
     attach_catalog_icon, attach_catalog_intunewin, catalog_dependency_chain, copy_catalog_app_version,
-    create_catalog_app,
+    create_catalog_app, delete_catalog_apps,
     download_public_icon, fetch_catalog_icon, list_catalog_apps, read_local_icon,
-    find_catalog_upload_matches, link_win32_app_dependency, read_catalog_app_config,
-    unlink_win32_app_dependency,
+    find_catalog_upload_matches, link_win32_app_dependency, link_win32_app_supersedence,
+    read_catalog_app_config, unlink_win32_app_dependency, unlink_win32_app_supersedence,
     save_catalog_app_config, upload_catalog_win32, CatalogAppDocument, Win32AppMatch,
     CatalogAppSummary, CatalogDependencyChain, CatalogIntuneWinFile, CopyCatalogAppInput,
     CreateCatalogAppInput,
@@ -295,20 +296,19 @@ pub async fn create_local_pack_cmd(input: CreateLocalPackInput) -> Result<PackWo
     create_local_pack(input).map_err(|error| error.to_string())
 }
 
-/// Open container wins. Otherwise use the repo the user picked.
+/// An explicit folder is that catalog. With no folder, the open tenant container is the catalog.
 fn catalog_root(state: &AppState, requested: Option<&str>) -> Result<std::path::PathBuf, String> {
+    if let Some(requested) = requested.map(str::trim).filter(|value| !value.is_empty()) {
+        let path = std::path::PathBuf::from(requested);
+        if !path.is_dir() {
+            return Err(format!("Local repo not found: {}", path.display()));
+        }
+        return Ok(path);
+    }
     if let Some(active) = state.client_container.active_path() {
         return Ok(active);
     }
-    let requested = requested
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| "Choose a local repo, or open a client container.".to_string())?;
-    let path = std::path::PathBuf::from(requested);
-    if !path.is_dir() {
-        return Err(format!("Local repo not found: {}", path.display()));
-    }
-    Ok(path)
+    Err("Choose a local repo, or open a client container.".into())
 }
 
 fn path_inside(root: &std::path::Path, candidate: &std::path::Path) -> bool {
@@ -372,6 +372,22 @@ pub async fn copy_catalog_app_version_cmd(
         return Err("That package is not in the selected catalog.".into());
     }
     copy_catalog_app_version(input).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_catalog_apps_cmd(
+    state: State<'_, AppState>,
+    source_root: Option<String>,
+    app_paths: Vec<String>,
+) -> Result<Vec<String>, String> {
+    let root = catalog_root(&state, source_root.as_deref())?;
+    for path in &app_paths {
+        let app = std::path::PathBuf::from(path.trim());
+        if path.trim().is_empty() || !app.is_dir() || !path_inside(&root, &app) {
+            return Err("That package is not in the selected catalog.".into());
+        }
+    }
+    delete_catalog_apps(&root.to_string_lossy(), &app_paths).map_err(|error| error.to_string())
 }
 
 fn require_catalog_package(
@@ -495,6 +511,37 @@ pub async fn unlink_mobile_app_dependency_cmd(
         return Err("Not signed in.".into());
     };
     unlink_win32_app_dependency(&token, &parent_app_id, &target_app_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn link_mobile_app_supersedence_cmd(
+    state: State<'_, AppState>,
+    newer_app_id: String,
+    older_app_id: String,
+    replace: bool,
+) -> Result<(), String> {
+    ensure_write_allowed(&state).await?;
+    let Some(token) = session_token(&state).await? else {
+        return Err("Not signed in.".into());
+    };
+    link_win32_app_supersedence(&token, &newer_app_id, &older_app_id, replace)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn unlink_mobile_app_supersedence_cmd(
+    state: State<'_, AppState>,
+    newer_app_id: String,
+    older_app_id: String,
+) -> Result<(), String> {
+    ensure_write_allowed(&state).await?;
+    let Some(token) = session_token(&state).await? else {
+        return Err("Not signed in.".into());
+    };
+    unlink_win32_app_supersedence(&token, &newer_app_id, &older_app_id)
         .await
         .map_err(|error| error.to_string())
 }
@@ -680,7 +727,7 @@ pub async fn client_container_pick_open_cmd(
 pub async fn client_container_pick_create_cmd() -> Result<Option<String>, String> {
     tokio::task::spawn_blocking(|| {
         rfd::FileDialog::new()
-            .set_title("Choose a folder for the new client container")
+            .set_title("Choose a parent folder for the new client container")
             .pick_folder()
             .map(|path| path.to_string_lossy().into_owned())
     })
@@ -2855,6 +2902,37 @@ pub async fn create_autopilot_profile_cmd(
             error: None,
         }),
         Err(error) => Ok(CreateAutopilotProfileResponse {
+            profile: None,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateDomainJoinResponse {
+    pub profile: Option<CreatedDomainJoinProfile>,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn create_domain_join_profile_cmd(
+    state: State<'_, AppState>,
+    input: CreateDomainJoinInput,
+) -> Result<CreateDomainJoinResponse, String> {
+    ensure_write_allowed(&state).await?;
+    let Some(token) = session_token(&state).await? else {
+        return Ok(CreateDomainJoinResponse {
+            profile: None,
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match create_domain_join_profile(&token, input).await {
+        Ok(profile) => Ok(CreateDomainJoinResponse {
+            profile: Some(profile),
+            error: None,
+        }),
+        Err(error) => Ok(CreateDomainJoinResponse {
             profile: None,
             error: Some(error.to_string()),
         }),

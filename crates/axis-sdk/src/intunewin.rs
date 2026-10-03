@@ -209,10 +209,11 @@ pub async fn link_win32_app_dependency(
             "An app cannot be a dependency of itself.".into(),
         ));
     }
-    write_parent_dependency(
+    write_parent_relationship(
         access_token,
         parent_app_id,
         target_app_id,
+        "dependency",
         Some(json!({
             "@odata.type": "#microsoft.graph.mobileAppDependency",
             "targetId": target_app_id,
@@ -228,13 +229,64 @@ pub async fn unlink_win32_app_dependency(
     parent_app_id: &str,
     target_app_id: &str,
 ) -> Result<(), IntuneWinError> {
-    write_parent_dependency(access_token, parent_app_id, target_app_id, None).await
+    write_parent_relationship(access_token, parent_app_id, target_app_id, "dependency", None).await
 }
 
-async fn write_parent_dependency(
+/// The newer app supersedes the older one. `replace` uninstalls the older app; otherwise this is an update.
+/// Other relationships stay in place.
+pub async fn link_win32_app_supersedence(
+    access_token: &str,
+    newer_app_id: &str,
+    older_app_id: &str,
+    replace: bool,
+) -> Result<(), IntuneWinError> {
+    let newer_app_id = newer_app_id.trim();
+    let older_app_id = older_app_id.trim();
+    if newer_app_id.is_empty() || older_app_id.is_empty() {
+        return Err(IntuneWinError::Message(
+            "Both apps need an Intune id before one can supersede the other.".into(),
+        ));
+    }
+    if newer_app_id.eq_ignore_ascii_case(older_app_id) {
+        return Err(IntuneWinError::Message(
+            "An app cannot supersede itself.".into(),
+        ));
+    }
+    write_parent_relationship(
+        access_token,
+        newer_app_id,
+        older_app_id,
+        "supersedence",
+        Some(json!({
+            "@odata.type": "#microsoft.graph.mobileAppSupersedence",
+            "targetId": older_app_id,
+            "supersedenceType": if replace { "replace" } else { "update" },
+        })),
+    )
+    .await
+}
+
+/// Remove one supersedence link from the newer app. Other relationships stay in place.
+pub async fn unlink_win32_app_supersedence(
+    access_token: &str,
+    newer_app_id: &str,
+    older_app_id: &str,
+) -> Result<(), IntuneWinError> {
+    write_parent_relationship(
+        access_token,
+        newer_app_id,
+        older_app_id,
+        "supersedence",
+        None,
+    )
+    .await
+}
+
+async fn write_parent_relationship(
     access_token: &str,
     parent_app_id: &str,
     target_app_id: &str,
+    drop_kind: &str,
     replacement: Option<Value>,
 ) -> Result<(), IntuneWinError> {
     let parent_app_id = parent_app_id.trim();
@@ -258,7 +310,7 @@ async fn write_parent_dependency(
         graph.fetch_plain(access_token, &list_path, "beta").await?;
     let mut relationships = Vec::new();
     for row in page.value {
-        if let Some(kept) = kept_relationship(&row, parent_app_id, target_app_id) {
+        if let Some(kept) = kept_relationship(&row, parent_app_id, target_app_id, drop_kind) {
             relationships.push(kept);
         }
     }
@@ -279,7 +331,12 @@ async fn write_parent_dependency(
     Ok(())
 }
 
-fn kept_relationship(row: &Value, parent_app_id: &str, replace_target_id: &str) -> Option<Value> {
+fn kept_relationship(
+    row: &Value,
+    parent_app_id: &str,
+    replace_target_id: &str,
+    drop_kind: &str,
+) -> Option<Value> {
     // Graph lists the same link from both apps. On the dependency, targetType is
     // "parent" (or sourceId is the app that requires it). Writing that row back
     // would make the parent a dependency of the child and block the next link.
@@ -287,14 +344,24 @@ fn kept_relationship(row: &Value, parent_app_id: &str, replace_target_id: &str) 
         return None;
     }
     let target = row.get("targetId").and_then(Value::as_str)?.trim();
-    if target.is_empty() || target.eq_ignore_ascii_case(replace_target_id) {
+    if target.is_empty() {
         return None;
     }
     let odata = row.get("@odata.type").and_then(Value::as_str).unwrap_or("");
     let dependency_type = row.get("dependencyType").and_then(Value::as_str);
     let supersedence_type = row.get("supersedenceType").and_then(Value::as_str);
     let lower = odata.to_ascii_lowercase();
-    if lower.contains("supersedence") || supersedence_type.is_some() {
+    let kind = if lower.contains("supersedence") || supersedence_type.is_some() {
+        "supersedence"
+    } else if lower.contains("dependency") || dependency_type.is_some() {
+        "dependency"
+    } else {
+        return None;
+    };
+    if target.eq_ignore_ascii_case(replace_target_id) && kind == drop_kind {
+        return None;
+    }
+    if kind == "supersedence" {
         return Some(json!({
             "@odata.type": "#microsoft.graph.mobileAppSupersedence",
             "targetId": target,

@@ -33,6 +33,7 @@ import {
   type ContextMenuState,
 } from "../ui/ContextMenu";
 import { AssignmentsEditor } from "./AssignmentsEditor";
+import { CloseButton } from "../ui/CloseButton";
 
 export type ObjectListTarget = {
   id: string;
@@ -338,9 +339,7 @@ function ObjectActionPane({
             <p className="axis-kicker">{mode === "duplicate" ? "Duplicate" : "Metadata"}</p>
             <h2>{mode === "duplicate" ? `Copy ${target.title}` : target.title}</h2>
           </div>
-          <button type="button" className="axis-btn" disabled={saving} onClick={onClose}>
-            Close
-          </button>
+          <CloseButton onClick={onClose} disabled={saving} />
         </div>
         {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
         {loading ? <p className="muted">Loading object details…</p> : null}
@@ -544,9 +543,7 @@ function DeleteObjectDialog({
             <p className="axis-kicker">Delete</p>
             <h2>Delete {target.title}?</h2>
           </div>
-          <button type="button" className="axis-btn" disabled={deleting} onClick={onClose}>
-            Close
-          </button>
+          <CloseButton onClick={onClose} disabled={deleting} />
         </div>
         {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
         <p>
@@ -732,14 +729,7 @@ export function BulkDeleteAction({
                 <p className="axis-kicker">Bulk delete</p>
                 <h2>Delete {deletableTargets.length} selected objects?</h2>
               </div>
-              <button
-                type="button"
-                className="axis-btn"
-                disabled={deleting}
-                onClick={() => setOpen(false)}
-              >
-                Close
-              </button>
+              <CloseButton onClick={() => setOpen(false)} disabled={deleting} />
             </div>
             {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
             <p>

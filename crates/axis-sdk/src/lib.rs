@@ -13,6 +13,7 @@ mod device_compare;
 mod device_detail;
 mod device_policies;
 mod device_recovery;
+mod domain_join;
 mod devices;
 mod e8_baselines;
 mod enrollment_limits;
@@ -43,8 +44,9 @@ pub use app_icon::{
     CatalogIconPreview, IconError,
 };
 pub use app_catalog::{
-    attach_catalog_intunewin, copy_catalog_app_version, create_catalog_app, find_intune_win_path,
-    catalog_dependency_chain, list_catalog_apps, read_catalog_app_config, save_catalog_app_config,
+    attach_catalog_intunewin, copy_catalog_app_version, create_catalog_app, delete_catalog_apps,
+    find_intune_win_path, catalog_dependency_chain, list_catalog_apps, read_catalog_app_config,
+    save_catalog_app_config,
     CatalogAppDocument, CatalogAppSummary, CatalogDependencyChain, CatalogDependencyNode,
     CatalogIntuneWinFile, CopyCatalogAppInput, CreateCatalogAppInput, SaveCatalogAppInput,
 };
@@ -63,10 +65,11 @@ pub use auth::{
     decode_access_token_claims, device_code_client_id, device_code_scopes, device_code_tenant,
     is_graph_command_line_tools_client, is_write_or_privileged_scope, parse_extra_scopes,
     scopes_for_mode, scopes_for_mode_with_extras, token_scp_has_write_scopes, AuthManager,
-    DeviceCodePrompt, DeviceCodeTokens, PollResult, TokenClaims,
+    BrowserSignIn, PollResult, SessionTokens, StoredSignIn, StoredSignInOutcome, TokenClaims,
 };
 pub use intunewin::{
-    find_catalog_upload_matches, link_win32_app_dependency, unlink_win32_app_dependency,
+    find_catalog_upload_matches, link_win32_app_dependency, link_win32_app_supersedence,
+    unlink_win32_app_dependency, unlink_win32_app_supersedence,
     upload_catalog_win32, Win32AppMatch,
     Win32UploadProgress, Win32UploadResult,
 };
@@ -76,6 +79,10 @@ pub use win32_apps::{
 pub use store_apps::{
     create_winget_app, fetch_store_catalog_manifest, search_store_catalog, update_winget_app,
     CreateWinGetAppInput, StoreCatalogHit, StoreCatalogManifest, UpdateWinGetAppInput,
+};
+pub use domain_join::{
+    create_domain_join_body, create_domain_join_profile, CreateDomainJoinInput,
+    CreatedDomainJoinProfile,
 };
 pub use autopilot_profiles::{
     autopilot_profile_create_body_from_export, create_autopilot_profile,

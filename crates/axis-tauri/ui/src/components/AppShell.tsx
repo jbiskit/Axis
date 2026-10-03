@@ -278,6 +278,7 @@ export function AppShell({
   accountName,
   organizationName,
   mode = "read",
+  usesGraphSignIn = false,
   readOnlyScopeExceedsRequest = false,
   exceededWriteScopes = [],
   appVersion,
@@ -303,6 +304,7 @@ export function AppShell({
   accountName: string | null;
   organizationName: string | null;
   mode?: SessionMode;
+  usesGraphSignIn?: boolean;
   readOnlyScopeExceedsRequest?: boolean;
   exceededWriteScopes?: string[];
   appVersion: string | null;
@@ -524,9 +526,13 @@ export function AppShell({
                 disabled={contextSwapBusy}
                 aria-label="Swap context"
                 title={
-                  mode === "read"
-                    ? "Swap context — sign in again for Read & Write permissions"
-                    : "Swap context — sign in again for read-only permissions"
+                  usesGraphSignIn
+                    ? mode === "read"
+                      ? "Swap context — sign in again for Read & Write permissions"
+                      : "Swap context — sign in again for read-only permissions"
+                    : mode === "read"
+                      ? "Swap context — switch to the saved Read & Write app for this tenant"
+                      : "Swap context — switch to the saved read-only app for this tenant"
                 }
                 onClick={onSwapContext}
               >
