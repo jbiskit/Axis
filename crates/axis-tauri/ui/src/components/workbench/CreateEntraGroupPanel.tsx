@@ -4,12 +4,19 @@ import type { CreateGroupMembership, DirectoryGroup } from "../../types/inventor
 
 const USER_RULE = '(user.department -eq "Finance")';
 const DEVICE_RULE = '(device.deviceOSType -eq "Windows")';
+const AUTOPILOT_RULE = '(device.devicePhysicalIDs -any (_ -contains "[ZTDID]"))';
+
+function autopilotRule(orderId: string): string {
+  const trimmed = orderId.trim();
+  if (!trimmed || /["\r\n]/.test(trimmed)) return AUTOPILOT_RULE;
+  return `${AUTOPILOT_RULE} and (device.devicePhysicalIds -any (_ -eq "[OrderID]:${trimmed}"))`;
+}
 
 const RULE_EXAMPLES = [
   { label: "Windows devices", rule: '(device.deviceOSType -eq "Windows")', kind: "dynamicDevice" as const },
   {
     label: "Autopilot devices",
-    rule: '(device.devicePhysicalIDs -any (_ -contains "[ZTDID]"))',
+    rule: AUTOPILOT_RULE,
     kind: "dynamicDevice" as const,
   },
   { label: "Users by department", rule: '(user.department -eq "Finance")', kind: "dynamicUser" as const },
@@ -26,11 +33,14 @@ export function CreateEntraGroupPanel({
   successHint,
   namePlaceholder = "e.g. Contoso — Policy pilots",
   disabled = false,
+  autopilotOrderId = false,
 }: {
   onCreated: (group: DirectoryGroup) => void;
   successHint?: string;
   namePlaceholder?: string;
   disabled?: boolean;
+  /** Optional Order ID filter for the Autopilot device membership rule. */
+  autopilotOrderId?: boolean;
 }) {
   const radioName = useId();
   const [open, setOpen] = useState(false);
@@ -38,6 +48,7 @@ export function CreateEntraGroupPanel({
   const [description, setDescription] = useState("");
   const [membership, setMembership] = useState<CreateGroupMembership>("assigned");
   const [rule, setRule] = useState("");
+  const [orderId, setOrderId] = useState("");
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<DirectoryGroup | null>(null);
@@ -87,9 +98,14 @@ export function CreateEntraGroupPanel({
     }
   };
 
+  const orderProblem =
+    autopilotOrderId && membership === "dynamicDevice" && /["\r\n]/.test(orderId)
+      ? "Order ID cannot include quotes or line breaks."
+      : null;
   const canCreate =
     !disabled &&
     !creating &&
+    !orderProblem &&
     Boolean(name.trim()) &&
     (membership === "assigned" || Boolean(rule.trim()));
 
@@ -174,13 +190,41 @@ export function CreateEntraGroupPanel({
                     key={example.label}
                     type="button"
                     className="axis-btn axis-btn-ghost"
-                    onClick={() => setRule(example.rule)}
+                    onClick={() =>
+                      setRule(example.rule === AUTOPILOT_RULE ? autopilotRule(orderId) : example.rule)
+                    }
                     disabled={disabled || creating}
                   >
                     {example.label}
                   </button>
                 ))}
               </div>
+              {autopilotOrderId && membership === "dynamicDevice" ? (
+                <label className="device-field">
+                  Order ID
+                  <span className="muted" style={{ display: "block", fontSize: "0.7rem" }}>
+                    Optional. Adds (device.devicePhysicalIds -any (_ -eq "[OrderID]:…")) to the Autopilot device rule.
+                  </span>
+                  <input
+                    className={`axis-input${orderProblem ? " is-invalid" : ""}`}
+                    value={orderId}
+                    placeholder="179887111881"
+                    aria-invalid={orderProblem ? true : undefined}
+                    disabled={disabled || creating}
+                    onChange={(event) => {
+                      const next = event.target.value;
+                      setOrderId(next);
+                      setRule(autopilotRule(next));
+                      setMembership("dynamicDevice");
+                    }}
+                  />
+                </label>
+              ) : null}
+              {orderProblem ? (
+                <p className="setting-field-error" role="alert">
+                  {orderProblem}
+                </p>
+              ) : null}
               <p className="muted" style={{ margin: 0, fontSize: "0.6875rem" }}>
                 {membership === "dynamicDevice"
                   ? "Uses a device.* rule. Dynamic groups need Entra ID P1 (or higher)."

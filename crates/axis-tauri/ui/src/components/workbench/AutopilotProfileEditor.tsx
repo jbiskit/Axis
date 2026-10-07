@@ -88,7 +88,7 @@ export function AutopilotProfileEditor({
       readOnly ||
       !odataType ||
       Boolean(autopilotProfileNameProblem(draft.displayName)) ||
-      Boolean(autopilotDeviceNameProblem(draft.deviceNameTemplate)),
+      (draft.joinKind !== "hybrid" && Boolean(autopilotDeviceNameProblem(draft.deviceNameTemplate))),
     busy,
     label: dirty ? "Save profile" : undefined,
   });

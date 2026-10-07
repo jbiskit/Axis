@@ -57,6 +57,8 @@ import {
   ENROLLMENT_AUTOPILOT_PATH,
   ENROLLMENT_AUTOPILOT_DEVICES_PATH,
   GET_STARTED_AUTOPILOT_PATH,
+  GET_STARTED_READINESS_PATH,
+  GET_STARTED_LAPS_PATH,
   ENROLLMENT_AUTOPILOT_PROFILES_PATH,
   ENROLLMENT_ESP_PATH,
   ENROLLMENT_LIMIT_RESTRICTIONS_PATH,
@@ -138,6 +140,8 @@ import { TenantOverview } from "./TenantOverview";
 import { WriteActivityView } from "./WriteActivityView";
 import { EnvironmentReportView } from "./EnvironmentReportView";
 import { GetStartedAutopilotView } from "./GetStartedAutopilotView";
+import { GetStartedReadinessView } from "./GetStartedReadinessView";
+import { GetStartedLapsView } from "./GetStartedLapsView";
 import { LocalCatalogView } from "./LocalCatalogView";
 import { PacksKitsView } from "./PacksKitsView";
 import { GraphObjectInspector } from "./workbench/GraphObjectInspector";
@@ -386,6 +390,14 @@ export function IntuneWorkspace({
     );
   }
 
+  if (pathname === GET_STARTED_READINESS_PATH) {
+    return <GetStartedReadinessView />;
+  }
+
+  if (pathname === GET_STARTED_LAPS_PATH) {
+    return <GetStartedLapsView />;
+  }
+
   if (pathname === GET_STARTED_AUTOPILOT_PATH) {
     return (
       <GetStartedAutopilotView
@@ -485,7 +497,7 @@ export function IntuneWorkspace({
             title: "Enrollment Status Page",
             description: "Windows Autopilot Enrollment Status Page configurations.",
             incomplete:
-              "ESP authoring is not ported. Live Graph object, assignments, and JSON are shown.",
+              "Existing Enrollment Status Page settings are shown here. Get Started creates and assigns a new page.",
           }
         : pathname === ENROLLMENT_WINDOWS_HELLO_PATH
           ? {

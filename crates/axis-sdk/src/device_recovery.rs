@@ -282,7 +282,7 @@ pub async fn rotate_managed_device_laps_password(
         })
 }
 
-fn annotate_scope(error: GraphError, scope: &str) -> GraphError {
+pub(crate) fn annotate_scope(error: GraphError, scope: &str) -> GraphError {
     if !error.permission_related() {
         return error;
     }

@@ -300,6 +300,8 @@ struct GraphNamed {
     assignments: Option<Vec<serde_json::Value>>,
     #[serde(default)]
     priority: Option<i32>,
+    #[serde(default)]
+    device_enrollment_configuration_type: Option<String>,
     /// Present on `deviceEnrollmentPlatformRestrictionConfiguration` (singular).
     #[serde(default)]
     platform_type: Option<String>,
@@ -1075,6 +1077,9 @@ pub enum EnrollmentConfigQuery {
     /// Device limit restrictions (default + custom).
     LimitRestrictions,
     /// Windows Enrollment Status Page (ESP).
+    /// Loaded without a type `$filter`: Graph rewrites
+    /// `'Windows10EnrollmentCompletionPageConfiguration'` into a camelCase enum
+    /// literal that StatelessOnboardingService rejects with an empty Operation ID.
     EnrollmentStatusPage,
     /// Windows Hello for Business enrolment configuration.
     WindowsHelloForBusiness,
@@ -1110,9 +1115,7 @@ impl EnrollmentConfigQuery {
             Self::LimitRestrictions => Some(
                 "(deviceEnrollmentConfigurationType eq 'Limit' or deviceEnrollmentConfigurationType eq 'DefaultLimit')",
             ),
-            Self::EnrollmentStatusPage => Some(
-                "(deviceEnrollmentConfigurationType eq 'Windows10EnrollmentCompletionPageConfiguration' or deviceEnrollmentConfigurationType eq 'DefaultWindows10EnrollmentCompletionPageConfiguration')",
-            ),
+            Self::EnrollmentStatusPage => None,
             Self::WindowsHelloForBusiness => Some(
                 "(deviceEnrollmentConfigurationType eq 'WindowsHelloForBusiness' or deviceEnrollmentConfigurationType eq 'DefaultWindowsHelloForBusiness')",
             ),
@@ -1127,6 +1130,24 @@ impl EnrollmentConfigQuery {
         }
         format!("/deviceManagement/deviceEnrollmentConfigurations?{query}")
     }
+
+    fn matches(self, row: &GraphNamed) -> bool {
+        match self {
+            Self::EnrollmentStatusPage => is_enrollment_status_page(row),
+            _ => true,
+        }
+    }
+}
+
+fn is_enrollment_status_page(row: &GraphNamed) -> bool {
+    let type_name = row
+        .device_enrollment_configuration_type
+        .as_deref()
+        .unwrap_or("");
+    let odata = row.odata_type.as_deref().unwrap_or("");
+    let id = row.id.as_deref().unwrap_or("");
+    let haystack = format!("{type_name}\n{odata}\n{id}").to_ascii_lowercase();
+    haystack.contains("windows10enrollmentcompletionpageconfiguration")
 }
 
 pub async fn fetch_enrollment_configurations_filtered(
@@ -1134,7 +1155,11 @@ pub async fn fetch_enrollment_configurations_filtered(
     query: EnrollmentConfigQuery,
 ) -> Result<InventoryList<CatalogPolicySummary>, GraphError> {
     let rows = list_named(access_token, &query.list_path()).await?;
-    let mut items: Vec<_> = rows.into_iter().filter_map(as_policy).collect();
+    let mut items: Vec<_> = rows
+        .into_iter()
+        .filter(|row| query.matches(row))
+        .filter_map(as_policy)
+        .collect();
     // Match portal: $orderby=priority (then name for ties / missing priority).
     items.sort_by(|a, b| {
         match (a.priority, b.priority) {

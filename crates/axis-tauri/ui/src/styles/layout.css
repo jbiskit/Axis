@@ -4021,6 +4021,234 @@ button.axis-pill {
   line-height: 1.35;
 }
 
+.readiness {
+  max-width: none;
+}
+
+.readiness-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+@media (max-width: 860px) {
+  .readiness-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.readiness-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.85rem 0.95rem;
+  border: 1px solid var(--axis-border);
+  border-radius: var(--axis-radius);
+}
+
+.readiness-card.is-wide {
+  grid-column: 1 / -1;
+}
+
+.readiness-card header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.readiness-card h2 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.readiness-card p {
+  margin: 0;
+}
+
+.readiness-pill {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  border-radius: 999px;
+  padding: 0.08rem 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.readiness-pill.is-pass {
+  color: var(--axis-success);
+  background: var(--axis-success-soft);
+}
+
+.readiness-pill.is-warn {
+  color: var(--axis-warning);
+  background: var(--axis-warning-soft);
+}
+
+.readiness-pill.is-fail {
+  color: var(--axis-danger);
+  background: var(--axis-danger-soft);
+}
+
+.readiness-pill.is-info {
+  color: var(--axis-muted);
+  background: color-mix(in srgb, var(--axis-surface-2) 70%, transparent);
+}
+
+.readiness-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: 0.65rem 1rem;
+  margin: 0;
+}
+
+.readiness-facts div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.readiness-facts dt,
+.readiness-facts dd {
+  margin: 0;
+}
+
+.readiness-facts dt {
+  font-size: 0.75rem;
+}
+
+.readiness-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+  gap: 0.5rem;
+}
+
+.readiness-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.55rem 0.7rem;
+  border-radius: var(--axis-radius);
+  background: color-mix(in srgb, var(--axis-surface-2) 55%, transparent);
+}
+
+.readiness-stat strong {
+  font-size: 1.25rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.readiness-stat.is-fail strong {
+  color: var(--axis-danger);
+}
+
+.readiness-stat.is-pass strong {
+  color: var(--axis-success);
+}
+
+.readiness-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.readiness-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  border: 1px solid var(--axis-border);
+  border-radius: 999px;
+  padding: 0.2rem 0.6rem;
+  font-size: 0.8rem;
+}
+
+.readiness-chip.is-pass {
+  border-color: color-mix(in srgb, var(--axis-success) 45%, var(--axis-border));
+}
+
+.readiness-chip.is-fail {
+  border-color: color-mix(in srgb, var(--axis-danger) 45%, var(--axis-border));
+}
+
+.readiness-table {
+  width: 100%;
+}
+
+.readiness-detail {
+  margin: 0.35rem 0 0;
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.readiness-results {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.readiness-results li {
+  display: grid;
+  grid-template-columns: 5.5rem minmax(0, 1fr);
+  gap: 0.65rem;
+  align-items: start;
+}
+
+.readiness-results strong {
+  font-size: 0.85rem;
+}
+
+.readiness-results p {
+  margin: 0.1rem 0 0;
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+.readiness-search {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.6rem;
+}
+
+.readiness-search .device-field {
+  flex: 1;
+}
+
+.readiness-users {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.readiness-user {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  height: auto;
+  white-space: normal;
+  text-align: left;
+}
+
+.readiness-user[aria-pressed="true"] {
+  color: var(--axis-accent);
+  border-color: color-mix(in srgb, var(--axis-accent) 55%, var(--axis-border));
+}
+
+.readiness-user-heading {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-weight: 650;
+}
+
 .app-house-catalog > header {
   display: flex;
   align-items: flex-start;

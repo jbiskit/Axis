@@ -18,12 +18,23 @@ Notable user-facing changes to Axis are recorded here.
 - A new client container is created as a subfolder named for that client. Snapshots and local applications are stored in that subfolder. The folder you pick stays the parent.
 - The local app catalog lists the Global Folder and the open tenant catalog together. New tenant app and New global app sit on those panes. Copies and deletes stay in the catalog the application belongs to.
 - Get Started is a nav heading for wizards and starter kits. The Autopilot wizard lives there. It creates the deployment profile, the group assignment, and, for Hybrid, the domain join profile. The Intune Connector for Active Directory stays an advisory to finish on a server.
-- A new dynamic group in the Autopilot wizard can take an optional Order ID. The membership rule then also requires `[OrderID]:` to match that value.
+- Get Started includes a Readiness check for automatic enrollment, CNAME validation, and device platform restrictions. A user check tests the Some groups for automatic enrollment, the device limit that applies, and an Intune license. Results are summary cards, group chips, and short tables.
+- Get Started assigns include and exclude groups the same way other objects do. A new dynamic device group can still take an optional Order ID, and the membership rule then also requires `[OrderID]:` to match that value.
 - Autopilot profile create checks the name before calling Graph. Intune rejects characters such as a hyphen with an empty DeviceEnrollmentFE 400. Invalid profile names and device name templates are marked on the field.
+- Get Started creates an Enrollment Status Page and assigns the same include and exclude groups as the Autopilot deployment profile.
 
 ### Fixed
 
 - Contents links in an environment report preview stay inside the document. Following one no longer replaces the preview or leaves the report page.
+- The Enrollment Status Page list loads without a type filter. Graph rewrites that filter into an enum literal the Intune onboarding service rejects.
+- A readiness user check counts enrolled devices by user principal name. Filtering managed devices by user id is rejected by Intune.
+- A readiness user check fails when a device platform restriction that applies to that user blocks MDM enrollment. A higher-priority block wins over the default allow.
+- A readiness user check opens with a result: whether that user can enroll, and which checks decided it.
+- Creating an Enrollment Status Page keeps block device setup retry off. The portal create that succeeds uses that value, and turning it on is rejected by the onboarding service.
+- Enrollment Status Page assignment keeps include groups. Exclude groups are left off that assignment.
+- An Enrollment Status Page can block on all assigned apps or on apps you select. The app list uses the Intune portal filter, and Win32 apps show their display version.
+- Hybrid Autopilot deployment profiles leave out the device name template and Self-deploying mode. The computer name is set on the domain join profile, and the deployment mode stays user-driven.
+- The Hybrid domain join profile asks for a computer name prefix. The rest of the 15-character name is random, matching the Intune portal.
 
 ## [0.1.7] - 2026-10-02
 

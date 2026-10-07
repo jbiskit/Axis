@@ -154,11 +154,13 @@ export function autopilotProfileSections(
     "Device type",
     enumLabel(text(object.deviceType), DEVICE_TYPE_LABELS),
   );
-  pushRow(
-    joinRows,
-    "Apply device name template",
-    text(object.deviceNameTemplate) ?? "Not configured",
-  );
+  if (autopilotJoinKindFromOdata(odata) !== "hybrid") {
+    pushRow(
+      joinRows,
+      "Apply device name template",
+      text(object.deviceNameTemplate) ?? "Not configured",
+    );
+  }
 
   const oobeRows: AutopilotOverviewRow[] = [];
   if (oobe) {
@@ -680,11 +682,11 @@ export function toCreateAutopilotInput(draft: AutopilotProfileDraft) {
     description: draft.description.trim() || null,
     joinKind: draft.joinKind,
     deviceType: draft.deviceType,
-    deviceNameTemplate: draft.deviceNameTemplate.trim() || null,
+    deviceNameTemplate: draft.joinKind === "hybrid" ? null : draft.deviceNameTemplate.trim() || null,
     locale: normalizeAutopilotLocale(draft.locale),
     oobe: {
       userType: draft.userType,
-      deviceUsageType: draft.deviceUsageType,
+      deviceUsageType: draft.joinKind === "hybrid" ? "singleUser" : draft.deviceUsageType,
       privacySettingsHidden: draft.privacySettingsHidden,
       eulaHidden: draft.eulaHidden,
       keyboardSelectionPageSkipped: draft.keyboardSelectionPageSkipped,
@@ -718,11 +720,11 @@ export function toUpdateAutopilotInput(
     displayName: draft.displayName.trim(),
     description: draft.description.trim(),
     deviceType: draft.deviceType,
-    deviceNameTemplate: draft.deviceNameTemplate.trim() || null,
+    deviceNameTemplate: draft.joinKind === "hybrid" ? null : draft.deviceNameTemplate.trim() || null,
     locale: normalizeAutopilotLocale(draft.locale),
     oobe: {
       userType: draft.userType,
-      deviceUsageType: draft.deviceUsageType,
+      deviceUsageType: draft.joinKind === "hybrid" ? "singleUser" : draft.deviceUsageType,
       privacySettingsHidden: draft.privacySettingsHidden,
       eulaHidden: draft.eulaHidden,
       keyboardSelectionPageSkipped: draft.keyboardSelectionPageSkipped,

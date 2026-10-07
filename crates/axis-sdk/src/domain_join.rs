@@ -15,7 +15,6 @@ pub struct CreateDomainJoinInput {
     #[serde(default)]
     pub organizational_unit: Option<String>,
     pub computer_name_prefix: String,
-    pub computer_name_random_char_count: i32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -50,27 +49,22 @@ pub fn create_domain_join_body(input: &CreateDomainJoinInput) -> Result<Value, G
         ));
     }
     let prefix = input.computer_name_prefix.trim();
+    if prefix.is_empty() {
+        return Err(input_error("Computer name prefix is required."));
+    }
     if prefix.chars().any(|ch| !prefix_char_ok(ch)) {
         return Err(input_error(
             "Computer name prefix can use letters, digits, and hyphens.",
         ));
     }
-    let random = input.computer_name_random_char_count;
-    if !(0..=15).contains(&random) {
+    let prefix_len = prefix.chars().count();
+    if prefix_len > 15 {
         return Err(input_error(
-            "Random computer name length must be from 0 to 15.",
+            "Computer name prefix must be 15 characters or fewer.",
         ));
     }
-    if prefix.is_empty() && random == 0 {
-        return Err(input_error(
-            "Enter a computer name prefix or a random length.",
-        ));
-    }
-    if prefix.chars().count() + random as usize > 15 {
-        return Err(input_error(
-            "Computer name prefix plus the random length must be 15 characters or fewer.",
-        ));
-    }
+    // The portal has no random-length field. The rest of the 15-character name is random.
+    let random = (15 - prefix_len) as i32;
     let ou = input
         .organizational_unit
         .as_deref()

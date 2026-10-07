@@ -301,6 +301,14 @@ function overviewRows(detail: GraphObjectDetail): Array<{ label: string; value: 
   for (const [label, key] of keys) {
     const raw = object[key];
     if (raw == null || raw === "") continue;
+    if (
+      key === "deviceNameTemplate" &&
+      String(object["@odata.type"] ?? "")
+        .toLowerCase()
+        .includes("activedirectory")
+    ) {
+      continue;
+    }
     if (key.endsWith("DateTime") && typeof raw === "string") {
       rows.push({ label, value: formatRelative(raw) });
     } else if (typeof raw === "boolean") {
