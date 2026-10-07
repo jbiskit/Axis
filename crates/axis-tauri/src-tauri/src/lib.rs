@@ -1,7 +1,7 @@
 use axis_sdk::{
-    decode_access_token_claims, fetch_managed_device_list,
-    fetch_tenant_glance, AuthManager, BrowserSignIn, ManagedDeviceList,
-    PollResult, SessionMode, SessionTokens, StoredSignIn, StoredSignInOutcome, TenantGlance,
+    decode_access_token_claims, fetch_managed_device_list, fetch_tenant_glance, AuthManager,
+    BrowserSignIn, ManagedDeviceList, PollResult, SessionMode, SessionTokens, StoredSignIn,
+    StoredSignInOutcome, TenantGlance,
 };
 use serde::Serialize;
 use std::sync::Arc;
@@ -112,9 +112,7 @@ async fn device_session_status(state: State<'_, AppState>) -> Result<SessionStat
 }
 
 #[tauri::command]
-async fn device_session_token(
-    state: State<'_, AppState>,
-) -> Result<Option<SessionTokens>, String> {
+async fn device_session_token(state: State<'_, AppState>) -> Result<Option<SessionTokens>, String> {
     state
         .auth
         .get_session_token()
@@ -391,6 +389,9 @@ pub fn run() {
             commands::catalog_index_status_cmd,
             commands::pause_catalog_index_cmd,
             commands::create_settings_catalog_policy_cmd,
+            commands::create_laps_policy_cmd,
+            commands::fetch_laps_tenant_status_cmd,
+            commands::enable_laps_for_tenant_cmd,
             commands::create_endpoint_security_policy_cmd,
             commands::add_settings_to_policy_cmd,
             commands::remove_settings_from_policy_cmd,
@@ -418,6 +419,11 @@ pub fn run() {
             commands::create_enrollment_limit_cmd,
             commands::create_autopilot_profile_cmd,
             commands::create_domain_join_profile_cmd,
+            commands::create_enrollment_status_page_cmd,
+            commands::fetch_esp_blocking_apps_cmd,
+            commands::fetch_intune_readiness_cmd,
+            commands::search_readiness_users_cmd,
+            commands::fetch_user_readiness_cmd,
             commands::update_autopilot_profile_cmd,
             commands::update_win32_app_cmd,
             commands::search_store_catalog_cmd,

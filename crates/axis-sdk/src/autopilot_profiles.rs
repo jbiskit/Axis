@@ -428,19 +428,24 @@ pub fn autopilot_profile_create_body_from_export(
         }
         body["description"] = Value::String(description);
     }
-    if let Some(template) = string_opt(object, "deviceNameTemplate") {
-        // Graph caps generated names at 15 chars; keep the template but reject obvious junk.
-        if template.len() > 64 {
-            return Err(GraphError::Request {
-                status: 400,
-                code: None,
-                message: "Device name template is too long for Autopilot create.".into(),
-                permission_related: false,
-            });
+    if !is_hybrid_odata(&odata) {
+        if let Some(template) = string_opt(object, "deviceNameTemplate") {
+            // Graph caps generated names at 15 chars; keep the template but reject obvious junk.
+            if template.len() > 64 {
+                return Err(GraphError::Request {
+                    status: 400,
+                    code: None,
+                    message: "Device name template is too long for Autopilot create.".into(),
+                    permission_related: false,
+                });
+            }
+            body["deviceNameTemplate"] = Value::String(template);
         }
-        body["deviceNameTemplate"] = Value::String(template);
     }
     if is_hybrid_odata(&odata) {
+        if let Some(oobe) = body.get_mut("outOfBoxExperienceSetting") {
+            oobe["deviceUsageType"] = json!("singleUser");
+        }
         body["hybridAzureADJoinSkipConnectivityCheck"] =
             json!(bool_opt(object, "hybridAzureADJoinSkipConnectivityCheck").unwrap_or(false));
     }
@@ -522,14 +527,16 @@ pub fn create_autopilot_profile_body(input: &CreateAutopilotProfileInput) -> Res
             "Self-deploying mode is available for Microsoft Entra join.",
         ));
     }
-    if let Some(template) = input
-        .device_name_template
-        .as_ref()
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-    {
-        validate_device_name_template(template)?;
-        body["deviceNameTemplate"] = Value::String(template.to_string());
+    if input.join_kind != AutopilotJoinKind::Hybrid {
+        if let Some(template) = input
+            .device_name_template
+            .as_ref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
+            validate_device_name_template(template)?;
+            body["deviceNameTemplate"] = Value::String(template.to_string());
+        }
     }
     if input.join_kind == AutopilotJoinKind::Hybrid {
         body["hybridAzureADJoinSkipConnectivityCheck"] =
@@ -544,6 +551,11 @@ pub fn create_autopilot_profile_body(input: &CreateAutopilotProfileInput) -> Res
 pub fn update_autopilot_profile_body(input: &UpdateAutopilotProfileInput) -> Result<Value, GraphError> {
     let odata = normalize_odata_type(&input.odata_type)?;
     validate_oobe(&input.oobe)?;
+    if is_hybrid_odata(&odata) && input.oobe.device_usage_type.trim() == "shared" {
+        return Err(name_error(
+            "Self-deploying mode is available for Microsoft Entra join.",
+        ));
+    }
     let mut body = json!({
         "@odata.type": odata,
         "outOfBoxExperienceSetting": oobe_body(&input.oobe),
@@ -567,18 +579,20 @@ pub fn update_autopilot_profile_body(input: &UpdateAutopilotProfileInput) -> Res
         }
         body["description"] = Value::String(trimmed.to_string());
     }
-    body["deviceNameTemplate"] = match input
-        .device_name_template
-        .as_ref()
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-    {
-        Some(template) => {
-            validate_device_name_template(template)?;
-            Value::String(template.to_string())
-        }
-        None => Value::Null,
-    };
+    if !is_hybrid_odata(&odata) {
+        body["deviceNameTemplate"] = match input
+            .device_name_template
+            .as_ref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
+            Some(template) => {
+                validate_device_name_template(template)?;
+                Value::String(template.to_string())
+            }
+            None => Value::Null,
+        };
+    }
     if is_hybrid_odata(&odata) {
         if let Some(skip) = input.hybrid_azure_ad_join_skip_connectivity_check {
             body["hybridAzureADJoinSkipConnectivityCheck"] = json!(skip);

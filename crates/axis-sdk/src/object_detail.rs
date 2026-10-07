@@ -770,7 +770,7 @@ async fn fetch_store_install_report(
     let filter = format!("(ApplicationId eq '{app_id}')");
     let mut skip = 0i64;
     let mut rows = Vec::new();
-    let mut total = 0i64;
+    let mut total;
     loop {
         let body = json!({
             "top": 50,

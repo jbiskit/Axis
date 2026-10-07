@@ -162,6 +162,16 @@ fn is_enrollment_limit_odata(object_odata_type: Option<&str>) -> bool {
         .unwrap_or(false)
 }
 
+fn is_enrollment_status_page_odata(object_odata_type: Option<&str>) -> bool {
+    object_odata_type
+        .map(|value| {
+            value
+                .to_ascii_lowercase()
+                .contains("enrollmentcompletionpageconfiguration")
+        })
+        .unwrap_or(false)
+}
+
 pub fn default_remediation_schedule() -> RemediationScheduleDraft {
     RemediationScheduleDraft {
         kind: RemediationScheduleKind::Daily,
@@ -437,7 +447,11 @@ pub fn normalize_assignment_drafts_for(
     drafts: &mut Vec<AssignmentDraft>,
 ) {
     let caps = assignment_capabilities_for(kind, object_odata_type);
+    let drop_excludes = is_enrollment_status_page_odata(object_odata_type);
     drafts.retain(|draft| {
+        if drop_excludes && draft.target_kind == AssignmentTargetKind::ExclusionGroup {
+            return false;
+        }
         match draft.target_kind {
             AssignmentTargetKind::AllDevices => caps.supports_all_devices,
             AssignmentTargetKind::AllUsers => caps.supports_all_users,

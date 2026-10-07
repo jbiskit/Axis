@@ -1,75 +1,72 @@
 use crate::AppState;
 use axis_sdk::{
-    add_settings_to_policy, remove_settings_from_policy, apply_filter_names, apply_group_metadata, assign_object_assignments,
-    assignment_capabilities_for, collect_managed_device_diagnostics, create_directory_group,
-    create_enrollment_platform_restriction,
-    create_enrollment_limit,
-    create_compliance_policy, create_policy_with_settings, create_policy_with_template,
-    create_tenant_script, delete_graph_object, delete_managed_device, fetch_compliance_policy_status_with_options, fetch_compliance_property_docs, mobile_app_delete_links, mobile_app_relationships, update_compliance_policy,
-    duplicate_graph_object, update_autopilot_device_properties, fetch_windows_autopilot_settings,
-    sync_windows_autopilot_devices, WindowsAutopilotSettings,
-    create_autopilot_profile, update_autopilot_profile, CreateAutopilotProfileInput,
-    create_domain_join_profile, CreateDomainJoinInput, CreatedDomainJoinProfile,
-    UpdateAutopilotProfileInput, update_win32_app, UpdateWin32AppInput,
-    create_winget_app, fetch_store_catalog_manifest, search_store_catalog, update_winget_app,
-    CreateWinGetAppInput, UpdateWinGetAppInput,
-    StoreCatalogHit, StoreCatalogManifest,
-    drafts_from_graph_assignments, normalize_assignment_drafts_for, fetch_app_protection_policies,
-    fetch_policy_sets,
-    fetch_autopilot_devices, fetch_autopilot_profile_assigned_devices,
-    fetch_applied_policy_settings, fetch_autopilot_profiles, fetch_baseline_export_json,
-    fetch_pack_artifact_text, import_pack_json_document, import_pack_script_text, PackImportResult,
-    fetch_baseline_reference_sources, fetch_compliance_policies,
-    fetch_configuration_policies, fetch_device_configurations,
-    fetch_configuration_policy_template, list_configuration_policy_templates,
-    fetch_endpoint_security_intents, fetch_enrollment_configurations_filtered, fetch_graph_object_detail,
-    fetch_group_policy_configurations, fetch_managed_device_detail, fetch_policy_setting_issues,
-    fetch_mobile_apps, fetch_script_run_status, fetch_remediation_scripts, fetch_setting_conflict_details, fetch_store_apps,
-    fetch_tenant_scripts, fetch_win32_apps, fetch_windows_update_policies,
-    dest_dir_from_save_as, export_selected_graph_objects, export_tenant_pack, PackExportObject,
-    PackExportOptions, PackExportProgress, PackExportResult, SelectedExportResult,
-    create_empty_kit, create_local_pack, open_pack_workspace, open_pack_workspace_from_source,
-    attach_catalog_icon, attach_catalog_intunewin, catalog_dependency_chain, copy_catalog_app_version,
-    create_catalog_app, delete_catalog_apps,
-    download_public_icon, fetch_catalog_icon, list_catalog_apps, read_local_icon,
-    find_catalog_upload_matches, link_win32_app_dependency, link_win32_app_supersedence,
-    read_catalog_app_config, unlink_win32_app_dependency, unlink_win32_app_supersedence,
-    save_catalog_app_config, upload_catalog_win32, CatalogAppDocument, Win32AppMatch,
-    CatalogAppSummary, CatalogDependencyChain, CatalogIntuneWinFile, CopyCatalogAppInput,
-    CreateCatalogAppInput,
-    SaveCatalogAppInput, Win32UploadResult, CatalogAppIcon,
-    write_pack_kit, CreateLocalPackInput, PackKitWriteInput, PackWorkspace, PackKitSummary,
-    finalize_snapshot, list_snapshots, prepare_snapshot_export, snapshot_label, snapshot_pack_dir,
-    ClientContainerStatus, ClientSnapshotSummary, SnapshotManifest, SNAPSHOT_REPORT_DIR,
-    assignment_target_ids, diff_pack_roots, label_assignment_ids, PackDiffReport,
-    apply_kit_apply, apply_restore, list_restore_candidates, plan_kit_apply, plan_restore,
-    KitApplyPlan, KitApplyResult, RestoreApplyResult, RestoreCandidate, RestoreMode, RestorePlan,
-    generate_environment_report, EnvironmentReport, EnvironmentReportProgress,
-    EnvironmentReportSelection,
-    decode_access_token_claims,
-    get_laps_credential_info, initiate_on_demand_remediation, list_assignment_filters,
-    list_bitlocker_recovery_keys, list_catalog_categories, list_intune_audit_events, load_category_settings,
-    reboot_managed_device, remote_lock_managed_device, resolve_directory_groups,
+    add_settings_to_policy, apply_filter_names, apply_group_metadata, apply_kit_apply,
+    apply_restore, assign_object_assignments, assignment_capabilities_for, assignment_target_ids,
+    attach_catalog_icon, attach_catalog_intunewin, catalog_dependency_chain,
+    collect_managed_device_diagnostics, copy_catalog_app_version, create_autopilot_profile,
+    create_catalog_app, create_compliance_policy, create_directory_group,
+    create_domain_join_profile, create_empty_kit, create_enrollment_limit,
+    create_enrollment_platform_restriction, create_enrollment_status_page, create_laps_policy,
+    create_local_pack, create_policy_with_settings, create_policy_with_template,
+    create_tenant_script, create_winget_app, decode_access_token_claims, delete_catalog_apps,
+    delete_graph_object, delete_managed_device, dest_dir_from_save_as, diff_pack_roots,
+    download_public_icon, drafts_from_graph_assignments, duplicate_graph_object,
+    enable_laps_for_tenant, export_selected_graph_objects, export_tenant_pack,
+    fetch_app_protection_policies, fetch_applied_policy_settings, fetch_autopilot_devices,
+    fetch_autopilot_profile_assigned_devices, fetch_autopilot_profiles, fetch_baseline_export_json,
+    fetch_baseline_reference_sources, fetch_catalog_icon, fetch_compliance_policies,
+    fetch_compliance_policy_status_with_options, fetch_compliance_property_docs,
+    fetch_configuration_policies, fetch_configuration_policy_template, fetch_device_configurations,
+    fetch_endpoint_security_intents, fetch_enrollment_configurations_filtered,
+    fetch_esp_blocking_apps, fetch_graph_object_detail, fetch_group_policy_configurations,
+    fetch_intune_readiness, fetch_laps_tenant_status, fetch_managed_device_detail,
+    fetch_mobile_apps, fetch_pack_artifact_text, fetch_policy_sets, fetch_policy_setting_issues,
+    fetch_remediation_scripts, fetch_script_run_status, fetch_setting_conflict_details,
+    fetch_store_apps, fetch_store_catalog_manifest, fetch_tenant_scripts, fetch_user_readiness,
+    fetch_win32_apps, fetch_windows_autopilot_settings, fetch_windows_update_policies,
+    finalize_snapshot, find_catalog_upload_matches, generate_environment_report,
+    get_laps_credential_info, import_pack_json_document, import_pack_script_text,
+    initiate_on_demand_remediation, label_assignment_ids, link_win32_app_dependency,
+    link_win32_app_supersedence, list_assignment_filters, list_bitlocker_recovery_keys,
+    list_catalog_apps, list_catalog_categories, list_configuration_policy_templates,
+    list_intune_audit_events, list_restore_candidates, list_snapshots, load_category_settings,
+    mobile_app_delete_links, mobile_app_relationships, normalize_assignment_drafts_for,
+    open_pack_workspace, open_pack_workspace_from_source, plan_kit_apply, plan_restore,
+    prepare_snapshot_export, read_catalog_app_config, read_local_icon, reboot_managed_device,
+    remote_lock_managed_device, remove_settings_from_policy, resolve_directory_groups,
     retire_managed_device, reveal_bitlocker_recovery_key, reveal_laps_credentials,
-    rotate_managed_device_laps_password, search_catalog_settings, search_directory_groups,
-    sync_managed_device, update_enrollment_platform_restrictions, update_enrollment_limit,
-    update_object_metadata, update_script_content, wipe_managed_device, AppProtectionPolicy,
-    PolicySetSummary,
-    AppliedPolicySettingsLoad, AssignmentCapabilities, AssignmentDraft, AssignmentFilter, AutopilotDevice, AutopilotProfile,
-    BaselineReferenceSourceInput, BaselineReferenceSourceLoad, BitLockerRecoveryKeySummary,
-    CatalogCategory, CatalogIndexState, CatalogPolicySummary, CatalogSearchResult,
-    ConfigurationPolicyTemplateSummary,
-    CompliancePolicyStatusReport,
-    CategorySettingsLoad, CreateCompliancePolicyInput, CreateDirectoryGroupInput,
-    CreateEnrollmentLimitInput, CreateEnrollmentPlatformRestrictionInput, CreateTenantScriptInput,
-    CreatedCatalogPolicy, UpdateCompliancePolicyInput,
-    DirectoryAuditEvent, DirectoryGroup, DuplicatedObject,
-    GraphObjectDetail, InventoryList, LapsCredentialInfo,
-    MobileAppSummary, PolicySettingIssue, RemediationDeviceStatusReport, SettingConflictDetail,
-    SettingsCatalogPlatform, TenantScriptSummary, UpdateEnrollmentLimitInput,
-    UpdateEnrollmentPlatformRestrictionsInput,
-    UpdateObjectMetadataInput, UpdateScriptContentInput, UpdatedObjectMetadata,
-    WindowsUpdatePolicy, SessionMode,
+    rotate_managed_device_laps_password, save_catalog_app_config, search_catalog_settings,
+    search_directory_groups, search_readiness_users, search_store_catalog, snapshot_label,
+    snapshot_pack_dir, sync_managed_device, sync_windows_autopilot_devices,
+    unlink_win32_app_dependency, unlink_win32_app_supersedence, update_autopilot_device_properties,
+    update_autopilot_profile, update_compliance_policy, update_enrollment_limit,
+    update_enrollment_platform_restrictions, update_object_metadata, update_script_content,
+    update_win32_app, update_winget_app, upload_catalog_win32, wipe_managed_device, write_pack_kit,
+    AppProtectionPolicy, AppliedPolicySettingsLoad, AssignmentCapabilities, AssignmentDraft,
+    AssignmentFilter, AutopilotDevice, AutopilotProfile, BaselineReferenceSourceInput,
+    BaselineReferenceSourceLoad, BitLockerRecoveryKeySummary, CatalogAppDocument, CatalogAppIcon,
+    CatalogAppSummary, CatalogCategory, CatalogDependencyChain, CatalogIndexState,
+    CatalogIntuneWinFile, CatalogPolicySummary, CatalogSearchResult, CategorySettingsLoad,
+    ClientContainerStatus, ClientSnapshotSummary, CompliancePolicyStatusReport,
+    ConfigurationPolicyTemplateSummary, CopyCatalogAppInput, CreateAutopilotProfileInput,
+    CreateCatalogAppInput, CreateCompliancePolicyInput, CreateDirectoryGroupInput,
+    CreateDomainJoinInput, CreateEnrollmentLimitInput, CreateEnrollmentPlatformRestrictionInput,
+    CreateEnrollmentStatusPageInput, CreateLapsPolicyInput, CreateLocalPackInput,
+    CreateTenantScriptInput, CreateWinGetAppInput, CreatedCatalogPolicy, CreatedDomainJoinProfile,
+    CreatedEnrollmentStatusPage, DirectoryAuditEvent, DirectoryGroup, DuplicatedObject,
+    EnvironmentReport, EnvironmentReportProgress, EnvironmentReportSelection, EspBlockingApp,
+    GraphObjectDetail, InventoryList, KitApplyPlan, KitApplyResult, LapsCredentialInfo,
+    LapsTenantStatus, MobileAppSummary, PackDiffReport, PackExportObject, PackExportOptions,
+    PackExportProgress, PackExportResult, PackImportResult, PackKitSummary, PackKitWriteInput,
+    PackWorkspace, PolicySetSummary, PolicySettingIssue, ReadinessReport, ReadinessUserHit,
+    RemediationDeviceStatusReport, RestoreApplyResult, RestoreCandidate, RestoreMode, RestorePlan,
+    SaveCatalogAppInput, SelectedExportResult, SessionMode, SettingConflictDetail,
+    SettingsCatalogPlatform, SnapshotManifest, StoreCatalogHit, StoreCatalogManifest,
+    TenantScriptSummary, UpdateAutopilotProfileInput, UpdateCompliancePolicyInput,
+    UpdateEnrollmentLimitInput, UpdateEnrollmentPlatformRestrictionsInput,
+    UpdateObjectMetadataInput, UpdateScriptContentInput, UpdateWin32AppInput, UpdateWinGetAppInput,
+    UpdatedObjectMetadata, UserReadinessReport, Win32AppMatch, Win32UploadResult,
+    WindowsAutopilotSettings, WindowsUpdatePolicy, SNAPSHOT_REPORT_DIR,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -288,7 +285,8 @@ pub async fn create_pack_kit_cmd(
     pack_root: String,
     name: Option<String>,
 ) -> Result<PackKitSummary, String> {
-    create_empty_kit(&pack_root, name.as_deref().unwrap_or("New kit")).map_err(|error| error.to_string())
+    create_empty_kit(&pack_root, name.as_deref().unwrap_or("New kit"))
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -343,7 +341,10 @@ pub async fn list_catalog_apps_cmd(
     state: State<'_, AppState>,
     source_root: Option<String>,
 ) -> Result<Vec<CatalogAppSummary>, String> {
-    let requested = source_root.as_deref().map(str::trim).filter(|value| !value.is_empty());
+    let requested = source_root
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     if state.client_container.active_path().is_none() && requested.is_none() {
         return Ok(Vec::new());
     }
@@ -673,16 +674,9 @@ pub async fn apply_pack_kit_cmd(
     if keys.is_empty() {
         return Err("Select at least one object to apply.".into());
     }
-    apply_kit_apply(
-        &token,
-        &root,
-        kit_rel_path.trim(),
-        mode,
-        &keys,
-        |message| {
-            let _ = app.emit(KIT_APPLY_PROGRESS_EVENT, &message);
-        },
-    )
+    apply_kit_apply(&token, &root, kit_rel_path.trim(), mode, &keys, |message| {
+        let _ = app.emit(KIT_APPLY_PROGRESS_EVENT, &message);
+    })
     .await
     .map_err(|error| error.to_string())
 }
@@ -692,9 +686,7 @@ pub async fn client_container_status_cmd(
     state: State<'_, AppState>,
 ) -> Result<ClientContainerStatus, String> {
     let tenant_id = state.auth.session_tenant_id().await;
-    state
-        .client_container
-        .status(tenant_id.as_deref())
+    state.client_container.status(tenant_id.as_deref())
 }
 
 #[tauri::command]
@@ -716,11 +708,7 @@ pub async fn client_container_pick_open_cmd(
         .client_container
         .set_active(std::path::PathBuf::from(&path))?;
     let tenant_id = state.auth.session_tenant_id().await;
-    Ok(Some(
-        state
-            .client_container
-            .status(tenant_id.as_deref())?,
-    ))
+    Ok(Some(state.client_container.status(tenant_id.as_deref())?))
 }
 
 #[tauri::command]
@@ -742,13 +730,9 @@ pub async fn client_container_create_cmd(
     name: String,
     primary_domain: Option<String>,
 ) -> Result<ClientContainerStatus, String> {
-    let tenant_id = state
-        .auth
-        .session_tenant_id()
-        .await
-        .ok_or_else(|| {
-            "Sign in so Axis can bind this container to your Entra tenant.".to_string()
-        })?;
+    let tenant_id = state.auth.session_tenant_id().await.ok_or_else(|| {
+        "Sign in so Axis can bind this container to your Entra tenant.".to_string()
+    })?;
     let domain = primary_domain
         .as_deref()
         .map(str::trim)
@@ -905,7 +889,9 @@ pub async fn client_container_export_snapshot_cmd(
                 std::fs::write(report_root.join(&md_name), report.markdown.as_bytes())
             {
                 let _ = std::fs::remove_dir_all(&snap_root);
-                return Err(format!("Failed to write environment report Markdown: {error}"));
+                return Err(format!(
+                    "Failed to write environment report Markdown: {error}"
+                ));
             }
             Some(report)
         }
@@ -975,14 +961,9 @@ async fn resolve_diff_side(
             pack_id: Some("live-diff".into()),
             pack_name: Some(pack_name.to_string()),
         };
-        match export_tenant_pack(
-            &token,
-            &temp,
-            options,
-            |progress: PackExportProgress| {
-                let _ = app.emit(PACK_EXPORT_PROGRESS_EVENT, &progress);
-            },
-        )
+        match export_tenant_pack(&token, &temp, options, |progress: PackExportProgress| {
+            let _ = app.emit(PACK_EXPORT_PROGRESS_EVENT, &progress);
+        })
         .await
         {
             Ok(_) => Ok((temp.clone(), "Live tenant".into(), Some(temp))),
@@ -1172,7 +1153,9 @@ pub struct PickedJsonFile {
 }
 
 #[tauri::command]
-pub async fn pick_json_files_cmd(title: Option<String>) -> Result<Option<Vec<PickedJsonFile>>, String> {
+pub async fn pick_json_files_cmd(
+    title: Option<String>,
+) -> Result<Option<Vec<PickedJsonFile>>, String> {
     let title = dialog_title(title, "Import Settings Catalog policies");
     let paths = tokio::task::spawn_blocking(move || {
         rfd::FileDialog::new()
@@ -1186,15 +1169,16 @@ pub async fn pick_json_files_cmd(title: Option<String>) -> Result<Option<Vec<Pic
         return Ok(None);
     };
     Ok(Some(
-            paths
-                .into_iter()
-                .map(|path| {
-                    let file_name = path
-                        .file_name()
-                        .map(|name| name.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| "policy.json".into());
-                    match std::fs::read_to_string(&path) {
-                        Ok(text) => match serde_json::from_str::<Value>(text.trim_start_matches('\u{FEFF}')) {
+        paths
+            .into_iter()
+            .map(|path| {
+                let file_name = path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "policy.json".into());
+                match std::fs::read_to_string(&path) {
+                    Ok(text) => {
+                        match serde_json::from_str::<Value>(text.trim_start_matches('\u{FEFF}')) {
                             Ok(document) => PickedJsonFile {
                                 path: path.to_string_lossy().into_owned(),
                                 file_name,
@@ -1207,17 +1191,18 @@ pub async fn pick_json_files_cmd(title: Option<String>) -> Result<Option<Vec<Pic
                                 document: None,
                                 error: Some(format!("Invalid JSON: {error}")),
                             },
-                        },
-                        Err(error) => PickedJsonFile {
-                            path: path.to_string_lossy().into_owned(),
-                            file_name,
-                            document: None,
-                            error: Some(error.to_string()),
-                        },
+                        }
                     }
-                })
-                .collect(),
-        ))
+                    Err(error) => PickedJsonFile {
+                        path: path.to_string_lossy().into_owned(),
+                        file_name,
+                        document: None,
+                        error: Some(error.to_string()),
+                    },
+                }
+            })
+            .collect(),
+    ))
 }
 
 #[derive(Debug, Serialize)]
@@ -1230,7 +1215,9 @@ pub struct PickedTextFile {
 }
 
 #[tauri::command]
-pub async fn pick_script_files_cmd(title: Option<String>) -> Result<Option<Vec<PickedTextFile>>, String> {
+pub async fn pick_script_files_cmd(
+    title: Option<String>,
+) -> Result<Option<Vec<PickedTextFile>>, String> {
     let title = dialog_title(title, "Import scripts");
     let paths = tokio::task::spawn_blocking(move || {
         rfd::FileDialog::new()
@@ -1396,7 +1383,8 @@ pub async fn export_tenant_pack_cmd(
     let dest = if let Some(dest) = dest.filter(|value| !value.trim().is_empty()) {
         std::path::PathBuf::from(dest.trim())
     } else {
-        let Some(path) = save_as_path("Save tenant pack as".into(), suggested.clone(), false).await?
+        let Some(path) =
+            save_as_path("Save tenant pack as".into(), suggested.clone(), false).await?
         else {
             return Ok(None);
         };
@@ -1409,14 +1397,9 @@ pub async fn export_tenant_pack_cmd(
         pack_id,
         pack_name: Some(suggested),
     };
-    let result = export_tenant_pack(
-        &token,
-        &dest,
-        options,
-        |progress: PackExportProgress| {
-            let _ = app.emit(PACK_EXPORT_PROGRESS_EVENT, &progress);
-        },
-    )
+    let result = export_tenant_pack(&token, &dest, options, |progress: PackExportProgress| {
+        let _ = app.emit(PACK_EXPORT_PROGRESS_EVENT, &progress);
+    })
     .await
     .map_err(|error| error.to_string())?;
     Ok(Some(result))
@@ -2137,6 +2120,89 @@ pub async fn create_settings_catalog_policy_cmd(
     }
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateLapsPolicyResponse {
+    pub policy: Option<CreatedCatalogPolicy>,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn create_laps_policy_cmd(
+    state: State<'_, AppState>,
+    input: CreateLapsPolicyInput,
+) -> Result<CreateLapsPolicyResponse, String> {
+    ensure_write_allowed(&state).await?;
+    let Some(token) = session_token(&state).await? else {
+        return Ok(CreateLapsPolicyResponse {
+            policy: None,
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match create_laps_policy(&token, input).await {
+        Ok(policy) => Ok(CreateLapsPolicyResponse {
+            policy: Some(policy),
+            error: None,
+        }),
+        Err(error) => Ok(CreateLapsPolicyResponse {
+            policy: None,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LapsTenantStatusResponse {
+    pub status: Option<LapsTenantStatus>,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn fetch_laps_tenant_status_cmd(
+    state: State<'_, AppState>,
+) -> Result<LapsTenantStatusResponse, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Ok(LapsTenantStatusResponse {
+            status: None,
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match fetch_laps_tenant_status(&token).await {
+        Ok(status) => Ok(LapsTenantStatusResponse {
+            status: Some(status),
+            error: None,
+        }),
+        Err(error) => Ok(LapsTenantStatusResponse {
+            status: None,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn enable_laps_for_tenant_cmd(
+    state: State<'_, AppState>,
+) -> Result<ActionResponse, String> {
+    ensure_write_allowed(&state).await?;
+    let Some(token) = session_token(&state).await? else {
+        return Ok(ActionResponse {
+            ok: false,
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match enable_laps_for_tenant(&token).await {
+        Ok(()) => Ok(ActionResponse {
+            ok: true,
+            error: None,
+        }),
+        Err(error) => Ok(ActionResponse {
+            ok: false,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
 #[tauri::command]
 pub async fn create_endpoint_security_policy_cmd(
     state: State<'_, AppState>,
@@ -2777,7 +2843,8 @@ pub async fn fetch_compliance_policy_status_cmd(
         &policy_id,
         generate_settings.unwrap_or(false),
     )
-    .await {
+    .await
+    {
         Ok(report) => Ok(CompliancePolicyStatusResponse {
             report: Some(report),
             error: None,
@@ -2913,6 +2980,149 @@ pub async fn create_autopilot_profile_cmd(
 pub struct CreateDomainJoinResponse {
     pub profile: Option<CreatedDomainJoinProfile>,
     pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateEnrollmentStatusPageResponse {
+    pub page: Option<CreatedEnrollmentStatusPage>,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn create_enrollment_status_page_cmd(
+    state: State<'_, AppState>,
+    input: CreateEnrollmentStatusPageInput,
+) -> Result<CreateEnrollmentStatusPageResponse, String> {
+    ensure_write_allowed(&state).await?;
+    let Some(token) = session_token(&state).await? else {
+        return Ok(CreateEnrollmentStatusPageResponse {
+            page: None,
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match create_enrollment_status_page(&token, input).await {
+        Ok(page) => Ok(CreateEnrollmentStatusPageResponse {
+            page: Some(page),
+            error: None,
+        }),
+        Err(error) => Ok(CreateEnrollmentStatusPageResponse {
+            page: None,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EspBlockingAppsResponse {
+    pub apps: Vec<EspBlockingApp>,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn fetch_esp_blocking_apps_cmd(
+    state: State<'_, AppState>,
+) -> Result<EspBlockingAppsResponse, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Ok(EspBlockingAppsResponse {
+            apps: Vec::new(),
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match fetch_esp_blocking_apps(&token).await {
+        Ok(apps) => Ok(EspBlockingAppsResponse { apps, error: None }),
+        Err(error) => Ok(EspBlockingAppsResponse {
+            apps: Vec::new(),
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadinessResponse {
+    report: Option<ReadinessReport>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadinessUsersResponse {
+    users: Vec<ReadinessUserHit>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserReadinessResponse {
+    report: Option<UserReadinessReport>,
+    error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn fetch_intune_readiness_cmd(
+    state: State<'_, AppState>,
+) -> Result<ReadinessResponse, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Ok(ReadinessResponse {
+            report: None,
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match fetch_intune_readiness(&token).await {
+        Ok(report) => Ok(ReadinessResponse {
+            report: Some(report),
+            error: None,
+        }),
+        Err(error) => Ok(ReadinessResponse {
+            report: None,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn search_readiness_users_cmd(
+    state: State<'_, AppState>,
+    query: String,
+) -> Result<ReadinessUsersResponse, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Ok(ReadinessUsersResponse {
+            users: Vec::new(),
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match search_readiness_users(&token, &query).await {
+        Ok(users) => Ok(ReadinessUsersResponse { users, error: None }),
+        Err(error) => Ok(ReadinessUsersResponse {
+            users: Vec::new(),
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn fetch_user_readiness_cmd(
+    state: State<'_, AppState>,
+    user_id: String,
+) -> Result<UserReadinessResponse, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Ok(UserReadinessResponse {
+            report: None,
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match fetch_user_readiness(&token, &user_id).await {
+        Ok(report) => Ok(UserReadinessResponse {
+            report: Some(report),
+            error: None,
+        }),
+        Err(error) => Ok(UserReadinessResponse {
+            report: None,
+            error: Some(error.to_string()),
+        }),
+    }
 }
 
 #[tauri::command]
@@ -3545,8 +3755,7 @@ pub async fn load_assignment_workspace_cmd(
     let odata = object_odata_type.as_deref();
     let capabilities = assignment_capabilities_for(&kind, odata);
     let Some(token) = session_token(&state).await? else {
-        let mut drafts =
-            drafts_from_graph_assignments(&assignments, capabilities.supports_intent);
+        let mut drafts = drafts_from_graph_assignments(&assignments, capabilities.supports_intent);
         normalize_assignment_drafts_for(&kind, odata, &mut drafts);
         return Ok(AssignmentWorkspaceResponse {
             drafts,

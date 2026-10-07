@@ -78,7 +78,7 @@ export function AutopilotProfileForm({
 }) {
   const hybrid = draft.joinKind === "hybrid";
   const nameError = draft.displayName.trim() ? autopilotProfileNameProblem(draft.displayName) : null;
-  const deviceNameError = autopilotDeviceNameProblem(draft.deviceNameTemplate);
+  const deviceNameError = hybrid ? null : autopilotDeviceNameProblem(draft.deviceNameTemplate);
   return (
     <div className="stack" style={{ gap: "1rem" }}>
       <section className="stack" style={{ gap: "0.75rem" }}>
@@ -114,9 +114,14 @@ export function AutopilotProfileForm({
             className="axis-input"
             value={draft.joinKind}
             disabled={disabled || lockedJoinAndMode}
-            onChange={(event) =>
-              onChange({ joinKind: event.target.value as AutopilotProfileDraft["joinKind"] })
-            }
+            onChange={(event) => {
+              const joinKind = event.target.value as AutopilotProfileDraft["joinKind"];
+              onChange(
+                joinKind === "hybrid"
+                  ? { joinKind, deviceNameTemplate: "", deviceUsageType: "singleUser" }
+                  : { joinKind },
+              );
+            }}
           >
             {AUTOPILOT_JOIN_OPTIONS.map((option) => (
               <option key={option.value} value={option.value}>
@@ -152,20 +157,22 @@ export function AutopilotProfileForm({
             ))}
           </select>
         </Field>
-        <Field
-          label="Device name template"
-          hint="Optional. Letters, digits, and hyphens, plus %SERIAL% or %RAND:n%. The generated name is 15 characters or fewer."
-          error={deviceNameError}
-        >
-          <input
-            className={`axis-input${deviceNameError ? " is-invalid" : ""}`}
-            value={draft.deviceNameTemplate}
-            disabled={disabled}
-            aria-invalid={deviceNameError ? true : undefined}
-            onChange={(event) => onChange({ deviceNameTemplate: event.target.value })}
-            placeholder="AX-%SERIAL%"
-          />
-        </Field>
+        {hybrid ? null : (
+          <Field
+            label="Device name template"
+            hint="Optional. Letters, digits, and hyphens, plus %SERIAL% or %RAND:n%. The generated name is 15 characters or fewer."
+            error={deviceNameError}
+          >
+            <input
+              className={`axis-input${deviceNameError ? " is-invalid" : ""}`}
+              value={draft.deviceNameTemplate}
+              disabled={disabled}
+              aria-invalid={deviceNameError ? true : undefined}
+              onChange={(event) => onChange({ deviceNameTemplate: event.target.value })}
+              placeholder="AX-%SERIAL%"
+            />
+          </Field>
+        )}
       </section>
 
       <section className="stack" style={{ gap: "0.75rem" }}>
@@ -176,11 +183,16 @@ export function AutopilotProfileForm({
         >
           <select
             className="axis-input"
-            value={draft.deviceUsageType}
+            value={hybrid && !lockedJoinAndMode ? "singleUser" : draft.deviceUsageType}
             disabled={disabled || lockedJoinAndMode}
             onChange={(event) => onChange({ deviceUsageType: event.target.value })}
           >
-            {AUTOPILOT_USAGE_OPTIONS.map((option) => (
+            {AUTOPILOT_USAGE_OPTIONS.filter(
+              (option) =>
+                !hybrid ||
+                option.value === "singleUser" ||
+                (lockedJoinAndMode && option.value === draft.deviceUsageType),
+            ).map((option) => (
               <option key={option.value} value={option.value}>
                 {option.label}
               </option>
@@ -248,84 +260,6 @@ export function AutopilotProfileForm({
           disabled={disabled}
           onChange={(hardwareHashExtractionEnabled) => onChange({ hardwareHashExtractionEnabled })}
         />
-      </section>
-
-      <section className="stack" style={{ gap: "0.75rem" }}>
-        <h3 style={{ margin: 0, fontSize: "0.9rem" }}>Enrollment status screen (on profile)</h3>
-        <p className="muted" style={{ margin: 0, fontSize: "0.75rem" }}>
-          Optional ESP settings embedded on this profile. Standalone ESP configs live under Enrollment
-          Status Page.
-        </p>
-        <Toggle
-          label="Configure ESP on this profile"
-          checked={draft.configureEsp}
-          disabled={disabled}
-          onChange={(configureEsp) => onChange({ configureEsp })}
-        />
-        {draft.configureEsp ? (
-          <>
-            <Toggle
-              label="Show installation progress"
-              checked={draft.showInstallationProgress}
-              disabled={disabled}
-              onChange={(showInstallationProgress) => onChange({ showInstallationProgress })}
-            />
-            <Toggle
-              label="Block device use until required apps install"
-              checked={draft.blockDeviceUseUntilRequiredAppsInstall}
-              disabled={disabled}
-              onChange={(blockDeviceUseUntilRequiredAppsInstall) =>
-                onChange({ blockDeviceUseUntilRequiredAppsInstall })
-              }
-            />
-            <Toggle
-              label="Allow device use on install failure"
-              checked={draft.allowDeviceUseOnInstallFailure}
-              disabled={disabled}
-              onChange={(allowDeviceUseOnInstallFailure) =>
-                onChange({ allowDeviceUseOnInstallFailure })
-              }
-            />
-            <Toggle
-              label="Block device setup retry by user"
-              checked={draft.blockDeviceSetupRetryByUser}
-              disabled={disabled}
-              onChange={(blockDeviceSetupRetryByUser) => onChange({ blockDeviceSetupRetryByUser })}
-            />
-            <Toggle
-              label="Allow log collection on install failure"
-              checked={draft.allowLogCollectionOnInstallFailure}
-              disabled={disabled}
-              onChange={(allowLogCollectionOnInstallFailure) =>
-                onChange({ allowLogCollectionOnInstallFailure })
-              }
-            />
-            <Field label="Install progress timeout (minutes)">
-              <input
-                className="axis-input"
-                type="number"
-                min={1}
-                max={720}
-                value={draft.installProgressTimeoutInMinutes}
-                disabled={disabled}
-                onChange={(event) =>
-                  onChange({
-                    installProgressTimeoutInMinutes: Number(event.target.value) || 60,
-                  })
-                }
-              />
-            </Field>
-            <Field label="Custom error message">
-              <input
-                className="axis-input"
-                value={draft.customErrorMessage}
-                disabled={disabled}
-                onChange={(event) => onChange({ customErrorMessage: event.target.value })}
-                placeholder="Optional"
-              />
-            </Field>
-          </>
-        ) : null}
       </section>
     </div>
   );

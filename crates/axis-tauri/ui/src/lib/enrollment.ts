@@ -11,6 +11,8 @@ export const ENROLLMENT_AUTOPILOT_DEVICES_PATH =
 export const ENROLLMENT_AUTOPILOT_PROFILES_PATH =
   "/intune/enrollment/windows/autopilot/profiles";
 export const GET_STARTED_AUTOPILOT_PATH = "/intune/get-started/autopilot";
+export const GET_STARTED_LAPS_PATH = "/intune/get-started/laps";
+export const GET_STARTED_READINESS_PATH = "/intune/get-started/readiness";
 export const ENROLLMENT_ESP_PATH = "/intune/enrollment/windows/esp";
 export const ENROLLMENT_WINDOWS_HELLO_PATH = "/intune/enrollment/windows/windows-hello";
 export const ENROLLMENT_PLATFORM_RESTRICTIONS_PATH =
@@ -48,7 +50,10 @@ export function enrollmentGraphFilter(kind: EnrollmentConfigQueryKind): string {
     case "limitRestrictions":
       return "(deviceEnrollmentConfigurationType eq 'Limit' or deviceEnrollmentConfigurationType eq 'DefaultLimit')";
     case "esp":
-      return "(deviceEnrollmentConfigurationType eq 'Windows10EnrollmentCompletionPageConfiguration' or deviceEnrollmentConfigurationType eq 'DefaultWindows10EnrollmentCompletionPageConfiguration')";
+      // Not sent to Graph. That service rewrites this comparison into a camelCase
+      // enum literal, and the Intune onboarding service returns HTTP 400.
+      // The list is the unfiltered enrollment configurations, kept when the row is an ESP page.
+      return "";
     case "windowsHello":
       return "(deviceEnrollmentConfigurationType eq 'WindowsHelloForBusiness' or deviceEnrollmentConfigurationType eq 'DefaultWindowsHelloForBusiness')";
   }

@@ -226,6 +226,8 @@ export function simpleBooleanValue(draft: Extract<SettingValueDraft, { kind: "si
 
 const MULTILINE_STRING_FORMATS = new Set(["xml", "json", "binary", "base64"]);
 const SINGLE_LINE_STRING_FORMATS = new Set([
+  // CSP string settings declare `format: "none"` for a plain scalar value.
+  "none",
   "email",
   "guid",
   "ip",
@@ -237,6 +239,12 @@ const SINGLE_LINE_STRING_FORMATS = new Set([
 ]);
 /** Graph string fields at or above this length are treated as document-sized. */
 const LARGE_STRING_MAX_LENGTH = 2048;
+/**
+ * CSP string settings often carry a sentinel maximum length meaning "no limit"
+ * (e.g. 87516) rather than a real document size. Those values are short and
+ * single-line, so they must not be treated as document-sized.
+ */
+const UNBOUNDED_STRING_MAX_LENGTH = 100_000;
 
 function normalizeGraphStringFormat(value?: string | null): string | null {
   if (!value?.trim()) return null;
@@ -296,7 +304,11 @@ export function usesMultilineTextEditor(
   ) {
     return true;
   }
-  return typeof detail.maximumLength === "number" && detail.maximumLength >= LARGE_STRING_MAX_LENGTH;
+  return (
+    typeof detail.maximumLength === "number" &&
+    detail.maximumLength >= LARGE_STRING_MAX_LENGTH &&
+    detail.maximumLength < UNBOUNDED_STRING_MAX_LENGTH
+  );
 }
 
 export function multilineXmlHint(

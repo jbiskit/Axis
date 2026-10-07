@@ -35,8 +35,8 @@ export function CreateAutopilotProfileDialog({
     () =>
       !busy &&
       !autopilotProfileNameProblem(draft.displayName) &&
-      !autopilotDeviceNameProblem(draft.deviceNameTemplate),
-    [busy, draft.displayName, draft.deviceNameTemplate],
+      (draft.joinKind === "hybrid" || !autopilotDeviceNameProblem(draft.deviceNameTemplate)),
+    [busy, draft.displayName, draft.deviceNameTemplate, draft.joinKind],
   );
 
   async function create() {

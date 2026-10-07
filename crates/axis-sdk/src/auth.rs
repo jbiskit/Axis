@@ -142,6 +142,7 @@ fn write_scopes() -> Vec<String> {
         "DeviceManagementManagedDevices.PrivilegedOperations.All".to_string(),
         "DeviceManagementRBAC.ReadWrite.All".to_string(),
         "Group.ReadWrite.All".to_string(),
+        "Policy.ReadWrite.DeviceConfiguration".to_string(),
     ]
 }
 
@@ -253,10 +254,12 @@ pub struct StoredSignIn {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "camelCase")]
 pub enum StoredSignInOutcome {
+    #[serde(rename_all = "camelCase")]
     SignedIn {
         account_name: Option<String>,
         mode: SessionMode,
     },
+    #[serde(rename_all = "camelCase")]
     NeedsBrowser {
         client_id: String,
         mode: SessionMode,
@@ -425,9 +428,12 @@ impl AuthManager {
         let listener = TcpListener::bind("127.0.0.1:0").await.map_err(|error| {
             AuthError::Message(format!("Could not listen for the sign-in reply: {error}"))
         })?;
-        let port = listener.local_addr().map_err(|error| {
-            AuthError::Message(format!("Could not listen for the sign-in reply: {error}"))
-        })?.port();
+        let port = listener
+            .local_addr()
+            .map_err(|error| {
+                AuthError::Message(format!("Could not listen for the sign-in reply: {error}"))
+            })?
+            .port();
         let v6 = TcpListener::bind(format!("[::1]:{port}")).await.ok();
         let redirect_uri = format!("http://localhost:{port}");
         let code_verifier = pkce_verifier();
@@ -614,14 +620,10 @@ impl AuthManager {
             let error = json["error"].as_str().unwrap_or("");
             let description = describe_error(&json, "refresh failed");
             if is_fatal_refresh_error(error) {
-                eprintln!(
-                    "axis auth: refresh token rejected ({error}); clearing stored session"
-                );
+                eprintln!("axis auth: refresh token rejected ({error}); clearing stored session");
                 self.clear_session().await;
             } else {
-                eprintln!(
-                    "axis auth: refresh failed but keeping stored session: {description}"
-                );
+                eprintln!("axis auth: refresh failed but keeping stored session: {description}");
             }
             return Err(AuthError::Message(format!(
                 "Session expired: {description}. Sign in again."
@@ -777,9 +779,7 @@ impl AuthManager {
                 let current = session.as_ref();
                 Ok(StoredSignInOutcome::SignedIn {
                     account_name: current.and_then(|session| session.account_name.clone()),
-                    mode: current
-                        .map(|session| session.mode)
-                        .unwrap_or(saved.mode),
+                    mode: current.map(|session| session.mode).unwrap_or(saved.mode),
                 })
             }
             Ok(None) => {
@@ -815,7 +815,8 @@ impl AuthManager {
         persist_session(&session);
         if let Some(tenant_id) = session.tenant_id.clone() {
             if let Some(access_token) = session.access_token.as_deref() {
-                self.remember_readable_tenant(&tenant_id, access_token).await;
+                self.remember_readable_tenant(&tenant_id, access_token)
+                    .await;
             }
         }
         *self.session.lock().await = Some(session);
@@ -848,13 +849,15 @@ impl AuthManager {
             else {
                 continue;
             };
-            let tenant_id = client.tenant_id.clone().or_else(|| {
-                decode_access_token_claims(&access_token).tid
-            });
+            let tenant_id = client
+                .tenant_id
+                .clone()
+                .or_else(|| decode_access_token_claims(&access_token).tid);
             let Some(tenant_id) = tenant_id else {
                 continue;
             };
-            self.remember_readable_tenant(&tenant_id, &access_token).await;
+            self.remember_readable_tenant(&tenant_id, &access_token)
+                .await;
         }
     }
 
@@ -1014,11 +1017,7 @@ fn cached_fresh_access_token(session: &DeviceSession) -> Option<SessionTokens> {
 }
 
 fn pkce_verifier() -> String {
-    format!(
-        "{}{}",
-        Uuid::new_v4().simple(),
-        Uuid::new_v4().simple()
-    )
+    format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
 }
 
 fn pkce_challenge(verifier: &str) -> String {
@@ -1045,12 +1044,7 @@ async fn accept_loopback(
         let head = read_http_head(&mut socket).await;
         let request_line = head.lines().next().unwrap_or("");
         if request_line.contains(" /favicon.ico") {
-            let _ = write_http(
-                &mut socket,
-                "404 Not Found",
-                "No favicon.",
-            )
-            .await;
+            let _ = write_http(&mut socket, "404 Not Found", "No favicon.").await;
             continue;
         }
         let outcome = authorization_code_from_request(request_line, expected_state);
@@ -1080,7 +1074,11 @@ async fn read_http_head(socket: &mut tokio::net::TcpStream) -> String {
     String::from_utf8_lossy(&buf[..filled]).into_owned()
 }
 
-async fn write_http(socket: &mut tokio::net::TcpStream, status: &str, message: &str) -> std::io::Result<()> {
+async fn write_http(
+    socket: &mut tokio::net::TcpStream,
+    status: &str,
+    message: &str,
+) -> std::io::Result<()> {
     let body = format!(
         "<!DOCTYPE html><html><body style=\"font-family:sans-serif\"><p>{message}</p></body></html>"
     );
@@ -1093,7 +1091,10 @@ async fn write_http(socket: &mut tokio::net::TcpStream, status: &str, message: &
     Ok(())
 }
 
-fn authorization_code_from_request(request_line: &str, expected_state: &str) -> Result<String, String> {
+fn authorization_code_from_request(
+    request_line: &str,
+    expected_state: &str,
+) -> Result<String, String> {
     let path = request_line.split_whitespace().nth(1).unwrap_or("");
     let query = path.split_once('?').map(|(_, query)| query).unwrap_or("");
     let mut code = None;
@@ -1203,7 +1204,9 @@ async fn fetch_tenant_label(client: &reqwest::Client, access_token: &str) -> Opt
         .and_then(|domains| {
             domains
                 .iter()
-                .find(|domain| domain.get("isDefault").and_then(|flag| flag.as_bool()) == Some(true))
+                .find(|domain| {
+                    domain.get("isDefault").and_then(|flag| flag.as_bool()) == Some(true)
+                })
                 .or_else(|| {
                     domains.iter().find(|domain| {
                         domain.get("isInitial").and_then(|flag| flag.as_bool()) == Some(true)
@@ -1238,7 +1241,7 @@ fn urlencoding_helper(value: &str) -> String {
 mod tests {
     use super::*;
 
-    fn write_scopes() -> [&'static str; 7] {
+    fn write_scopes() -> [&'static str; 8] {
         [
             "DeviceManagementManagedDevices.ReadWrite.All",
             "DeviceManagementManagedDevices.PrivilegedOperations.All",
@@ -1247,6 +1250,7 @@ mod tests {
             "DeviceManagementScripts.ReadWrite.All",
             "DeviceManagementServiceConfig.ReadWrite.All",
             "Group.ReadWrite.All",
+            "Policy.ReadWrite.DeviceConfiguration",
         ]
     }
 
@@ -1339,7 +1343,7 @@ mod tests {
         )));
 
         let write_scopes = token_write_scopes(Some(
-            "User.Read DeviceManagementConfiguration.ReadWrite.All Directory.AccessAsUser.All"
+            "User.Read DeviceManagementConfiguration.ReadWrite.All Directory.AccessAsUser.All",
         ));
         assert_eq!(
             write_scopes,
@@ -1354,7 +1358,9 @@ mod tests {
     fn read_mode_requests_no_write_scopes() {
         let scopes = scopes_for_mode(SessionMode::Read);
         assert!(
-            !scopes.iter().any(|scope| is_write_or_privileged_scope(scope)),
+            !scopes
+                .iter()
+                .any(|scope| is_write_or_privileged_scope(scope)),
             "read mode must not request write scopes: {scopes:?}"
         );
         // Identity and reads still present.
@@ -1377,10 +1383,7 @@ mod tests {
 
     #[test]
     fn requested_mode_is_honoured() {
-        assert_eq!(
-            effective_session_mode(SessionMode::Read),
-            SessionMode::Read
-        );
+        assert_eq!(effective_session_mode(SessionMode::Read), SessionMode::Read);
         assert_eq!(
             effective_session_mode(SessionMode::Admin),
             SessionMode::Admin

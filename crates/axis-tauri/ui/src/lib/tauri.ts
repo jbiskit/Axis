@@ -860,6 +860,40 @@ export async function createSettingsCatalogPolicy(input: {
   return invoke("create_settings_catalog_policy_cmd", input);
 }
 
+export type CreateLapsPolicyInput = {
+  displayName: string;
+  description?: string | null;
+  backupDirectory: number;
+  passwordAgeDays: number;
+  passwordComplexity: number;
+  passwordLength: number;
+  passphraseLength: number;
+  managedAccountName?: string | null;
+  postAuthenticationActions: number;
+  postAuthenticationResetDelay: number;
+};
+
+export async function createLapsPolicy(
+  input: CreateLapsPolicyInput,
+): Promise<{ policy: { id: string; name: string } | null; error: string | null }> {
+  return invoke("create_laps_policy_cmd", { input });
+}
+
+export type LapsTenantStatus = {
+  enabled: boolean;
+};
+
+export async function fetchLapsTenantStatus(): Promise<{
+  status: LapsTenantStatus | null;
+  error: string | null;
+}> {
+  return invoke("fetch_laps_tenant_status_cmd");
+}
+
+export async function enableLapsForTenant(): Promise<ActionResponse> {
+  return invoke("enable_laps_for_tenant_cmd");
+}
+
 export async function createEndpointSecurityPolicy(input: {
   name: string;
   description?: string;
@@ -973,13 +1007,106 @@ export async function createAutopilotProfile(
   return invoke("create_autopilot_profile_cmd", { input });
 }
 
+export async function createEnrollmentStatusPage(input: {
+  displayName: string;
+  description?: string | null;
+  showInstallationProgress: boolean;
+  blockDeviceUseUntilAllAppsInstalled: boolean;
+  allowDeviceResetOnInstallFailure: boolean;
+  allowDeviceUseOnInstallFailure: boolean;
+  blockDeviceSetupRetryByUser: boolean;
+  allowLogCollectionOnInstallFailure: boolean;
+  onlyShowDuringOobe: boolean;
+  installQualityUpdates: boolean;
+  installProgressTimeoutInMinutes: number;
+  customErrorMessage?: string | null;
+  selectedMobileAppIds?: string[];
+}): Promise<{ page: { id: string; displayName: string } | null; error: string | null }> {
+  return invoke("create_enrollment_status_page_cmd", { input });
+}
+
+export type EspBlockingApp = {
+  id: string;
+  displayName: string;
+  publisher?: string | null;
+  displayVersion?: string | null;
+  odataType?: string | null;
+};
+
+export async function fetchEspBlockingApps(): Promise<{
+  apps: EspBlockingApp[];
+  error: string | null;
+}> {
+  return invoke("fetch_esp_blocking_apps_cmd");
+}
+
+export type ReadinessStatus = "pass" | "warn" | "fail" | "info";
+
+export type ReadinessRow = {
+  label: string;
+  value: string;
+  status: ReadinessStatus;
+  kind?: string;
+  detail?: string | null;
+};
+
+export type ReadinessSection = {
+  status: "pass" | "warn" | "fail";
+  title: string;
+  summary: string;
+  rows: ReadinessRow[];
+};
+
+export type ReadinessReport = {
+  automaticEnrollment: ReadinessSection;
+  cname: ReadinessSection;
+  platformRestrictions: ReadinessSection;
+};
+
+export type ReadinessUserHit = {
+  id: string;
+  displayName: string;
+  userPrincipalName: string;
+};
+
+export type UserReadinessReport = {
+  id: string;
+  displayName: string;
+  userPrincipalName: string;
+  result: ReadinessSection;
+  automaticEnrollment: ReadinessSection;
+  deviceLimit: ReadinessSection;
+  platformRestrictions: ReadinessSection;
+  licenses: ReadinessSection;
+};
+
+export async function fetchIntuneReadiness(): Promise<{
+  report: ReadinessReport | null;
+  error: string | null;
+}> {
+  return invoke("fetch_intune_readiness_cmd");
+}
+
+export async function searchReadinessUsers(query: string): Promise<{
+  users: ReadinessUserHit[];
+  error: string | null;
+}> {
+  return invoke("search_readiness_users_cmd", { query });
+}
+
+export async function fetchUserReadiness(userId: string): Promise<{
+  report: UserReadinessReport | null;
+  error: string | null;
+}> {
+  return invoke("fetch_user_readiness_cmd", { userId });
+}
+
 export async function createDomainJoinProfile(input: {
   displayName: string;
   description?: string | null;
   domainName: string;
   organizationalUnit?: string | null;
   computerNamePrefix: string;
-  computerNameRandomCharCount: number;
 }): Promise<{ profile: { id: string; displayName: string } | null; error: string | null }> {
   return invoke("create_domain_join_profile_cmd", { input });
 }

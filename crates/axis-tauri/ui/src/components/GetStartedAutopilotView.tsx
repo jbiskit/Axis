@@ -6,50 +6,225 @@ import {
   toCreateAutopilotInput,
   type AutopilotProfileDraft,
 } from "../lib/autopilotProfile";
+import { ENROLLMENT_ESP_PATH } from "../lib/enrollment";
 import { READ_ONLY_WRITE_HINT, useReadOnly } from "../lib/readOnly";
+import { hrefWithParam, navigate } from "../lib/route";
 import {
   assignObjectAssignments,
   createAutopilotProfile,
-  createDirectoryGroup,
   createDomainJoinProfile,
+  createEnrollmentStatusPage,
+  fetchEspBlockingApps,
   searchDirectoryGroups,
+  type EspBlockingApp,
 } from "../lib/tauri";
-import type { AssignmentDraft, CreateGroupMembership, DirectoryGroup } from "../types/inventory";
+import { assignmentTargetLabel } from "../lib/assignmentSummary";
+import type { AssignmentDraft, DirectoryGroup, GroupMembershipKind } from "../types/inventory";
 import { PageHeader } from "./ui/PageChrome";
 import { AutopilotProfileForm } from "./workbench/AutopilotProfileForm";
 import { BooleanToggle } from "./workbench/BooleanToggle";
+import { CreateEntraGroupPanel } from "./workbench/CreateEntraGroupPanel";
+import { IncludeExcludeToggle } from "./workbench/IncludeExcludeToggle";
 
-const AUTOPILOT_DEVICE_RULE = '(device.devicePhysicalIDs -any (_ -contains "[ZTDID]"))';
-
-function orderIdProblem(orderId: string): string | null {
-  const trimmed = orderId.trim();
-  if (!trimmed) return null;
-  if (/["\r\n]/.test(trimmed)) return "Order ID cannot include quotes or line breaks.";
+function membershipLabel(kind?: GroupMembershipKind | null): string | null {
+  if (kind === "dynamicDevice") return "Dynamic device";
+  if (kind === "dynamicUser") return "Dynamic user";
+  if (kind === "dynamic") return "Dynamic";
+  if (kind === "assigned") return "Assigned";
   return null;
 }
 
-function autopilotMembershipRule(orderId: string): string {
-  const trimmed = orderId.trim();
-  if (!trimmed) return AUTOPILOT_DEVICE_RULE;
-  return `${AUTOPILOT_DEVICE_RULE} and (device.devicePhysicalIds -any (_ -eq "[OrderID]:${trimmed}"))`;
+function membershipPillClass(kind?: GroupMembershipKind | null): string {
+  if (kind === "dynamicUser") return "axis-pill axis-pill-success";
+  if (kind === "dynamicDevice" || kind === "dynamic") return "axis-pill axis-pill-warning";
+  return "axis-pill";
 }
 
-type StepId = "join" | "profile" | "group" | "domain" | "review";
+type StepId = "join" | "profile" | "group" | "esp" | "domain" | "review";
+
+type EspDraft = {
+  enabled: boolean;
+  showInstallationProgress: boolean;
+  blockDeviceUseUntilAllAppsInstalled: boolean;
+  allowDeviceResetOnInstallFailure: boolean;
+  allowDeviceUseOnInstallFailure: boolean;
+  blockDeviceSetupRetryByUser: boolean;
+  allowLogCollectionOnInstallFailure: boolean;
+  onlyShowDuringOobe: boolean;
+  installQualityUpdates: boolean;
+  installProgressTimeoutInMinutes: number;
+  customErrorMessage: string;
+  blockAppsMode: "all" | "selected";
+  selectedAppIds: string[];
+};
+
+function espAppTypeLabel(odataType?: string | null): string | null {
+  const value = (odataType ?? "").toLowerCase();
+  if (value.includes("win32catalogapp")) return "Enterprise catalog";
+  if (value.includes("win32lobapp")) return "Win32";
+  if (value.includes("wingetapp")) return "WinGet";
+  if (value.includes("officesuiteapp")) return "Microsoft 365";
+  if (value.includes("windowsmicrosoftedgeapp")) return "Edge";
+  if (value.includes("windowsmobilemsi")) return "MSI";
+  if (value.includes("windowsappx") || value.includes("windowsuniversalappx")) return "AppX";
+  return null;
+}
+
+function defaultEspDraft(): EspDraft {
+  return {
+    enabled: true,
+    showInstallationProgress: true,
+    blockDeviceUseUntilAllAppsInstalled: true,
+    allowDeviceResetOnInstallFailure: false,
+    allowDeviceUseOnInstallFailure: false,
+    blockDeviceSetupRetryByUser: false,
+    allowLogCollectionOnInstallFailure: true,
+    onlyShowDuringOobe: true,
+    installQualityUpdates: false,
+    installProgressTimeoutInMinutes: 60,
+    customErrorMessage: "",
+    blockAppsMode: "all",
+    selectedAppIds: [],
+  };
+}
+
+function espTimeoutProblem(esp: EspDraft): string | null {
+  if (!esp.enabled || !esp.showInstallationProgress) return null;
+  const timeout = esp.installProgressTimeoutInMinutes;
+  if (!Number.isInteger(timeout) || timeout < 1 || timeout > 1440) {
+    return "Install progress timeout must be from 1 to 1440 minutes.";
+  }
+  return null;
+}
+
+function espProblem(esp: EspDraft): string | null {
+  if (!esp.enabled) return null;
+  if (esp.customErrorMessage.trim().length > 10000) {
+    return "Custom error message must be 10000 characters or fewer.";
+  }
+  if (
+    esp.showInstallationProgress &&
+    esp.blockDeviceUseUntilAllAppsInstalled &&
+    esp.blockAppsMode === "selected" &&
+    esp.selectedAppIds.length === 0
+  ) {
+    return "Select at least one app to block on.";
+  }
+  if (esp.selectedAppIds.length > 100) return "Select 100 apps or fewer.";
+  return espTimeoutProblem(esp);
+}
+
+function EspAppPicker({
+  apps,
+  loading,
+  error,
+  query,
+  selectedIds,
+  onQuery,
+  onSelectedIds,
+  onRetry,
+}: {
+  apps: EspBlockingApp[] | null;
+  loading: boolean;
+  error: string | null;
+  query: string;
+  selectedIds: string[];
+  onQuery: (value: string) => void;
+  onSelectedIds: (ids: string[]) => void;
+  onRetry: () => void;
+}) {
+  const needle = query.trim().toLowerCase();
+  const shown = (apps ?? []).filter((app) => {
+    if (!needle) return true;
+    const type = espAppTypeLabel(app.odataType)?.toLowerCase() ?? "";
+    return (
+      app.displayName.toLowerCase().includes(needle) ||
+      (app.displayVersion ?? "").toLowerCase().includes(needle) ||
+      (app.publisher ?? "").toLowerCase().includes(needle) ||
+      type.includes(needle)
+    );
+  });
+  const shownIds = shown.map((app) => app.id);
+  const allShown = shownIds.length > 0 && shownIds.every((id) => selectedIds.includes(id));
+
+  function toggle(id: string, checked: boolean) {
+    if (checked) onSelectedIds([...selectedIds, id].filter((value, index, all) => all.indexOf(value) === index));
+    else onSelectedIds(selectedIds.filter((value) => value !== id));
+  }
+
+  function toggleShown(checked: boolean) {
+    if (checked) {
+      onSelectedIds([...selectedIds, ...shownIds].filter((value, index, all) => all.indexOf(value) === index));
+      return;
+    }
+    const hide = new Set(shownIds);
+    onSelectedIds(selectedIds.filter((id) => !hide.has(id)));
+  }
+
+  return (
+    <div className="stack" style={{ gap: "0.5rem" }}>
+      <label className="device-field">
+        Find an app
+        <input
+          className="axis-input"
+          value={query}
+          placeholder="Name, version, or publisher"
+          onChange={(event) => onQuery(event.target.value)}
+        />
+      </label>
+      {loading ? <p className="muted">Loading apps…</p> : null}
+      {error ? (
+        <p className="axis-alert axis-alert-danger">
+          {error}{" "}
+          <button type="button" className="axis-btn" onClick={onRetry}>
+            Retry
+          </button>
+        </p>
+      ) : null}
+      {!loading && !error && apps && shown.length === 0 ? <p className="muted">No apps matched.</p> : null}
+      {shown.length > 0 ? (
+        <ul className="catalog-delete-list" style={{ maxHeight: "16rem", overflow: "auto" }}>
+          <li>
+            <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+              <input type="checkbox" checked={allShown} onChange={(event) => toggleShown(event.target.checked)} />
+              <span>Select shown ({selectedIds.length} selected)</span>
+            </label>
+          </li>
+          {shown.map((app) => {
+            const type = espAppTypeLabel(app.odataType);
+            return (
+              <li key={app.id}>
+                <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.includes(app.id)}
+                    onChange={(event) => toggle(app.id, event.target.checked)}
+                  />
+                  <span>
+                    {app.displayName}
+                    {app.displayVersion ? <span className="muted"> · {app.displayVersion}</span> : null}
+                    {app.publisher ? <span className="muted"> · {app.publisher}</span> : null}
+                    {type ? <span className="muted"> · {type}</span> : null}
+                  </span>
+                </label>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
 
 type CreatedPiece = { label: string; id: string };
 
-function computerNameProblem(prefix: string, randomCount: number): string | null {
+function computerNameProblem(prefix: string): string | null {
   const trimmed = prefix.trim();
+  if (!trimmed) return "Computer name prefix is required.";
   if (trimmed.split("").some((ch) => !/[A-Za-z0-9-]/.test(ch))) {
     return "Computer name prefix can use letters, digits, and hyphens.";
   }
-  if (!Number.isInteger(randomCount) || randomCount < 0 || randomCount > 15) {
-    return "Random computer name length must be from 0 to 15.";
-  }
-  if (!trimmed && randomCount === 0) return "Enter a computer name prefix or a random length.";
-  if (trimmed.length + randomCount > 15) {
-    return "Computer name prefix plus the random length must be 15 characters or fewer.";
-  }
+  if (trimmed.length > 15) return "Computer name prefix must be 15 characters or fewer.";
   return null;
 }
 
@@ -79,19 +254,22 @@ export function GetStartedAutopilotView({
   const [draft, setDraft] = useState<AutopilotProfileDraft>(() => defaultAutopilotProfileDraft());
   const [joinChosen, setJoinChosen] = useState(false);
   const [step, setStep] = useState<StepId>("join");
-  const [groupMode, setGroupMode] = useState<"existing" | "new">("new");
+  const [assignments, setAssignments] = useState<AssignmentDraft[]>([]);
+  const [groupPickerMode, setGroupPickerMode] = useState<"include" | "exclude">("include");
   const [groupQuery, setGroupQuery] = useState("");
   const [groupHits, setGroupHits] = useState<DirectoryGroup[]>([]);
+  const [groupSearching, setGroupSearching] = useState(false);
   const [groupSearchError, setGroupSearchError] = useState<string | null>(null);
-  const [selectedGroup, setSelectedGroup] = useState<DirectoryGroup | null>(null);
-  const [newGroupName, setNewGroupName] = useState("");
-  const [newGroupDynamic, setNewGroupDynamic] = useState(false);
-  const [orderId, setOrderId] = useState("");
-  const [newGroupRule, setNewGroupRule] = useState(AUTOPILOT_DEVICE_RULE);
   const [domainName, setDomainName] = useState("");
   const [organizationalUnit, setOrganizationalUnit] = useState("");
   const [computerPrefix, setComputerPrefix] = useState("");
-  const [randomCount, setRandomCount] = useState(4);
+  const [esp, setEsp] = useState<EspDraft>(() => defaultEspDraft());
+  const [espApps, setEspApps] = useState<EspBlockingApp[] | null>(null);
+  const [espAppsLoading, setEspAppsLoading] = useState(false);
+  const [espAppsError, setEspAppsError] = useState<string | null>(null);
+  const [espAppQuery, setEspAppQuery] = useState("");
+  const [espId, setEspId] = useState<string | null>(null);
+  const [espAssigned, setEspAssigned] = useState(false);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -107,7 +285,8 @@ export function GetStartedAutopilotView({
     const rows: { id: StepId; label: string }[] = [
       { id: "join", label: "Join" },
       { id: "profile", label: "Profile" },
-      { id: "group", label: "Group" },
+      { id: "group", label: "Groups" },
+      { id: "esp", label: "Enrollment Status Page" },
     ];
     if (hybrid) rows.push({ id: "domain", label: "Domain join" });
     rows.push({ id: "review", label: "Review" });
@@ -120,15 +299,17 @@ export function GetStartedAutopilotView({
   }, [steps, step]);
 
   useEffect(() => {
-    if (groupMode !== "existing") return;
     const query = groupQuery.trim();
     if (query.length < 2) {
       setGroupHits([]);
       setGroupSearchError(null);
+      setGroupSearching(false);
       return;
     }
     let cancel = false;
     const timer = window.setTimeout(() => {
+      setGroupSearching(true);
+      setGroupSearchError(null);
       void searchDirectoryGroups(query)
         .then((response) => {
           if (cancel) return;
@@ -139,28 +320,54 @@ export function GetStartedAutopilotView({
           if (cancel) return;
           setGroupHits([]);
           setGroupSearchError(err instanceof Error ? err.message : String(err));
+        })
+        .finally(() => {
+          if (!cancel) setGroupSearching(false);
         });
-    }, 250);
+    }, 300);
     return () => {
       cancel = true;
       window.clearTimeout(timer);
     };
-  }, [groupMode, groupQuery]);
+  }, [groupQuery]);
+
+  useEffect(() => {
+    if (step !== "esp" || !esp.showInstallationProgress || !esp.blockDeviceUseUntilAllAppsInstalled) return;
+    if (esp.blockAppsMode !== "selected" || espApps) return;
+    let cancel = false;
+    setEspAppsLoading(true);
+    setEspAppsError(null);
+    void fetchEspBlockingApps()
+      .then((response) => {
+        if (cancel) return;
+        setEspApps(response.apps);
+        setEspAppsError(response.error);
+      })
+      .catch((err: unknown) => {
+        if (cancel) return;
+        setEspApps([]);
+        setEspAppsError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!cancel) setEspAppsLoading(false);
+      });
+    return () => {
+      cancel = true;
+    };
+  }, [esp.blockAppsMode, esp.blockDeviceUseUntilAllAppsInstalled, esp.showInstallationProgress, espApps, step]);
 
   const nameProblem = autopilotProfileNameProblem(draft.displayName);
-  const deviceNameProblem = autopilotDeviceNameProblem(draft.deviceNameTemplate);
-  const groupName = newGroupName.trim() || `${draft.displayName.trim() || "Autopilot"} devices`;
-  const groupProblem =
-    groupMode === "existing"
-      ? selectedGroup
-        ? null
-        : "Choose a group."
-      : newGroupDynamic && !newGroupRule.trim()
-        ? "Enter a dynamic membership rule."
-        : newGroupDynamic
-          ? orderIdProblem(orderId)
-          : null;
-  const nameIssue = computerNameProblem(computerPrefix, randomCount);
+  const deviceNameProblem = hybrid ? null : autopilotDeviceNameProblem(draft.deviceNameTemplate);
+  const groupProblem = assignments.some((row) => row.targetKind === "group")
+    ? null
+    : "Add at least one include group.";
+  const pageProblem = espProblem(esp);
+  const timeoutProblem = espTimeoutProblem(esp);
+  const messageProblem =
+    esp.enabled && esp.customErrorMessage.trim().length > 10000
+      ? "Custom error message must be 10000 characters or fewer."
+      : null;
+  const nameIssue = computerNameProblem(computerPrefix);
   const domainIssue = hybrid ? domainProblem(domainName) ?? ouProblem(organizationalUnit) ?? nameIssue : null;
   const stepProblem =
     step === "join"
@@ -171,13 +378,47 @@ export function GetStartedAutopilotView({
         ? nameProblem ?? deviceNameProblem
         : step === "group"
           ? groupProblem
-          : step === "domain"
-            ? domainIssue
-            : nameProblem ?? deviceNameProblem ?? groupProblem ?? domainIssue;
+          : step === "esp"
+            ? pageProblem
+            : step === "domain"
+              ? domainIssue
+              : nameProblem ?? deviceNameProblem ?? groupProblem ?? pageProblem ?? domainIssue;
 
   function chooseJoin(kind: AutopilotProfileDraft["joinKind"]) {
-    setDraft((current) => ({ ...current, joinKind: kind }));
+    setDraft((current) => ({
+      ...current,
+      joinKind: kind,
+      ...(kind === "hybrid" ? { deviceNameTemplate: "", deviceUsageType: "singleUser" } : {}),
+    }));
     setJoinChosen(true);
+  }
+
+  function addGroup(targetKind: "group" | "exclusionGroup", group: DirectoryGroup) {
+    setAssignments((current) => {
+      const rest = current.filter(
+        (row) =>
+          row.groupId !== group.id ||
+          (row.targetKind !== "group" && row.targetKind !== "exclusionGroup"),
+      );
+      return [
+        ...rest,
+        {
+          targetKind,
+          groupId: group.id,
+          groupName: group.displayName,
+          groupMembership: group.membership,
+        },
+      ];
+    });
+  }
+
+  function assignedMode(groupId: string): "include" | "exclude" | null {
+    const match = assignments.find(
+      (row) =>
+        row.groupId === groupId && (row.targetKind === "group" || row.targetKind === "exclusionGroup"),
+    );
+    if (!match) return null;
+    return match.targetKind === "exclusionGroup" ? "exclude" : "include";
   }
 
   function go(next: number) {
@@ -193,33 +434,24 @@ export function GetStartedAutopilotView({
     setBusy(true);
     setError(null);
     const pieces = [...created];
-    let group = selectedGroup;
     let deploymentId = profileId;
     let deploymentAssigned = profileAssigned;
     let joinId = domainId;
     let joinAssigned = domainAssigned;
+    let pageId = espId;
+    let pageAssigned = espAssigned;
     try {
-      if (groupMode === "new" && !pieces.some((piece) => piece.label === "Group")) {
-        setProgress("Creating group…");
-        const membership: CreateGroupMembership = newGroupDynamic ? "dynamicDevice" : "assigned";
-        const response = await createDirectoryGroup({
-          displayName: groupName,
-          description: `Assignment group for ${draft.displayName.trim()}`,
-          membership,
-          membershipRule: newGroupDynamic ? newGroupRule.trim() : undefined,
-        });
-        if (!response.group) throw new Error(response.error ?? "Failed to create group.");
-        group = response.group;
-        setSelectedGroup(response.group);
-        pieces.push({ label: "Group", id: response.group.id });
-        setCreated([...pieces]);
+      if (!assignments.some((row) => row.targetKind === "group")) {
+        throw new Error("Add at least one include group.");
       }
-      if (!group) throw new Error("Choose a group.");
-      const assignment: AssignmentDraft = {
-        targetKind: "group",
-        groupId: group.id,
-        groupName: group.displayName,
-      };
+      for (const row of assignments) {
+        if (!row.groupId || pieces.some((piece) => piece.id === row.groupId)) continue;
+        pieces.push({
+          label: row.targetKind === "exclusionGroup" ? `Exclude ${row.groupName ?? "group"}` : `Include ${row.groupName ?? "group"}`,
+          id: row.groupId,
+        });
+      }
+      setCreated([...pieces]);
       if (!deploymentId) {
         setProgress("Creating deployment profile…");
         const response = await createAutopilotProfile(toCreateAutopilotInput(draft));
@@ -234,11 +466,51 @@ export function GetStartedAutopilotView({
         const assigned = await assignObjectAssignments({
           kind: "autopilotProfile",
           id: deploymentId,
-          drafts: [assignment],
+          drafts: assignments,
         });
         if (!assigned.ok) throw new Error(assigned.error ?? "Failed to assign the deployment profile.");
         deploymentAssigned = true;
         setProfileAssigned(true);
+      }
+      if (esp.enabled && !pageId) {
+        setProgress("Creating Enrollment Status Page…");
+        const response = await createEnrollmentStatusPage({
+          displayName: `${draft.displayName.trim()} enrollment status page`,
+          description: `Enrollment Status Page for ${draft.displayName.trim()}`,
+          showInstallationProgress: esp.showInstallationProgress,
+          blockDeviceUseUntilAllAppsInstalled: esp.blockDeviceUseUntilAllAppsInstalled,
+          allowDeviceResetOnInstallFailure: esp.allowDeviceResetOnInstallFailure,
+          allowDeviceUseOnInstallFailure: esp.allowDeviceUseOnInstallFailure,
+          blockDeviceSetupRetryByUser: false,
+          allowLogCollectionOnInstallFailure: esp.allowLogCollectionOnInstallFailure,
+          onlyShowDuringOobe: esp.onlyShowDuringOobe,
+          installQualityUpdates: esp.installQualityUpdates,
+          installProgressTimeoutInMinutes: esp.installProgressTimeoutInMinutes,
+          customErrorMessage: esp.customErrorMessage.trim() || null,
+          selectedMobileAppIds:
+            esp.showInstallationProgress &&
+            esp.blockDeviceUseUntilAllAppsInstalled &&
+            esp.blockAppsMode === "selected"
+              ? esp.selectedAppIds
+              : [],
+        });
+        if (!response.page) throw new Error(response.error ?? "Failed to create the Enrollment Status Page.");
+        pageId = response.page.id;
+        setEspId(response.page.id);
+        pieces.push({ label: "Enrollment Status Page", id: response.page.id });
+        setCreated([...pieces]);
+      }
+      if (esp.enabled && pageId && !pageAssigned) {
+        setProgress("Assigning Enrollment Status Page…");
+        const assigned = await assignObjectAssignments({
+          kind: "enrollmentConfiguration",
+          id: pageId,
+          drafts: assignments.filter((row) => row.targetKind !== "exclusionGroup"),
+          objectOdataType: "#microsoft.graph.windows10EnrollmentCompletionPageConfiguration",
+        });
+        if (!assigned.ok) throw new Error(assigned.error ?? "Failed to assign the Enrollment Status Page.");
+        pageAssigned = true;
+        setEspAssigned(true);
       }
       if (hybrid && !joinId) {
         setProgress("Creating domain join profile…");
@@ -248,7 +520,6 @@ export function GetStartedAutopilotView({
           domainName: domainName.trim(),
           organizationalUnit: organizationalUnit.trim() || null,
           computerNamePrefix: computerPrefix.trim(),
-          computerNameRandomCharCount: randomCount,
         });
         if (!response.profile) throw new Error(response.error ?? "Failed to create the domain join profile.");
         joinId = response.profile.id;
@@ -261,7 +532,7 @@ export function GetStartedAutopilotView({
         const assigned = await assignObjectAssignments({
           kind: "deviceConfiguration",
           id: joinId,
-          drafts: [assignment],
+          drafts: assignments,
           objectOdataType: "#microsoft.graph.windowsDomainJoinConfiguration",
         });
         if (!assigned.ok) throw new Error(assigned.error ?? "Failed to assign the domain join profile.");
@@ -285,7 +556,7 @@ export function GetStartedAutopilotView({
       <PageHeader
         eyebrow="Get Started"
         title="Get started"
-        description="Create the Windows Autopilot objects for an Entra or Hybrid join, and assign them to one group."
+        description="Create the Windows Autopilot deployment profile, Enrollment Status Page, and include and exclude groups for an Entra or Hybrid join."
       />
       <div className="axis-panel axis-panel-padded get-started">
         <ol className="get-started-steps">
@@ -315,11 +586,24 @@ export function GetStartedAutopilotView({
                 </li>
               ))}
             </ul>
-            {profileId ? (
-              <div>
-                <button type="button" className="axis-btn" onClick={() => onOpenProfile(profileId)}>
-                  Open deployment profile
-                </button>
+            {profileId || espId ? (
+              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                {profileId ? (
+                  <button type="button" className="axis-btn" onClick={() => onOpenProfile(profileId)}>
+                    Open deployment profile
+                  </button>
+                ) : null}
+                {espId ? (
+                  <button
+                    type="button"
+                    className="axis-btn"
+                    onClick={() =>
+                      navigate(hrefWithParam(ENROLLMENT_ESP_PATH, new URLSearchParams(), "policy", espId))
+                    }
+                  >
+                    Open Enrollment Status Page
+                  </button>
+                ) : null}
               </div>
             ) : null}
             <div className="axis-alert axis-alert-info">
@@ -384,107 +668,318 @@ export function GetStartedAutopilotView({
 
             {step === "group" ? (
               <section className="stack" style={{ gap: "0.75rem" }}>
-                <h2 style={{ margin: 0, fontSize: "1.05rem" }}>Assignment group</h2>
-                <div className="get-started-choices">
-                  <button
-                    type="button"
-                    className="axis-btn"
-                    aria-pressed={groupMode === "new"}
-                    onClick={() => setGroupMode("new")}
-                  >
-                    New group
-                  </button>
-                  <button
-                    type="button"
-                    className="axis-btn"
-                    aria-pressed={groupMode === "existing"}
-                    onClick={() => setGroupMode("existing")}
-                  >
-                    Existing group
-                  </button>
+                <h2 style={{ margin: 0, fontSize: "1.05rem" }}>Include and exclude groups</h2>
+                <p className="muted" style={{ margin: 0 }}>
+                  These groups are assigned to the deployment profile
+                  {hybrid ? " and the domain join profile" : ""}.
+                  {esp.enabled
+                    ? " The Enrollment Status Page receives the include groups."
+                    : ""}
+                </p>
+                <div className="assignment-quick">
+                  <IncludeExcludeToggle
+                    value={groupPickerMode}
+                    includeLabel="Include"
+                    excludeLabel="Exclude"
+                    ariaLabel="Add group as include or exclude"
+                    onChange={setGroupPickerMode}
+                  />
                 </div>
-                {groupMode === "new" ? (
+                <label className="device-field">
+                  {groupPickerMode === "exclude" ? "Find group to exclude" : "Find group to include"}
+                  <input
+                    className="axis-input"
+                    value={groupQuery}
+                    placeholder="Type at least 2 characters…"
+                    onChange={(event) => setGroupQuery(event.target.value)}
+                  />
+                </label>
+                {groupSearching ? <p className="muted">Searching…</p> : null}
+                {groupSearchError ? (
+                  <p className="muted" style={{ color: "var(--axis-danger)" }}>
+                    {groupSearchError}
+                  </p>
+                ) : null}
+                {!groupSearching && !groupSearchError && groupQuery.trim().length >= 2 && groupHits.length === 0 ? (
+                  <p className="muted">No groups matched.</p>
+                ) : null}
+                {groupHits.length > 0 ? (
+                  <ul className="assignment-hits">
+                    {groupHits.map((group) => {
+                      const mode = assignedMode(group.id);
+                      return (
+                        <li key={group.id} className={mode ? "assignment-hit is-assigned" : "assignment-hit"}>
+                          <button
+                            type="button"
+                            className="assignment-hit-name assignment-hit-pick"
+                            onClick={() => addGroup(groupPickerMode === "exclude" ? "exclusionGroup" : "group", group)}
+                          >
+                            <span>{group.displayName}</span>
+                            {membershipLabel(group.membership) ? (
+                              <span className={membershipPillClass(group.membership)} title={group.membershipRule ?? undefined}>
+                                {membershipLabel(group.membership)}
+                              </span>
+                            ) : null}
+                          </button>
+                          <span className="assignment-hit-actions">
+                            <IncludeExcludeToggle
+                              value={mode}
+                              ariaLabel={`Add ${group.displayName} as an assignment`}
+                              onChange={(next) => addGroup(next === "exclude" ? "exclusionGroup" : "group", group)}
+                            />
+                          </span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                ) : null}
+                <CreateEntraGroupPanel
+                  disabled={readOnly || busy}
+                  autopilotOrderId
+                  namePlaceholder="e.g. Autopilot devices"
+                  successHint={
+                    groupPickerMode === "exclude"
+                      ? "and added as an exclude."
+                      : "and added as an include."
+                  }
+                  onCreated={(group) => addGroup(groupPickerMode === "exclude" ? "exclusionGroup" : "group", group)}
+                />
+                <div>
+                  <p className="muted" style={{ margin: 0 }}>
+                    Assignments
+                  </p>
+                  <ul className="assignment-rows">
+                    {assignments.length === 0 ? (
+                      <li className="muted">Include at least one group. Excludes are optional.</li>
+                    ) : (
+                      assignments.map((row) => (
+                        <li key={`${row.targetKind}:${row.groupId}`} className="assignment-row">
+                          <div className="assignment-row-top">
+                            <div className="assignment-hit-name">
+                              <span className={row.targetKind === "exclusionGroup" ? "muted" : undefined}>
+                                {assignmentTargetLabel(row)}
+                              </span>
+                              {membershipLabel(row.groupMembership) ? (
+                                <span className={membershipPillClass(row.groupMembership)}>
+                                  {membershipLabel(row.groupMembership)}
+                                </span>
+                              ) : null}
+                            </div>
+                            <div className="assignment-row-actions">
+                              <IncludeExcludeToggle
+                                value={row.targetKind === "exclusionGroup" ? "exclude" : "include"}
+                                ariaLabel={`Include or exclude ${row.groupName || "group"}`}
+                                onChange={(mode) =>
+                                  setAssignments((current) =>
+                                    current.map((item) =>
+                                      item.groupId === row.groupId
+                                        ? { ...item, targetKind: mode === "exclude" ? "exclusionGroup" : "group" }
+                                        : item,
+                                    ),
+                                  )
+                                }
+                              />
+                              <button
+                                type="button"
+                                className="axis-btn axis-btn-ghost"
+                                onClick={() =>
+                                  setAssignments((current) => current.filter((item) => item.groupId !== row.groupId))
+                                }
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          </div>
+                        </li>
+                      ))
+                    )}
+                  </ul>
+                </div>
+              </section>
+            ) : null}
+
+            {step === "esp" ? (
+              <section className="stack" style={{ gap: "0.75rem" }}>
+                <h2 style={{ margin: 0, fontSize: "1.05rem" }}>Enrollment Status Page</h2>
+                <p className="muted" style={{ margin: 0 }}>
+                  Creates an Enrollment Status Page and assigns the include groups. Exclude groups stay on the deployment profile.
+                </p>
+                <label className="device-field" style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexDirection: "row" }}>
+                  <BooleanToggle
+                    checked={esp.enabled}
+                    ariaLabel="Create an Enrollment Status Page"
+                    onChange={(enabled) => setEsp((current) => ({ ...current, enabled }))}
+                  />
+                  <span>Create an Enrollment Status Page</span>
+                </label>
+                {esp.enabled ? (
                   <>
-                    <label className="device-field">
-                      Group name
-                      <input
-                        className="axis-input"
-                        value={newGroupName}
-                        placeholder={groupName}
-                        onChange={(event) => setNewGroupName(event.target.value)}
-                      />
-                    </label>
                     <label className="device-field" style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexDirection: "row" }}>
                       <BooleanToggle
-                        checked={newGroupDynamic}
-                        ariaLabel="Dynamic device membership"
-                        onChange={(checked) => {
-                          setNewGroupDynamic(checked);
-                          if (checked) setNewGroupRule(autopilotMembershipRule(orderId));
-                        }}
+                        checked={esp.showInstallationProgress}
+                        ariaLabel="Show app and profile configuration progress"
+                        onChange={(showInstallationProgress) =>
+                          setEsp((current) => ({ ...current, showInstallationProgress }))
+                        }
                       />
-                      <span>Dynamic device membership</span>
+                      <span>Show app and profile configuration progress</span>
                     </label>
-                    {newGroupDynamic ? (
+                    {esp.showInstallationProgress ? (
                       <>
                         <label className="device-field">
-                          Order ID
-                          <span className="muted" style={{ display: "block", fontSize: "0.7rem" }}>
-                            Optional. Adds (device.devicePhysicalIds -any (_ -eq "[OrderID]:…")) to the membership rule.
-                          </span>
+                          Show an error when installation takes longer than (minutes)
                           <input
-                            className="axis-input"
-                            value={orderId}
-                            placeholder="179887111881"
-                            onChange={(event) => {
-                              const next = event.target.value;
-                              setOrderId(next);
-                              setNewGroupRule(autopilotMembershipRule(next));
-                            }}
+                            className={`axis-input${timeoutProblem ? " is-invalid" : ""}`}
+                            type="number"
+                            min={1}
+                            max={1440}
+                            value={esp.installProgressTimeoutInMinutes}
+                            aria-invalid={timeoutProblem ? true : undefined}
+                            onChange={(event) =>
+                              setEsp((current) => ({
+                                ...current,
+                                installProgressTimeoutInMinutes: Number(event.target.value),
+                              }))
+                            }
                           />
+                          {timeoutProblem ? (
+                            <span className="setting-field-error" role="alert">
+                              {timeoutProblem}
+                            </span>
+                          ) : null}
                         </label>
                         <label className="device-field">
-                          Membership rule
+                          Custom error message
                           <span className="muted" style={{ display: "block", fontSize: "0.7rem" }}>
-                            {orderId.trim()
-                              ? "Registered Autopilot devices with this order ID."
-                              : "The Autopilot device rule includes every registered Autopilot device."}
+                            Optional. Leave blank to use the default setup failure message.
                           </span>
-                          <textarea className="axis-input" rows={3} value={newGroupRule} onChange={(event) => setNewGroupRule(event.target.value)} />
+                          <input
+                            className={`axis-input${messageProblem ? " is-invalid" : ""}`}
+                            value={esp.customErrorMessage}
+                            placeholder="Optional"
+                            aria-invalid={messageProblem ? true : undefined}
+                            onChange={(event) =>
+                              setEsp((current) => ({ ...current, customErrorMessage: event.target.value }))
+                            }
+                          />
+                          {messageProblem ? (
+                            <span className="setting-field-error" role="alert">
+                              {messageProblem}
+                            </span>
+                          ) : null}
                         </label>
+                        <label className="device-field" style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexDirection: "row" }}>
+                          <BooleanToggle
+                            checked={esp.allowLogCollectionOnInstallFailure}
+                            ariaLabel="Turn on log collection and diagnostics page for end users"
+                            onChange={(allowLogCollectionOnInstallFailure) =>
+                              setEsp((current) => ({ ...current, allowLogCollectionOnInstallFailure }))
+                            }
+                          />
+                          <span>Turn on log collection and diagnostics page for end users</span>
+                        </label>
+                        <label className="device-field" style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexDirection: "row" }}>
+                          <BooleanToggle
+                            checked={esp.onlyShowDuringOobe}
+                            ariaLabel="Only show page to devices provisioned by out-of-box experience"
+                            onChange={(onlyShowDuringOobe) =>
+                              setEsp((current) => ({ ...current, onlyShowDuringOobe }))
+                            }
+                          />
+                          <span>Only show page to devices provisioned by out-of-box experience (OOBE)</span>
+                        </label>
+                        <label className="device-field" style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexDirection: "row" }}>
+                          <BooleanToggle
+                            checked={esp.installQualityUpdates}
+                            ariaLabel="Install Windows quality updates"
+                            onChange={(installQualityUpdates) =>
+                              setEsp((current) => ({ ...current, installQualityUpdates }))
+                            }
+                          />
+                          <span>Install Windows quality updates</span>
+                        </label>
+                        <label className="device-field" style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexDirection: "row" }}>
+                          <BooleanToggle
+                            checked={esp.blockDeviceUseUntilAllAppsInstalled}
+                            ariaLabel="Block device use until all apps and profiles are installed"
+                            onChange={(blockDeviceUseUntilAllAppsInstalled) =>
+                              setEsp((current) => ({ ...current, blockDeviceUseUntilAllAppsInstalled }))
+                            }
+                          />
+                          <span>Block device use until all apps and profiles are installed</span>
+                        </label>
+                        {esp.blockDeviceUseUntilAllAppsInstalled ? (
+                          <>
+                            <p className="muted" style={{ margin: 0 }}>
+                              Block device use until these required apps are installed if they are assigned to the user/device
+                            </p>
+                            <div className="get-started-choices">
+                              <button
+                                type="button"
+                                className="axis-btn"
+                                aria-pressed={esp.blockAppsMode === "all"}
+                                onClick={() => setEsp((current) => ({ ...current, blockAppsMode: "all" }))}
+                              >
+                                All
+                              </button>
+                              <button
+                                type="button"
+                                className="axis-btn"
+                                aria-pressed={esp.blockAppsMode === "selected"}
+                                onClick={() => setEsp((current) => ({ ...current, blockAppsMode: "selected" }))}
+                              >
+                                Selected
+                              </button>
+                            </div>
+                            {esp.blockAppsMode === "all" ? (
+                              <p className="muted" style={{ margin: 0, fontSize: "0.75rem" }}>
+                                All assigned apps must finish before the device can be used.
+                              </p>
+                            ) : (
+                              <EspAppPicker
+                                apps={espApps}
+                                loading={espAppsLoading}
+                                error={espAppsError}
+                                query={espAppQuery}
+                                selectedIds={esp.selectedAppIds}
+                                onQuery={setEspAppQuery}
+                                onSelectedIds={(selectedAppIds) => setEsp((current) => ({ ...current, selectedAppIds }))}
+                                onRetry={() => {
+                                  setEspApps(null);
+                                  setEspAppsError(null);
+                                }}
+                              />
+                            )}
+                          </>
+                        ) : null}
+                        {esp.blockDeviceUseUntilAllAppsInstalled ? (
+                          <>
+                            <label className="device-field" style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexDirection: "row" }}>
+                              <BooleanToggle
+                                checked={esp.allowDeviceResetOnInstallFailure}
+                                ariaLabel="Allow users to reset device if installation error occurs"
+                                onChange={(allowDeviceResetOnInstallFailure) =>
+                                  setEsp((current) => ({ ...current, allowDeviceResetOnInstallFailure }))
+                                }
+                              />
+                              <span>Allow users to reset device if installation error occurs</span>
+                            </label>
+                            <label className="device-field" style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexDirection: "row" }}>
+                              <BooleanToggle
+                                checked={esp.allowDeviceUseOnInstallFailure}
+                                ariaLabel="Allow users to use device if installation error occurs"
+                                onChange={(allowDeviceUseOnInstallFailure) =>
+                                  setEsp((current) => ({ ...current, allowDeviceUseOnInstallFailure }))
+                                }
+                              />
+                              <span>Allow users to use device if installation error occurs</span>
+                            </label>
+                          </>
+                        ) : null}
                       </>
                     ) : null}
                   </>
-                ) : (
-                  <>
-                    <label className="device-field">
-                      Search groups
-                      <input
-                        className="axis-input"
-                        value={groupQuery}
-                        placeholder="Type at least two characters"
-                        onChange={(event) => setGroupQuery(event.target.value)}
-                      />
-                    </label>
-                    {selectedGroup ? (
-                      <p className="muted" style={{ margin: 0 }}>
-                        Selected: {selectedGroup.displayName}
-                      </p>
-                    ) : null}
-                    {groupSearchError ? <p className="axis-alert axis-alert-danger">{groupSearchError}</p> : null}
-                    {groupHits.length > 0 ? (
-                      <ul className="catalog-delete-list">
-                        {groupHits.map((group) => (
-                          <li key={group.id}>
-                            <button type="button" className="axis-btn" onClick={() => setSelectedGroup(group)}>
-                              {group.displayName}
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    ) : null}
-                  </>
-                )}
+                ) : null}
               </section>
             ) : null}
 
@@ -492,8 +987,25 @@ export function GetStartedAutopilotView({
               <section className="stack" style={{ gap: "0.75rem" }}>
                 <h2 style={{ margin: 0, fontSize: "1.05rem" }}>Domain join profile</h2>
                 <p className="muted" style={{ margin: 0 }}>
-                  This names the Active Directory computer. The device name template on the deployment profile stays separate.
+                  This names the Active Directory computer. Hybrid deployment profiles do not set a device name template.
                 </p>
+                <label className="device-field">
+                  Computer name prefix
+                  <input
+                    className={`axis-input${nameIssue ? " is-invalid" : ""}`}
+                    value={computerPrefix}
+                    placeholder="AX-"
+                    aria-invalid={nameIssue ? true : undefined}
+                    onChange={(event) => setComputerPrefix(event.target.value)}
+                  />
+                  {nameIssue ? (
+                    <span className="setting-field-error" role="alert">
+                      {nameIssue}
+                    </span>
+                  ) : (
+                    <span className="muted">The rest of the 15-character computer name is random.</span>
+                  )}
+                </label>
                 <label className="device-field">
                   Domain name
                   <input className="axis-input" value={domainName} placeholder="contoso.com" onChange={(event) => setDomainName(event.target.value)} />
@@ -507,33 +1019,6 @@ export function GetStartedAutopilotView({
                     onChange={(event) => setOrganizationalUnit(event.target.value)}
                   />
                 </label>
-                <label className="device-field">
-                  Computer name prefix
-                  <input
-                    className={`axis-input${nameIssue ? " is-invalid" : ""}`}
-                    value={computerPrefix}
-                    placeholder="PC-"
-                    aria-invalid={nameIssue ? true : undefined}
-                    onChange={(event) => setComputerPrefix(event.target.value)}
-                  />
-                  {nameIssue ? (
-                    <span className="setting-field-error" role="alert">
-                      {nameIssue}
-                    </span>
-                  ) : null}
-                </label>
-                <label className="device-field">
-                  Random characters
-                  <input
-                    className={`axis-input${nameIssue ? " is-invalid" : ""}`}
-                    type="number"
-                    min={0}
-                    max={15}
-                    value={randomCount}
-                    aria-invalid={nameIssue ? true : undefined}
-                    onChange={(event) => setRandomCount(Number(event.target.value))}
-                  />
-                </label>
                 {domainProblem(domainName) || ouProblem(organizationalUnit) ? (
                   <p className="muted">{domainProblem(domainName) ?? ouProblem(organizationalUnit)}</p>
                 ) : null}
@@ -545,14 +1030,20 @@ export function GetStartedAutopilotView({
                 <h2 style={{ margin: 0, fontSize: "1.05rem" }}>Create these objects</h2>
                 <ul className="catalog-delete-list">
                   <li>{hybrid ? "Hybrid Microsoft Entra joined" : "Microsoft Entra joined"} deployment profile: {draft.displayName.trim()}</li>
-                  <li>
-                    {groupMode === "existing" ? "Assign to" : "Create and assign"}{" "}
-                    {groupMode === "existing" ? selectedGroup?.displayName : groupName}
-                    {groupMode === "new" && newGroupDynamic && orderId.trim()
-                      ? ` (order ID ${orderId.trim()})`
-                      : ""}
-                  </li>
-                  {draft.configureEsp ? <li>Enrollment status settings on the deployment profile</li> : null}
+                  {assignments.map((row) => (
+                    <li key={`${row.targetKind}:${row.groupId}`}>{assignmentTargetLabel(row)}</li>
+                  ))}
+                  {esp.enabled ? (
+                    <li>
+                      Enrollment Status Page assigned to the include groups
+                      {esp.showInstallationProgress ? ", showing setup progress" : ", with setup progress hidden"}
+                      {esp.showInstallationProgress && esp.blockDeviceUseUntilAllAppsInstalled
+                        ? esp.blockAppsMode === "selected"
+                          ? `, blocking on ${esp.selectedAppIds.length} selected app${esp.selectedAppIds.length === 1 ? "" : "s"}`
+                          : ", blocking on all assigned apps"
+                        : ""}
+                    </li>
+                  ) : null}
                   {hybrid ? (
                     <li>
                       Domain join profile for {domainName.trim()}
