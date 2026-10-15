@@ -782,7 +782,7 @@ mod tests {
     fn export_body_converts_legacy_oobe_settings() {
         let object = json!({
             "@odata.type": "#microsoft.graph.azureADWindowsAutopilotDeploymentProfile",
-            "displayName": "PolicyForge - Import",
+            "displayName": "PolicyForge Import",
             "description": "from pack",
             "locale": "en-AU",
             "deviceType": "windowsPc",
@@ -799,7 +799,7 @@ mod tests {
             "enableWhiteGlove": true,
             "hardwareHashExtractionEnabled": false
         });
-        let body = autopilot_profile_create_body_from_export(&object, "PolicyForge - Import", None)
+        let body = autopilot_profile_create_body_from_export(&object, "PolicyForge Import", None)
             .unwrap();
         assert!(body.get("outOfBoxExperienceSettings").is_none());
         assert!(body.get("managementServiceAppId").is_none());

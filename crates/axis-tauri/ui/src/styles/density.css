@@ -1,0 +1,108 @@
+/* Compact density — toggled via `data-density="compact"` on <html> (App Settings).
+   Layout is rem-based, so dropping the root size tightens everything ~12%.
+   The small text tokens are bumped back up so captions and kickers stay legible,
+   then the biggest space consumers get targeted overrides below. */
+:root[data-density="compact"] {
+  font-size: 14px;
+
+  --axis-text-2xs: 0.75rem;
+  --axis-text-xs: 0.8125rem;
+  --axis-text-sm: 0.875rem;
+  --axis-text-md: 0.9rem;
+  --axis-text-lg: 1.05rem;
+  --axis-text-xl: 1.3rem;
+
+  --axis-rail-width: 13rem;
+  --axis-iconrail-width: 3.25rem;
+  --axis-titlebar-height: 2.4rem;
+}
+
+/* Shell — icon rail drops its labels (tooltips carry the names) */
+[data-density="compact"] .shell-iconrail-label {
+  display: none;
+}
+
+[data-density="compact"] .shell-iconrail-item {
+  padding: 0.5rem 0;
+}
+
+[data-density="compact"] .shell-iconrail-sep {
+  margin: 0.25rem 0.4rem;
+}
+
+[data-density="compact"] .shell-main {
+  padding: 0.75rem 1rem 1.5rem;
+}
+
+[data-density="compact"] .shell-nav-item {
+  padding: 0.28rem 0.5rem;
+}
+
+[data-density="compact"] .stack,
+[data-density="compact"] .inspector-chrome {
+  gap: 0.6rem;
+}
+
+/* Page header: one tight block, description clamped to a single line */
+[data-density="compact"] .page-header {
+  margin-bottom: var(--axis-space-2);
+}
+
+[data-density="compact"] .page-header h1 {
+  margin-top: 0;
+}
+
+[data-density="compact"] .page-header-desc {
+  margin-top: 0.1rem;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Panels and cards */
+[data-density="compact"] .axis-panel-padded {
+  padding: var(--axis-space-3);
+}
+
+[data-density="compact"] .axis-panel-head {
+  padding-bottom: var(--axis-space-2);
+}
+
+[data-density="compact"] .signal-card {
+  min-height: 4rem;
+  padding: var(--axis-space-2) var(--axis-space-3);
+}
+
+[data-density="compact"] .signal-card-value {
+  font-size: 1.3rem;
+}
+
+/* Controls */
+[data-density="compact"] .axis-btn {
+  min-height: 1.65rem;
+  padding: 0.2rem 0.55rem;
+}
+
+[data-density="compact"] .axis-btn-icon {
+  width: 1.65rem;
+  min-width: 1.65rem;
+  padding: 0;
+}
+
+[data-density="compact"] .axis-seg-btn {
+  min-height: 1.4rem;
+  padding: 0.15rem 0.55rem;
+}
+
+/* Tables: single-line rows */
+[data-density="compact"] .axis-table th {
+  padding: 0.35rem 0.6rem;
+}
+
+[data-density="compact"] .axis-table td {
+  padding: 0.28rem 0.6rem;
+}
+
+[data-density="compact"] .axis-alert {
+  padding: 0.4rem 0.6rem;
+}

@@ -9,6 +9,8 @@ import type {
   PollResult,
   SessionMode,
   SessionStatus,
+  UndoOutcome,
+  WriteLogResponse,
 } from "../types/glance";
 import type { UpdateCheck } from "../types/updater";
 import type {
@@ -57,6 +59,8 @@ import type {
   BitLockerKeyResponse,
   BitLockerKeysResponse,
   DeviceDetailResponse,
+  DirectoryGroup,
+  DirectoryGroupMembership,
   InventoryResponse,
   LapsResponse,
   MobileAppSummary,
@@ -119,6 +123,67 @@ export async function listIntuneAuditEvents(): Promise<IntuneAuditLogResponse> {
   return invoke<IntuneAuditLogResponse>("list_intune_audit_events_cmd");
 }
 
+export async function listWriteLog(limit?: number): Promise<WriteLogResponse> {
+  return invoke<WriteLogResponse>("list_write_log_cmd", { limit });
+}
+
+export async function undoWrite(entryId: string, force = false): Promise<UndoOutcome> {
+  return invoke<UndoOutcome>("undo_write_cmd", { entryId, force });
+}
+
+/** App preferences the Rust side acts on, kept in preferences.json. */
+export type Preferences = {
+  /** Read objects before and after each write so it can be undone. */
+  undoStateTracking: boolean;
+};
+
+export async function getPreferences(): Promise<Preferences> {
+  return invoke<Preferences>("get_preferences_cmd");
+}
+
+export async function setPreferences(preferences: Preferences): Promise<Preferences> {
+  return invoke<Preferences>("set_preferences_cmd", { preferences });
+}
+
+export type HealthStatus = "ok" | "warning" | "error" | "notConfigured" | "unknown";
+
+/** One certificate, token, or connector Intune depends on. */
+export type HealthItem = {
+  key: string;
+  area: string;
+  name: string | null;
+  status: HealthStatus;
+  detail: string;
+  expires: string | null;
+  lastSync: string | null;
+};
+
+export type TenantHealth = { items: HealthItem[]; fetchedAt: string };
+
+export async function fetchTenantHealth(): Promise<TenantHealth> {
+  return invoke<TenantHealth>("fetch_tenant_health_cmd");
+}
+
+export type RingChannel = "quality" | "feature";
+export type RingAction = "pause" | "resume" | "extend" | "uninstall";
+
+export type RingActionResult = {
+  id: string;
+  ok: boolean;
+  /** Why the ring was left alone, when the action would have done nothing. */
+  skipped: string | null;
+  error: string | null;
+};
+
+/** Pause, resume, extend, or uninstall quality or feature updates on rings. */
+export async function applyWindowsUpdateRingAction(
+  ids: string[],
+  channel: RingChannel,
+  action: RingAction,
+): Promise<RingActionResult[]> {
+  return invoke<RingActionResult[]>("apply_windows_update_ring_action_cmd", { ids, channel, action });
+}
+
 export async function refreshGlance(): Promise<GlanceResponse> {
   return invoke<GlanceResponse>("refresh_glance");
 }
@@ -129,6 +194,254 @@ export async function fetchManagedDevices(): Promise<DevicesResponse> {
 
 export async function fetchManagedDeviceDetail(deviceId: string): Promise<DeviceDetailResponse> {
   return invoke<DeviceDetailResponse>("fetch_managed_device_detail_cmd", { deviceId });
+}
+
+export type MdmUserScope = {
+  /** `all`, `some`, or `none`. */
+  appliesTo: string;
+  groups: { id: string; displayName: string }[];
+  policyId: string;
+  termsOfUseUrl?: string | null;
+  discoveryUrl?: string | null;
+  complianceUrl?: string | null;
+  enrollmentDuringRegistrationDisabled: boolean;
+};
+
+export type MdmUserScopePatch = {
+  appliesTo?: string;
+  groupIds?: string[];
+  termsOfUseUrl?: string;
+  discoveryUrl?: string;
+  complianceUrl?: string;
+  enrollmentDuringRegistrationDisabled?: boolean;
+};
+
+export async function fetchMdmUserScope(): Promise<{
+  scope: MdmUserScope | null;
+  error: string | null;
+}> {
+  return invoke("fetch_mdm_user_scope_cmd");
+}
+
+export async function updateMdmUserScope(patch: MdmUserScopePatch): Promise<ActionResponse> {
+  return invoke("update_mdm_user_scope_cmd", { patch });
+}
+
+export type WindowsUpdateRing = {
+  id: string;
+  displayName: string;
+  description?: string | null;
+  createdDateTime?: string | null;
+  lastModifiedDateTime?: string | null;
+  isAssigned: boolean;
+  microsoftUpdateServiceAllowed?: boolean | null;
+  driversExcluded?: boolean | null;
+  allowWindows11Upgrade?: boolean | null;
+  deliveryOptimizationMode?: string | null;
+  automaticUpdateMode?: string | null;
+  businessReadyUpdatesOnly?: string | null;
+  scheduledInstallDay?: string | null;
+  scheduledInstallTime?: string | null;
+  updateWeeks?: string | null;
+  activeHoursStart?: string | null;
+  activeHoursEnd?: string | null;
+  qualityUpdatesDeferralPeriodInDays?: number | null;
+  featureUpdatesDeferralPeriodInDays?: number | null;
+  featureUpdatesRollbackWindowInDays?: number | null;
+  qualityUpdatesPaused?: boolean | null;
+  qualityUpdatesPauseExpiryDateTime?: string | null;
+  featureUpdatesPaused?: boolean | null;
+  featureUpdatesPauseExpiryDateTime?: string | null;
+  qualityUpdatesWillBeRolledBack?: boolean | null;
+  featureUpdatesWillBeRolledBack?: boolean | null;
+  deadlineForQualityUpdatesInDays?: number | null;
+  deadlineForFeatureUpdatesInDays?: number | null;
+  deadlineGracePeriodInDays?: number | null;
+  postponeRebootUntilAfterDeadline?: boolean | null;
+  skipChecksBeforeRestart?: boolean | null;
+  autoRestartNotificationDismissal?: string | null;
+  userPauseAccess?: string | null;
+  userWindowsUpdateScanAccess?: string | null;
+  updateNotificationLevel?: string | null;
+};
+
+export async function fetchWindowsUpdateRing(
+  id: string,
+): Promise<{ ring: WindowsUpdateRing | null; error: string | null }> {
+  return invoke("fetch_windows_update_ring_cmd", { id });
+}
+
+export async function updateWindowsUpdateRing(ring: WindowsUpdateRing): Promise<ActionResponse> {
+  return invoke("update_windows_update_ring_cmd", { ring });
+}
+
+export async function createWindowsUpdateRing(
+  ring: WindowsUpdateRing,
+): Promise<{ ring: WindowsUpdateRing | null; error: string | null }> {
+  return invoke("create_windows_update_ring_cmd", { ring });
+}
+
+export type FeatureUpdateProfile = {
+  id: string;
+  displayName: string;
+  description?: string | null;
+  featureUpdateVersion?: string | null;
+  createdDateTime?: string | null;
+  lastModifiedDateTime?: string | null;
+  endOfSupportDate?: string | null;
+  isAssigned: boolean;
+  installFeatureUpdatesOptional?: boolean | null;
+  installLatestWindows10OnWindows11IneligibleDevice?: boolean | null;
+  offerStartDateTimeInUtc?: string | null;
+  offerEndDateTimeInUtc?: string | null;
+  offerIntervalInDays?: number | null;
+  /** Kept from the loaded deployment and sent back on save; the update service rejects a PATCH without them. */
+  roleScopeTagIds?: string[];
+};
+
+/** Licensed for gradual rollout and optional updates: an active subscription carries the WUfB deployment service plan. */
+export type FeatureUpdateEligibility = {
+  eligible: boolean;
+  /** skuPartNumber of each subscription that includes it. */
+  skus: string[];
+};
+
+export async function fetchFeatureUpdateEligibility(): Promise<{
+  eligibility: FeatureUpdateEligibility | null;
+  error: string | null;
+}> {
+  return invoke("fetch_feature_update_eligibility_cmd");
+}
+
+/** A Windows version from the Intune update catalog. `version` is what a deployment sends. */
+export type FeatureUpdateCatalogItem = {
+  id: string;
+  displayName: string;
+  version: string;
+  releaseDateTime?: string | null;
+  endOfSupportDate?: string | null;
+};
+
+export async function fetchFeatureUpdateCatalog(): Promise<{
+  items: FeatureUpdateCatalogItem[];
+  error: string | null;
+}> {
+  return invoke("fetch_feature_update_catalog_cmd");
+}
+
+export async function fetchFeatureUpdateProfile(
+  id: string,
+): Promise<{ profile: FeatureUpdateProfile | null; error: string | null }> {
+  return invoke("fetch_feature_update_profile_cmd", { id });
+}
+
+export async function updateFeatureUpdateProfile(
+  profile: FeatureUpdateProfile,
+): Promise<ActionResponse> {
+  return invoke("update_feature_update_profile_cmd", { profile });
+}
+
+export async function createFeatureUpdateProfile(
+  profile: FeatureUpdateProfile,
+): Promise<{ profile: FeatureUpdateProfile | null; error: string | null }> {
+  return invoke("create_feature_update_profile_cmd", { profile });
+}
+
+export async function fetchUserGroupMemberships(userId: string): Promise<{
+  groups: DirectoryGroupMembership[];
+  error: string | null;
+}> {
+  return invoke("fetch_user_group_memberships_cmd", { userId });
+}
+
+export type AssignmentSnapshot = {
+  objects: { id: string; kind: string; drafts: AssignmentDraft[] }[];
+  warnings: string[];
+};
+
+export async function fetchAssignmentSnapshot(): Promise<{
+  snapshot: AssignmentSnapshot | null;
+  error: string | null;
+}> {
+  return invoke("fetch_assignment_snapshot_cmd");
+}
+
+export type SettingUsagePolicy = {
+  id: string;
+  name: string;
+  platforms?: string;
+  templateFamily?: string;
+  assignments: AssignmentDraft[];
+  /** `false` when assignments could not be read; do not show "unassigned". */
+  assignmentsLoaded: boolean;
+};
+
+export type SettingUsage = {
+  definitionId: string;
+  /** Raw values per policy: choice option ids or simple values, sorted. */
+  usages: { policyId: string; values: string[] }[];
+  conflict: boolean;
+};
+
+export type SettingUsageIndex = {
+  policies: SettingUsagePolicy[];
+  settings: SettingUsage[];
+  warnings: string[];
+  truncated: boolean;
+};
+
+export async function fetchSettingUsageIndex(): Promise<{
+  index: SettingUsageIndex | null;
+  error: string | null;
+}> {
+  return invoke("fetch_setting_usage_index_cmd");
+}
+
+export type DirectoryGroupMember = {
+  id: string;
+  displayName: string;
+  kind: string;
+  userPrincipalName?: string | null;
+  accountEnabled?: boolean | null;
+  operatingSystem?: string | null;
+  deviceId?: string | null;
+};
+
+export async function listDirectoryGroupMembers(groupId: string): Promise<{
+  members: DirectoryGroupMember[];
+  error: string | null;
+}> {
+  return invoke("list_directory_group_members_cmd", { groupId });
+}
+
+export async function listDirectoryGroups(): Promise<{
+  groups: DirectoryGroup[];
+  error: string | null;
+}> {
+  return invoke("list_directory_groups_cmd");
+}
+
+export async function updateDirectoryGroup(input: {
+  id: string;
+  displayName?: string | null;
+  description?: string | null;
+  membershipRule?: string | null;
+}): Promise<ActionResponse> {
+  return invoke("update_directory_group_cmd", { input });
+}
+
+export async function addDirectoryGroupMember(
+  groupId: string,
+  memberId: string,
+): Promise<ActionResponse> {
+  return invoke("add_directory_group_member_cmd", { groupId, memberId });
+}
+
+export async function removeDirectoryGroupMember(
+  groupId: string,
+  memberId: string,
+): Promise<ActionResponse> {
+  return invoke("remove_directory_group_member_cmd", { groupId, memberId });
 }
 
 export async function fetchPolicySettingIssues(input: {
@@ -256,6 +569,38 @@ export async function fetchEndpointSecurityIntents(): Promise<InventoryResponse<
 
 export async function fetchAppProtectionPolicies(): Promise<InventoryResponse<AppProtectionPolicy>> {
   return invoke("fetch_app_protection_policies_cmd");
+}
+
+/** Read-only Entra / Purview review kinds (mirrors `review::collection_path`). No Graph assignments. */
+export const REVIEW_KINDS = ["conditionalAccessPolicy", "namedLocation", "sensitivityLabel", "retentionLabel"] as const;
+export type ReviewKind = (typeof REVIEW_KINDS)[number];
+
+export async function fetchReviewObjects(kind: ReviewKind): Promise<InventoryResponse<Record<string, unknown>>> {
+  return invoke("fetch_review_objects_cmd", { kind });
+}
+
+export type ReviewReferences = Partial<Record<"users" | "groups" | "roles" | "apps" | "locations", string[]>>;
+
+/** id → display name; ids Graph can't read are missing from the map. */
+export async function resolveReviewNames(refs: ReviewReferences): Promise<Record<string, string>> {
+  return invoke("resolve_review_names_cmd", { refs });
+}
+
+export type CoverageGap = { count: number; sample: string[] };
+/** Effective users per Conditional Access policy (enabled accounts, after exclusions). */
+export type ConditionalAccessCoverage = {
+  userCount: number;
+  guestCount: number;
+  policies: Array<{ id: string; covered: number; excluded: number }>;
+  uncovered: CoverageGap;
+  withoutMfa: CoverageGap;
+  truncated: boolean;
+  warnings: string[];
+  fetchedAt: string;
+};
+
+export async function fetchConditionalAccessCoverage(): Promise<ConditionalAccessCoverage> {
+  return invoke("fetch_conditional_access_coverage_cmd");
 }
 
 export async function fetchPolicySets(): Promise<InventoryResponse<PolicySetSummary>> {
@@ -610,6 +955,51 @@ export async function planPackKitApply(input: {
     packRoot: input.packRoot,
     kitRelPath: input.kitRelPath,
     mode: input.mode,
+  });
+}
+
+export type PackComparePlan = {
+  items: import("../types/clientContainer").RestorePlanItem[];
+  warnings: string[];
+};
+
+/** Items in a local pack (kit or flat), without comparing against the tenant. */
+export async function listPackItems(packRoot: string): Promise<import("../types/clientContainer").RestoreCandidate[]> {
+  return invoke("list_pack_items_cmd", { packRoot });
+}
+
+/** Compare a local pack (or one kit) with the signed-in tenant. */
+export async function planPackCompare(input: {
+  packRoot: string;
+  kitRelPath?: string | null;
+}): Promise<PackComparePlan> {
+  return invoke("plan_pack_compare_cmd", {
+    packRoot: input.packRoot,
+    kitRelPath: input.kitRelPath ?? null,
+  });
+}
+
+export type PackApplyChangesResult = {
+  items: import("../types/clientContainer").RestorePlanItem[];
+  added: number;
+  updated: number;
+  skipped: number;
+  failed: number;
+  warnings: string[];
+};
+
+/** Create missing items (`addKeys`) and update differing ones in place (`updateKeys`). */
+export async function applyPackChanges(input: {
+  packRoot: string;
+  kitRelPath?: string | null;
+  addKeys: string[];
+  updateKeys: string[];
+}): Promise<PackApplyChangesResult> {
+  return invoke("apply_pack_changes_cmd", {
+    packRoot: input.packRoot,
+    kitRelPath: input.kitRelPath ?? null,
+    addKeys: input.addKeys,
+    updateKeys: input.updateKeys,
   });
 }
 

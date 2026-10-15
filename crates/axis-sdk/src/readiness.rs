@@ -2,10 +2,12 @@
 
 use std::collections::{HashMap, HashSet};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use uuid::Uuid;
 
 use crate::assignments::resolve_directory_groups;
+use crate::device_recovery::annotate_scope;
 use crate::graph::{GraphClient, GraphCollection, GraphError};
 
 const INTUNE_MDM_ID: &str = "0000000a-0000-0000-c000-000000000000";
@@ -90,9 +92,14 @@ fn readiness_row(
 
 #[derive(Clone)]
 struct MdmPolicy {
+    id: String,
     applies_to: String,
     groups: Vec<(String, String)>,
     prompt_during_registration: bool,
+    terms_of_use_url: Option<String>,
+    discovery_url: Option<String>,
+    compliance_url: Option<String>,
+    enrollment_during_registration_disabled: bool,
 }
 
 enum AssignmentHit {
@@ -1043,10 +1050,190 @@ async fn load_mdm_policy(access_token: &str) -> Result<MdmPolicy, GraphError> {
     let prompt_during_registration =
         policy.get("isMdmEnrollmentDuringRegistrationDisabled").and_then(Value::as_bool) != Some(true);
     Ok(MdmPolicy {
+        id: text(&policy, "id").unwrap_or_default(),
         applies_to,
         groups,
         prompt_during_registration,
+        terms_of_use_url: text(&policy, "termsOfUseUrl"),
+        discovery_url: text(&policy, "discoveryUrl"),
+        compliance_url: text(&policy, "complianceUrl"),
+        enrollment_during_registration_disabled: policy
+            .get("isMdmEnrollmentDuringRegistrationDisabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
     })
+}
+
+/// Tenant-wide MDM automatic enrollment settings (`mobileDeviceManagementPolicies`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MdmUserScope {
+    /// `all`, `some`, or `none`.
+    pub applies_to: String,
+    pub groups: Vec<MdmScopeGroup>,
+    /// Graph id of the policy, needed to write back.
+    pub policy_id: String,
+    pub terms_of_use_url: Option<String>,
+    pub discovery_url: Option<String>,
+    pub compliance_url: Option<String>,
+    /// `true` when work/school account enrolment is blocked on Windows.
+    pub enrollment_during_registration_disabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MdmScopeGroup {
+    pub id: String,
+    pub display_name: String,
+}
+
+fn scope_key(applies_to: &str) -> &'static str {
+    match applies_to.trim().to_ascii_lowercase().as_str() {
+        "all" => "all",
+        "some" | "selected" => "some",
+        _ => "none",
+    }
+}
+
+/// Read the tenant's MDM automatic enrollment settings.
+pub async fn fetch_mdm_user_scope(access_token: &str) -> Result<MdmUserScope, GraphError> {
+    let policy = load_mdm_policy(access_token).await?;
+    Ok(MdmUserScope {
+        applies_to: scope_key(&policy.applies_to).to_string(),
+        groups: policy
+            .groups
+            .into_iter()
+            .map(|(id, display_name)| MdmScopeGroup { id, display_name })
+            .collect(),
+        policy_id: policy.id,
+        terms_of_use_url: policy.terms_of_use_url,
+        discovery_url: policy.discovery_url,
+        compliance_url: policy.compliance_url,
+        enrollment_during_registration_disabled: policy.enrollment_during_registration_disabled,
+    })
+}
+
+/// Fields the automatic enrollment page can change. `None` leaves a value alone.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MdmUserScopePatch {
+    pub applies_to: Option<String>,
+    pub group_ids: Option<Vec<String>>,
+    pub terms_of_use_url: Option<String>,
+    pub discovery_url: Option<String>,
+    pub compliance_url: Option<String>,
+    pub enrollment_during_registration_disabled: Option<bool>,
+}
+
+/// Apply a partial update to the tenant's MDM automatic enrollment settings.
+pub async fn update_mdm_user_scope(
+    access_token: &str,
+    patch: MdmUserScopePatch,
+) -> Result<(), GraphError> {
+    let policy = load_mdm_policy(access_token).await?;
+    let client = GraphClient::new();
+    let path = format!(
+        "/policies/mobileDeviceManagementPolicies/{}",
+        urlencoding::encode(&policy.id)
+    );
+
+    let mut body = serde_json::Map::new();
+    if let Some(applies_to) = patch.applies_to.as_deref() {
+        let scope = scope_key(applies_to);
+        if scope == "some" {
+            // Graph only accepts `all` or `none` on this property. Entering
+            // "Some" is expressed purely by adding included groups — the Intune
+            // portal never PATCHes `appliesTo` for that transition.
+            if patch
+                .group_ids
+                .as_ref()
+                .map(|ids| ids.is_empty())
+                .unwrap_or(policy.groups.is_empty())
+            {
+                return Err(input_error(
+                    "Select at least one group, or set the MDM user scope to All or None.",
+                ));
+            }
+        } else {
+            body.insert("appliesTo".into(), json!(scope));
+        }
+    }
+    if let Some(value) = patch.terms_of_use_url.as_deref() {
+        body.insert("termsOfUseUrl".into(), json!(value.trim()));
+    }
+    if let Some(value) = patch.discovery_url.as_deref() {
+        body.insert("discoveryUrl".into(), json!(value.trim()));
+    }
+    if let Some(value) = patch.compliance_url.as_deref() {
+        body.insert("complianceUrl".into(), json!(value.trim()));
+    }
+    if let Some(value) = patch.enrollment_during_registration_disabled {
+        body.insert(
+            "isMdmEnrollmentDuringRegistrationDisabled".into(),
+            json!(value),
+        );
+    }
+
+    if !body.is_empty() {
+        // The portal writes this object through `$batch`; a direct PATCH is
+        // rejected with "This API is not supported for AAD accounts".
+        client
+            .post_batch(
+                access_token,
+                &[json!({
+                    "id": Uuid::new_v4().simple().to_string(),
+                    "method": "PATCH",
+                    "url": path,
+                    "headers": { "Content-Type": "application/json" },
+                    "body": Value::Object(body),
+                })],
+            )
+            .await
+            .map_err(|error| annotate_scope(error, "Policy.ReadWrite.MobilityManagement"))?;
+    }
+
+    // Reconcile included groups only when the caller supplied a set.
+    let Some(group_ids) = patch.group_ids else {
+        return Ok(());
+    };
+    if scope_key(patch.applies_to.as_deref().unwrap_or(&policy.applies_to)) != "some" {
+        return Ok(());
+    }
+    let existing = policy.groups;
+    let desired: HashSet<&str> = group_ids.iter().map(String::as_str).collect();
+    let mut batch: Vec<Value> = Vec::new();
+    for (id, _) in &existing {
+        if desired.contains(id.as_str()) {
+            continue;
+        }
+        batch.push(json!({
+            "id": Uuid::new_v4().simple().to_string(),
+            "method": "DELETE",
+            "url": format!("{path}/includedGroups/{}/$ref", urlencoding::encode(id)),
+        }));
+    }
+    let current: HashSet<&str> = existing.iter().map(|(id, _)| id.as_str()).collect();
+    for id in &group_ids {
+        if current.contains(id.as_str()) {
+            continue;
+        }
+        batch.push(json!({
+            "id": Uuid::new_v4().simple().to_string(),
+            "method": "POST",
+            "url": format!("{path}/includedGroups/$ref"),
+            "headers": { "Content-Type": "application/json" },
+            "body": {
+                "@odata.id": format!("https://graph.microsoft.com/odata/groups('{id}')")
+            },
+        }));
+    }
+    if !batch.is_empty() {
+        client
+            .post_batch(access_token, &batch)
+            .await
+            .map_err(|error| annotate_scope(error, "Policy.ReadWrite.MobilityManagement"))?;
+    }
+    Ok(())
 }
 
 async fn load_included_groups(

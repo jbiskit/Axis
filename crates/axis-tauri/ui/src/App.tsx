@@ -1,7 +1,11 @@
 import { AppShell } from "./components/AppShell";
+import { useState } from "react";
 import { ContextSwapDialog, MissingContextDialog } from "./components/ContextSwapDialog";
 import { CreateClientContainerDialog } from "./components/CreateClientContainerDialog";
 import { IntuneWorkspace } from "./components/IntuneWorkspace";
+import { EntraWorkspace } from "./components/modules/EntraWorkspace";
+import { PurviewWorkspace } from "./components/modules/PurviewWorkspace";
+import { moduleForPath } from "./lib/nav";
 import { LoginScreen } from "./components/LoginScreen";
 import { PopoutView } from "./components/PopoutView";
 import { UnsavedLeaveGuard } from "./components/workbench/UnsavedLeaveGuard";
@@ -14,6 +18,7 @@ import { useUpdater } from "./hooks/useUpdater";
 import { requestLeave } from "./lib/inspectorDrafts";
 import { isPopoutRoute } from "./lib/popout";
 import { clearShellBannerDismissals, ReadOnlyProvider } from "./lib/readOnly";
+import type { SearchSource } from "./lib/globalSearch";
 
 export default function App() {
   const session = useSession();
@@ -26,6 +31,7 @@ export default function App() {
     !isPopout &&
     (route.pathname.startsWith("/intune/devices") || route.pathname === "/intune");
   const devices = useDevices(devicesEnabled, session.signedIn);
+  const [searchSources, setSearchSources] = useState<SearchSource[]>([]);
 
   const updateDialog = (
     <UpdateDialog
@@ -136,7 +142,13 @@ export default function App() {
             void session.logout();
           });
         }}
+        searchSources={searchSources}
       >
+        {moduleForPath(route.pathname) === "entra" ? (
+          <EntraWorkspace route={route} signedIn={session.signedIn} />
+        ) : moduleForPath(route.pathname) === "purview" ? (
+          <PurviewWorkspace route={route} signedIn={session.signedIn} />
+        ) : (
         <IntuneWorkspace
           route={route}
           glance={session.glance}
@@ -153,7 +165,9 @@ export default function App() {
           onRefreshDevices={() => void devices.reload()}
           clientContainer={client.status}
           onRefreshClientContainer={() => void client.refresh()}
+          onSearchSourcesChange={setSearchSources}
         />
+        )}
       </AppShell>
       <UnsavedLeaveGuard />
       {session.contextSwapActive && session.contextSwapTargetMode ? (

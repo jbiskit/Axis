@@ -29,6 +29,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use urlencoding::encode;
 
+mod services;
+
 const SETTINGS_PAGE_MAX: usize = 1000;
 const ASSIGNMENTS_MAX: usize = 200;
 
@@ -70,6 +72,15 @@ pub struct EnvironmentReportSelection {
     pub ios: bool,
     #[serde(default = "default_true")]
     pub android: bool,
+    /// Entra chapter: Conditional Access policies and named locations.
+    #[serde(default = "default_true")]
+    pub entra: bool,
+    /// Purview chapter: sensitivity and retention labels.
+    #[serde(default = "default_true")]
+    pub purview: bool,
+    /// Entra user coverage: expands every group and role a policy references (slow in large tenants).
+    #[serde(default = "default_true")]
+    pub entra_coverage: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy_ids: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -96,6 +107,9 @@ impl Default for EnvironmentReportSelection {
             macos: true,
             ios: true,
             android: true,
+            entra: true,
+            purview: true,
+            entra_coverage: true,
             policy_ids: None,
             app_ids: None,
             script_ids: None,
@@ -803,6 +817,9 @@ pub async fn generate_environment_report(
     }
     let app_card_count = app_inventory.cards.len() as u32;
     cards.extend(app_inventory.cards.drain(..));
+    let service_cards = services::service_cards(access_token, selection, &mut warnings, &on_progress).await;
+    let service_card_count = service_cards.len() as u32;
+    cards.extend(service_cards);
 
     let intune_groups = if selection.groups && !groups.is_empty() {
         on_progress(progress("groups", 0, 0, "Counting group members…"));
@@ -827,7 +844,7 @@ pub async fn generate_environment_report(
         .unwrap_or("This tenant");
     let prepared_for = resolve_prepared_label(prepared_for, org_default);
     let prepared_by = resolve_prepared_label(prepared_by, "Unknown");
-    let object_count = total + app_card_count;
+    let object_count = total + app_card_count + service_card_count;
     let layout = build_report_layout(cards);
     let html = render_html(
         axis_version,
@@ -1060,15 +1077,39 @@ const SECTION_APPS: &str = "Apps";
 const SECTION_ENROLLMENT: &str = "Enrollment";
 const SECTION_SCRIPTS: &str = "Scripts";
 
+const SECTION_SERVICE_OVERVIEW: &str = "Overview";
+const SECTION_CONDITIONAL_ACCESS: &str = "Conditional Access";
+const SECTION_NAMED_LOCATIONS: &str = "Named locations";
+const SECTION_SENSITIVITY_LABELS: &str = "Sensitivity labels";
+const SECTION_RETENTION_LABELS: &str = "Retention labels";
+
 const SECTION_ORDER: &[&str] = &[
     SECTION_POLICIES,
     SECTION_UPDATES,
     SECTION_APPS,
     SECTION_ENROLLMENT,
     SECTION_SCRIPTS,
+    SECTION_SERVICE_OVERVIEW,
+    SECTION_CONDITIONAL_ACCESS,
+    SECTION_NAMED_LOCATIONS,
+    SECTION_SENSITIVITY_LABELS,
+    SECTION_RETENTION_LABELS,
 ];
 
 const CROSS_PLATFORM_SCOPE: &str = "Cross-platform";
+
+/// Tenant services outside Intune. Each gets its own chapter after the platform chapters, in this order.
+const ENTRA_SCOPE: &str = "Entra";
+const PURVIEW_SCOPE: &str = "Purview";
+const SERVICE_SCOPES: &[&str] = &[ENTRA_SCOPE, PURVIEW_SCOPE];
+
+fn service_narrative(name: &str) -> Option<&'static str> {
+    match name {
+        ENTRA_SCOPE => Some("Conditional Access policies and the named locations they reference. Users, groups, roles, apps and locations are shown by name where Graph could resolve them."),
+        PURVIEW_SCOPE => Some("Sensitivity and retention labels. Sensitivity labels are the ones published to the account that generated this report; label policies, DLP and retention policies are not available through Microsoft Graph."),
+        _ => None,
+    }
+}
 
 fn platform_scope_from_catalog(platforms: Option<&str>) -> (String, String) {
     let raw = platforms.unwrap_or("").trim();
@@ -1119,6 +1160,8 @@ struct PlatformSections {
 struct ReportLayout {
     cross_platform: PlatformSections,
     platforms: Vec<PlatformSections>,
+    /// Entra / Purview chapters (`SERVICE_SCOPES` order); not counted as platforms.
+    services: Vec<PlatformSections>,
 }
 
 fn push_card(bucket: &mut PlatformSections, card: ReportCard) {
@@ -1131,9 +1174,18 @@ fn build_report_layout(mut cards: Vec<ReportCard>) -> ReportLayout {
         sections: BTreeMap::new(),
     };
     let mut platforms: BTreeMap<String, PlatformSections> = BTreeMap::new();
+    let mut services: Vec<PlatformSections> = SERVICE_SCOPES
+        .iter()
+        .map(|name| PlatformSections {
+            name: name.to_string(),
+            sections: BTreeMap::new(),
+        })
+        .collect();
     for card in cards.drain(..) {
         if card.scope == CROSS_PLATFORM_SCOPE {
             push_card(&mut cross_platform, card);
+        } else if let Some(service) = services.iter_mut().find(|service| service.name == card.scope) {
+            push_card(service, card);
         } else {
             let entry = platforms
                 .entry(card.scope.clone())
@@ -1148,9 +1200,11 @@ fn build_report_layout(mut cards: Vec<ReportCard>) -> ReportLayout {
     platform_list.sort_by(|left, right| {
         platform_sort_key(&left.name).cmp(&platform_sort_key(&right.name))
     });
+    services.retain(|service| !service.sections.is_empty());
     ReportLayout {
         cross_platform,
         platforms: platform_list,
+        services,
     }
 }
 
@@ -3454,7 +3508,7 @@ fn render_html(
             &apps.relationships,
         ));
     }
-    for platform in &layout.platforms {
+    for platform in layout.platforms.iter().chain(&layout.services) {
         body.push_str(&render_platform_chapter(
             platform,
             glance,
@@ -3615,7 +3669,7 @@ fn render_table_of_contents(
     if cross_count > 0 {
         html.push_str(&toc_platform_item(&layout.cross_platform));
     }
-    for platform in &layout.platforms {
+    for platform in layout.platforms.iter().chain(&layout.services) {
         html.push_str(&toc_platform_item(platform));
     }
     if has_notes {
@@ -4186,7 +4240,9 @@ fn render_platform_chapter(
     let id = slug(&platform.name);
     let count = platform_object_count(&platform.sections);
     let mut inner = String::new();
-    if is_cross {
+    if let Some(narrative) = service_narrative(&platform.name) {
+        inner.push_str(&format!("<p class=\"narrative\">{}</p>", escape_html(narrative)));
+    } else if is_cross {
         inner.push_str(
             "<p class=\"narrative\">Settings that apply across platforms or are not tied to a single OS — enrollment restrictions, multi-platform policies, and similar tenant-wide configuration.</p>",
         );
@@ -4554,12 +4610,15 @@ fn render_card(
         true,
         &settings_body,
     ));
-    html.push_str(&render_details(
-        "Assignments",
-        card.drafts.len(),
-        false,
-        &render_assignments(card),
-    ));
+    // Entra / Purview objects carry their targeting in their settings, not Intune assignments.
+    if !SERVICE_SCOPES.contains(&card.scope.as_str()) {
+        html.push_str(&render_details(
+            "Assignments",
+            card.drafts.len(),
+            false,
+            &render_assignments(card),
+        ));
+    }
     html.push_str("</article>");
     html
 }
@@ -4770,7 +4829,7 @@ fn render_markdown(
         ));
         out.push('\n');
     }
-    for platform in &layout.platforms {
+    for platform in layout.platforms.iter().chain(&layout.services) {
         out.push_str(&md_platform_chapter(
             platform,
             glance,
@@ -4883,7 +4942,7 @@ fn md_table_of_contents(
     if cross_count > 0 {
         out.push_str(&md_toc_platform_item(&layout.cross_platform));
     }
-    for platform in &layout.platforms {
+    for platform in layout.platforms.iter().chain(&layout.services) {
         out.push_str(&md_toc_platform_item(platform));
     }
     if has_notes {
@@ -5049,7 +5108,9 @@ fn md_platform_chapter(
         "## {} ({count})\n\n<a id=\"{id}\"></a>\n\n",
         escape_markdown(&platform.name)
     );
-    if is_cross {
+    if let Some(narrative) = service_narrative(&platform.name) {
+        out.push_str(&format!("{}\n\n", escape_markdown(narrative)));
+    } else if is_cross {
         out.push_str(
             "Settings that apply across platforms or are not tied to a single OS — enrollment restrictions, multi-platform policies, and similar tenant-wide configuration.\n\n",
         );
@@ -5282,11 +5343,13 @@ fn md_card(
         }
     }
 
-    out.push_str(&format!(
-        "##### Assignments ({})\n\n",
-        card.drafts.len()
-    ));
-    out.push_str(&md_assignments(card));
+    if !SERVICE_SCOPES.contains(&card.scope.as_str()) {
+        out.push_str(&format!(
+            "##### Assignments ({})\n\n",
+            card.drafts.len()
+        ));
+        out.push_str(&md_assignments(card));
+    }
     out
 }
 

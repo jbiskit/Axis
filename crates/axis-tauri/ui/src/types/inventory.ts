@@ -181,7 +181,17 @@ export type WindowsUpdatePolicy = {
   createdDateTime?: string | null;
   lastModifiedDateTime?: string | null;
   odataType?: string | null;
+  /** Pause and uninstall state; rings only. */
+  ringState?: RingUpdateState;
 };
+
+export type RingChannelState = {
+  paused: boolean;
+  pauseExpiry?: string | null;
+  rollingBack: boolean;
+};
+
+export type RingUpdateState = { quality: RingChannelState; feature: RingChannelState };
 
 export type ManagedDeviceHardwareDetails = {
   managedDeviceName?: string | null;
@@ -520,7 +530,7 @@ export type E8BaselineReference = {
   artifactKind?: string;
 };
 
-/** Kit pack root (`axis-pack.json`) or an explicit Flat JSON folder of policy exports. */
+/** Kit pack root (`axis-pack.json`) or a flat pack folder of policy exports. */
 export type TemplateStoreKind = "axisTemplated" | "flatJson";
 
 export type BaselineReferenceSourceInput = {
@@ -601,6 +611,12 @@ export type EnvironmentReportSelection = {
   macos: boolean;
   ios: boolean;
   android: boolean;
+  /** Entra chapter: Conditional Access policies and named locations. */
+  entra: boolean;
+  /** Purview chapter: sensitivity and retention labels. */
+  purview: boolean;
+  /** Entra user coverage per policy and tenant-wide gaps. Expands every referenced group and role, so it is slow in large tenants. */
+  entraCoverage: boolean;
   /** `null`/`undefined` = all policies; array = only those IDs (empty = none). */
   policyIds?: string[] | null;
   /** `null`/`undefined` = all apps; array = only those IDs (empty = none). */

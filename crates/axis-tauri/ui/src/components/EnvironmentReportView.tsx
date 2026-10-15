@@ -45,6 +45,9 @@ const DEFAULT_SELECTION: EnvironmentReportSelection = {
   macos: true,
   ios: true,
   android: true,
+  entra: true,
+  purview: true,
+  entraCoverage: true,
   policyIds: null,
   appIds: null,
   scriptIds: null,
@@ -76,6 +79,14 @@ const PLATFORM_OPTIONS: { key: keyof EnvironmentReportSelection; label: string }
   { key: "macos", label: "macOS" },
   { key: "ios", label: "iOS" },
   { key: "android", label: "Android" },
+];
+
+/** Tenant services beyond Intune; each is its own chapter after the platforms. */
+const SERVICE_OPTIONS: { key: keyof EnvironmentReportSelection; label: string }[] = [
+  { key: "entra", label: "Entra" },
+  // Slow in large tenants: lists every user and expands every referenced group and role.
+  { key: "entraCoverage", label: "Entra user coverage" },
+  { key: "purview", label: "Purview" },
 ];
 
 type PickerRow = {
@@ -477,6 +488,9 @@ export function EnvironmentReportView({
       macos: false,
       ios: false,
       android: false,
+      entra: false,
+      purview: false,
+      entraCoverage: false,
       policyIds: null,
       appIds: null,
       scriptIds: null,
@@ -545,7 +559,9 @@ export function EnvironmentReportView({
     selection.updates ||
     selection.apps ||
     selection.enrollment ||
-    selection.scripts;
+    selection.scripts ||
+    selection.entra ||
+    selection.purview;
   const snapshotLabel =
     report == null
       ? null
@@ -636,6 +652,19 @@ export function EnvironmentReportView({
                 <legend>Platforms</legend>
                 <div className="environment-report-chips">
                   {PLATFORM_OPTIONS.map((option) => (
+                    <SelectionChip
+                      key={option.key}
+                      label={option.label}
+                      checked={Boolean(selection[option.key])}
+                      onChange={(next) => setSelectionKey(option.key, next)}
+                    />
+                  ))}
+                </div>
+              </fieldset>
+              <fieldset className="environment-report-fieldset" disabled={busy}>
+                <legend>Services</legend>
+                <div className="environment-report-chips">
+                  {SERVICE_OPTIONS.map((option) => (
                     <SelectionChip
                       key={option.key}
                       label={option.label}

@@ -1284,9 +1284,9 @@ async fn compare_payload_to_live(
             remediation_script_text,
             ..
         } => {
-            let detail =
-                fetch_graph_object_detail(access_token, &normalize_script_kind(kind), live_id)
-                    .await?;
+            // Object detail keys script kinds as `script:<kind>`; the bare form is only for matching.
+            let detail_kind = format!("script:{}", normalize_script_kind(kind));
+            let detail = fetch_graph_object_detail(access_token, &detail_kind, live_id).await?;
             Ok(script_content_equivalent(
                 script_text.as_deref(),
                 detection_script_text.as_deref(),
@@ -1376,7 +1376,16 @@ fn resolve_script_match(
     let normalized_kind = normalize_script_kind(kind);
     if let Some(id) = source_id.map(str::trim).filter(|v| !v.is_empty()) {
         if let Some(item) = live.scripts_by_id.get(id) {
-            return Some((item.id.clone(), item.display_name.clone()));
+            // Script kinds live in separate Graph collections; an id from another
+            // collection would 404 on read and must never be updated in place.
+            if normalize_script_kind(&item.kind) == normalized_kind {
+                return Some((item.id.clone(), item.display_name.clone()));
+            }
+            warnings.push(format!(
+                "{display_name}: the pack lists this as a {} script, but its sourceId is a {} script in this tenant. Compared by name instead; check the file's header in the pack.",
+                script_kind_label(&normalized_kind),
+                script_kind_label(&normalize_script_kind(&item.kind)),
+            ));
         }
     }
     let matches = live
@@ -1394,6 +1403,16 @@ fn resolve_script_match(
     matches
         .first()
         .map(|item| (item.id.clone(), item.display_name.clone()))
+}
+
+fn script_kind_label(normalized_kind: &str) -> &str {
+    match normalized_kind {
+        "platform-shell" => "macOS shell",
+        "platform-powershell" => "Windows PowerShell",
+        "remediation" => "remediation",
+        "compliance" => "compliance",
+        other => other,
+    }
 }
 
 fn normalize_script_kind(kind: &str) -> String {

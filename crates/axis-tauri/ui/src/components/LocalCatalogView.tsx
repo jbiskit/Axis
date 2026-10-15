@@ -66,6 +66,8 @@ type ListedCatalogApp = CatalogAppSummary & {
   listId: string;
 };
 
+type CatalogScope = CatalogKind | "both";
+
 type CatalogChoice = {
   kind: CatalogKind;
   label: string;
@@ -119,7 +121,9 @@ function groupCatalogApps<T extends CatalogAppSummary>(
   for (const app of apps) {
     const vendor = app.vendor.trim() || "Unknown";
     const name = app.name.trim() || "Application";
-    const appKey = `${vendor.toLowerCase()}\u0000${name.toLowerCase()}`;
+    // Keep each catalog's copy of an app separate when both catalogs are listed together.
+    const kind = (app as { catalogKind?: string }).catalogKind ?? "";
+    const appKey = `${kind}\u0000${vendor.toLowerCase()}\u0000${name.toLowerCase()}`;
     const existing = byApp.get(appKey);
     if (existing) existing.versions.push(app);
     else byApp.set(appKey, { key: appKey, vendor, name, versions: [app] });
@@ -171,7 +175,7 @@ export function LocalCatalogView({
   const [copyTarget, setCopyTarget] = useState<ListedCatalogApp | null>(null);
   const [deleteTargets, setDeleteTargets] = useState<ListedCatalogApp[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [collapsedApps, setCollapsedApps] = useState<Set<string>>(() => new Set());
+  const [scope, setScope] = useState<CatalogScope>(() => (bound && genericRoot ? "both" : bound ? "tenant" : "generic"));
   const [nameQuery, setNameQuery] = useState("");
   const { sort, toggle: toggleSort } = useColumnSort<"name" | "vendor">("vendor");
   const filteredApps = useMemo(() => {
@@ -180,7 +184,10 @@ export function LocalCatalogView({
     return apps.filter((app) => app.name.toLowerCase().includes(query));
   }, [apps, nameQuery]);
   const selectedApp = apps.find((app) => app.listId === selectedId) ?? null;
-  const visibleIds = useMemo(() => filteredApps.map((app) => app.listId), [filteredApps]);
+  const visibleIds = useMemo(
+    () => filteredApps.filter((app) => scope === "both" || app.catalogKind === scope).map((app) => app.listId),
+    [filteredApps, scope],
+  );
   const selection = useCheckedIds(visibleIds);
   const selected = apps.filter((app) => selection.checkedIds.has(app.listId));
 
@@ -220,6 +227,13 @@ export function LocalCatalogView({
     setRepoRoot(savedRepo());
   }, [bound]);
 
+  // Opening or closing a client container can remove the catalog the switch points at.
+  useEffect(() => {
+    const valid =
+      scope === "both" ? Boolean(bound && genericRoot) : scope === "tenant" ? Boolean(bound) : Boolean(genericRoot);
+    if (!valid) setScope(bound && genericRoot ? "both" : bound ? "tenant" : "generic");
+  }, [bound, genericRoot, scope]);
+
   useEffect(() => {
     if (catalogs.length === 0) {
       setCreateChoice(null);
@@ -236,18 +250,12 @@ export function LocalCatalogView({
 
   useEffect(() => {
     if (!selectedId) return;
-    const row = document.querySelector(`[data-catalog-version="${CSS.escape(selectedId)}"]`);
+    const row = document.querySelector(".app-catalog-row.is-open");
     row?.scrollIntoView({ block: "nearest" });
   }, [apps, selectedId]);
 
   function revealCreated(created: CatalogAppSummary, choice: CatalogChoice) {
-    const vendor = (created.vendor.trim() || "Unknown").toLowerCase();
-    const name = (created.name.trim() || "Application").toLowerCase();
-    setCollapsedApps((current) => {
-      const next = new Set(current);
-      next.delete(`${choice.kind}\u0000${vendor}\u0000${name}`);
-      return next;
-    });
+    if (scope !== "both" && scope !== choice.kind) setScope(choice.kind);
     setSelectedId(listedId(choice.kind, created.id));
   }
 
@@ -259,69 +267,48 @@ export function LocalCatalogView({
     setRepoRoot(folder);
   }
 
-  function toggleApp(key: string) {
-    setCollapsedApps((current) => {
-      const next = new Set(current);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  }
-
-  async function openSelected() {
-    const app = selected.length === 1 ? selected[0] : null;
-    if (!app) return;
-    await openExternalUrl(app.localPath);
-  }
+  const scopedApps = filteredApps.filter((app) => scope === "both" || app.catalogKind === scope);
+  const groups = groupCatalogApps(scopedApps, sort);
+  const openGroup = selectedApp
+    ? groupCatalogApps(
+        apps.filter((app) => app.catalogKind === selectedApp.catalogKind && sameFolder(app.sourceRoot, selectedApp.sourceRoot)),
+        sort,
+      )
+        .flatMap((vendor) => vendor.apps)
+        .find((group) => group.versions.some((version) => version.listId === selectedApp.listId)) ?? null
+    : null;
+  const scopeCounts = {
+    tenant: apps.filter((app) => app.catalogKind === "tenant").length,
+    generic: apps.filter((app) => app.catalogKind === "generic").length,
+  };
+  const scopeOptions: Array<{ value: CatalogScope; label: string; count: number; disabled: boolean }> = [
+    { value: "tenant", label: tenantLabel, count: scopeCounts.tenant, disabled: !tenantChoice },
+    { value: "generic", label: "Global", count: scopeCounts.generic, disabled: !genericChoice },
+    { value: "both", label: "Both", count: apps.length, disabled: catalogs.length < 2 },
+  ];
+  const createTarget: CatalogChoice | null =
+    scope === "generic" ? genericChoice : scope === "tenant" ? tenantChoice : tenantChoice ?? genericChoice;
 
   return (
-    <div className="stack">
+    <div className="stack app-catalog">
       <PageHeader
         eyebrow="Library"
-        title="Local catalog"
+        title="Local application catalog"
         description={
           catalogs.length > 0
-            ? catalogs.map((choice) => choice.label).join(" · ")
+            ? catalogs.map((choice) => `${choice.label}: ${choice.root}`).join(" · ")
             : "Choose a global folder, or open a client container."
         }
         onRefresh={() => void reload(tenantChoice, genericChoice)}
         refreshing={loading}
         actions={
-          <>
-            <button type="button" className="axis-btn" onClick={() => void chooseFolder()}>
-              Global Folder
-            </button>
-            <button
-              type="button"
-              className="axis-btn"
-              disabled={selected.length !== 1}
-              onClick={() => void openSelected()}
-            >
-              Open folder
-            </button>
-            <button
-              type="button"
-              className="axis-btn"
-              disabled={selected.length !== 1}
-              onClick={() => setCopyTarget(selected[0] ?? null)}
-            >
-              Copy version
-            </button>
-            <button
-              type="button"
-              className="axis-btn axis-btn-danger"
-              disabled={selected.length === 0}
-              onClick={() => setDeleteTargets(selected)}
-            >
-              Delete
-            </button>
-          </>
+          <button type="button" className="axis-btn" onClick={() => void chooseFolder()}>
+            {genericRoot ? "Change Global Folder…" : "Choose Global Folder…"}
+          </button>
         }
       />
 
-      {error ? (
-        <div className="axis-alert axis-alert-danger">{error}</div>
-      ) : null}
+      {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
 
       {catalogs.length === 0 ? (
         <p className="muted">
@@ -329,97 +316,211 @@ export function LocalCatalogView({
           <code>Applications\Vendor\App\Version</code>.
         </p>
       ) : (
-        <div className="app-house-split">
-        <div className="axis-panel app-house">
-          <div className="app-house-summary">
-            <SelectCheckbox
-              checked={selection.allSelected}
-              indeterminate={selection.checkedIds.size > 0 && !selection.allSelected}
-              disabled={filteredApps.length === 0}
-              label={nameQuery.trim() ? "Select shown applications" : "Select all applications"}
-              onChange={selection.toggleAll}
-            />
-            <input
-              className="axis-input app-house-filter"
-              value={nameQuery}
-              placeholder="Filter by name"
-              aria-label="Filter applications by name"
-              onChange={(event) => setNameQuery(event.target.value)}
-            />
-            <div className="app-house-sort">
-              <CatalogSortButton column="name" label="Name" sort={sort} onSort={toggleSort} />
-              <CatalogSortButton column="vendor" label="Vendor" sort={sort} onSort={toggleSort} />
+        <div className="app-catalog-split">
+          <section className="axis-panel app-catalog-list" aria-label="Applications">
+            <div className="app-catalog-list-head">
+              <div className="app-catalog-scope" role="tablist" aria-label="Catalog">
+                {scopeOptions.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    role="tab"
+                    aria-selected={scope === option.value}
+                    disabled={option.disabled}
+                    className={scope === option.value ? "is-active" : undefined}
+                    onClick={() => setScope(option.value)}
+                  >
+                    <span className="app-catalog-scope-label">{option.label}</span>
+                    <span className="app-catalog-scope-count">{option.count}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="app-catalog-tools">
+                <input
+                  className="axis-input"
+                  value={nameQuery}
+                  placeholder="Filter by name"
+                  aria-label="Filter applications by name"
+                  onChange={(event) => setNameQuery(event.target.value)}
+                />
+                <CatalogSortButton column="name" label="Name" sort={sort} onSort={toggleSort} />
+                <CatalogSortButton column="vendor" label="Vendor" sort={sort} onSort={toggleSort} />
+                <button
+                  type="button"
+                  className="axis-btn axis-btn-primary"
+                  disabled={!createTarget}
+                  title={createTarget ? `New app in ${createTarget.label}` : undefined}
+                  onClick={() => createTarget && setCreateChoice(createTarget)}
+                >
+                  + New app
+                </button>
+              </div>
             </div>
-          </div>
-          {loading ? <p className="muted">Loading catalog…</p> : null}
-          <CatalogLane
-            kind="tenant"
-            title={tenantLabel}
-            path={bound}
-            note={bound ? null : "Open a client container to see its catalog."}
-            apps={filteredApps.filter((app) => app.catalogKind === "tenant")}
-            sourceCount={apps.filter((app) => app.catalogKind === "tenant").length}
-            sort={sort}
-            nameQuery={nameQuery}
-            loading={loading}
-            collapsedApps={collapsedApps}
-            selectedId={selectedId}
-            checkedIds={selection.checkedIds}
-            onToggleApp={toggleApp}
-            onSelect={setSelectedId}
-            onToggle={selection.toggle}
-            onSetMany={selection.setMany}
-            createLabel="New tenant app"
-            onCreate={bound ? () => setCreateChoice({ kind: "tenant", label: tenantLabel, root: bound }) : undefined}
-          />
-          <CatalogLane
-            kind="generic"
-            title="Global Folder"
-            path={genericRoot}
-            note={
-              genericRoot
-                ? null
-                : repoRoot && bound && sameFolder(repoRoot, bound)
-                  ? "The global folder is this tenant catalog. Choose a different folder to keep a separate catalog."
-                  : "Choose a global folder."
-            }
-            apps={filteredApps.filter((app) => app.catalogKind === "generic")}
-            sourceCount={apps.filter((app) => app.catalogKind === "generic").length}
-            sort={sort}
-            nameQuery={nameQuery}
-            loading={loading}
-            collapsedApps={collapsedApps}
-            selectedId={selectedId}
-            checkedIds={selection.checkedIds}
-            onToggleApp={toggleApp}
-            onSelect={setSelectedId}
-            onToggle={selection.toggle}
-            onSetMany={selection.setMany}
-            createLabel="New global app"
-            onCreate={
-              genericRoot
-                ? () => setCreateChoice({ kind: "generic", label: "Global Folder", root: genericRoot })
-                : undefined
-            }
-          />
-        </div>
-        {selectedApp ? (
-          <CatalogAppBuilder
-            app={selectedApp}
-            sourceRoot={selectedApp.sourceRoot}
-            catalogApps={apps.filter((app) => sameFolder(app.sourceRoot, selectedApp.sourceRoot))}
-            onSaved={() => void reload(tenantChoice, genericChoice)}
-          />
-        ) : (
-          <section className="app-house-build app-house-build-empty">
-            <p className="axis-kicker">Win32 package</p>
-            <h2>Select a version</h2>
-            <p className="muted">
-              Each version is an Intune Win32 package. Open one to set the name, install commands,
-              requirements, and detection rules stored in PackageInformation\config.json.
-            </p>
+            <div className="app-catalog-cols">
+              <SelectCheckbox
+                checked={selection.allSelected}
+                indeterminate={selection.checkedIds.size > 0 && !selection.allSelected}
+                disabled={scopedApps.length === 0}
+                label={nameQuery.trim() ? "Select shown applications" : "Select all applications"}
+                onChange={selection.toggleAll}
+              />
+              <span>Application</span>
+              <span>Latest</span>
+            </div>
+            <div className="app-catalog-rows">
+              {loading ? <p className="muted app-catalog-empty">Loading catalog…</p> : null}
+              {!loading && scopedApps.length === 0 ? (
+                <p className="muted app-catalog-empty">
+                  {nameQuery.trim() ? "No applications match that name." : "No applications in this catalog yet."}
+                </p>
+              ) : null}
+              {groups.map((vendor) => (
+                <div key={vendor.vendor || "all"} className="app-catalog-vendor">
+                  {vendor.vendor ? <p className="app-catalog-vendor-name">{vendor.vendor}</p> : null}
+                  {vendor.apps.map((group) => {
+                    const latest = group.versions[0];
+                    const ids = group.versions.map((version) => version.listId);
+                    const all = ids.every((id) => selection.checkedIds.has(id));
+                    const some = ids.some((id) => selection.checkedIds.has(id));
+                    const isOpen = Boolean(selectedApp && ids.includes(selectedApp.listId));
+                    const tone = catalogTone(latest);
+                    return (
+                      <div key={`${latest.catalogKind}:${group.key}`} className={`app-catalog-row${isOpen ? " is-open" : ""}`}>
+                        <SelectCheckbox
+                          checked={all}
+                          indeterminate={some && !all}
+                          label={`Select ${group.name}`}
+                          onChange={() => selection.setMany(ids, !all)}
+                        />
+                        <button type="button" className="app-catalog-row-main" onClick={() => setSelectedId(latest.listId)}>
+                          <span className="app-catalog-icon" aria-hidden="true">
+                            {(group.name.match(/[A-Za-z0-9]/)?.[0] ?? "?").toUpperCase()}
+                          </span>
+                          <span className="app-catalog-row-copy">
+                            <span className="app-catalog-row-name">{group.name}</span>
+                            <span className="app-catalog-row-meta">
+                              {[
+                                scope === "both" ? latest.catalogLabel : null,
+                                sort.key === "name" ? group.vendor : null,
+                                `${group.versions.length} ${group.versions.length === 1 ? "version" : "versions"}`,
+                              ]
+                                .filter(Boolean)
+                                .join(" · ")}
+                            </span>
+                          </span>
+                        </button>
+                        <span className={`app-catalog-latest is-${tone}`} title={versionStatusTitle(latest)}>
+                          <span className="app-catalog-dot" aria-hidden="true" />
+                          {latest.version || "—"}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+            {selected.length > 0 ? (
+              <div className="app-catalog-bulk" role="toolbar" aria-label="Bulk actions">
+                <b>
+                  {selected.length} version{selected.length === 1 ? "" : "s"} selected
+                </b>
+                <button type="button" className="axis-btn axis-btn-ghost" onClick={selection.clear}>
+                  Clear
+                </button>
+                <button type="button" className="axis-btn axis-btn-danger" onClick={() => setDeleteTargets(selected)}>
+                  Delete…
+                </button>
+              </div>
+            ) : null}
           </section>
-        )}
+
+          {selectedApp ? (
+            <section className="app-catalog-detail" aria-label={selectedApp.name}>
+              <header className="app-catalog-detail-head">
+                <span className="app-catalog-icon is-large" aria-hidden="true">
+                  {(selectedApp.name.match(/[A-Za-z0-9]/)?.[0] ?? "?").toUpperCase()}
+                </span>
+                <div className="app-catalog-detail-title">
+                  <div className="app-catalog-detail-tags">
+                    <span className="axis-pill">{selectedApp.catalogLabel}</span>
+                    <span className="axis-pill">Win32</span>
+                  </div>
+                  <h2>{selectedApp.name}</h2>
+                  <p className="app-catalog-path" title={selectedApp.localPath}>
+                    {selectedApp.relativePath}
+                  </p>
+                </div>
+                <div className="app-catalog-detail-actions" role="toolbar" aria-label="Version actions">
+                  <button
+                    type="button"
+                    className="axis-btn axis-btn-icon"
+                    aria-label="Refresh"
+                    title="Refresh"
+                    onClick={() => void reload(tenantChoice, genericChoice)}
+                  >
+                    <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+                      <path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7" />
+                    </svg>
+                  </button>
+                  <button type="button" className="axis-btn" onClick={() => void openExternalUrl(selectedApp.localPath)}>
+                    Open folder
+                  </button>
+                  <button type="button" className="axis-btn" onClick={() => setCopyTarget(selectedApp)}>
+                    New version…
+                  </button>
+                  <button
+                    type="button"
+                    className="axis-btn axis-btn-danger axis-btn-icon"
+                    aria-label={`Delete ${selectedApp.name} ${selectedApp.version}`}
+                    title="Delete this version"
+                    onClick={() => setDeleteTargets([selectedApp])}
+                  >
+                    <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" />
+                    </svg>
+                  </button>
+                </div>
+              </header>
+              {openGroup ? (
+                <div className="app-catalog-versions" role="tablist" aria-label="Versions">
+                  {openGroup.versions.map((version) => {
+                    const tone = catalogTone(version);
+                    return (
+                      <button
+                        key={version.listId}
+                        type="button"
+                        role="tab"
+                        aria-selected={version.listId === selectedApp.listId}
+                        className={`app-catalog-version is-${tone}${version.listId === selectedApp.listId ? " is-active" : ""}`}
+                        title={versionStatusTitle(version)}
+                        onClick={() => setSelectedId(version.listId)}
+                      >
+                        <span className="app-catalog-dot" aria-hidden="true" />
+                        <span className="tabular">{version.version || "no version"}</span>
+                        <span className="app-catalog-version-label">{versionStatusLabel(version)}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+              <CatalogAppBuilder
+                key={selectedApp.listId}
+                app={selectedApp}
+                sourceRoot={selectedApp.sourceRoot}
+                catalogApps={apps.filter((app) => sameFolder(app.sourceRoot, selectedApp.sourceRoot))}
+                onSaved={() => void reload(tenantChoice, genericChoice)}
+              />
+            </section>
+          ) : (
+            <section className="app-house-build app-house-build-empty">
+              <p className="axis-kicker">Win32 package</p>
+              <h2>Select an application</h2>
+              <p className="muted">
+                Each version is an Intune Win32 package. Open one to set the name, install commands,
+                requirements, and detection rules stored in PackageInformation\config.json.
+              </p>
+            </section>
+          )}
         </div>
       )}
 
@@ -502,163 +603,6 @@ export function LocalCatalogView({
   );
 }
 
-function CatalogLane({
-  kind,
-  title,
-  path,
-  note,
-  apps,
-  sourceCount,
-  sort,
-  nameQuery,
-  loading,
-  collapsedApps,
-  selectedId,
-  checkedIds,
-  onToggleApp,
-  onSelect,
-  onToggle,
-  onSetMany,
-  createLabel,
-  onCreate,
-}: {
-  kind: CatalogKind;
-  title: string;
-  path: string | null;
-  note: string | null;
-  apps: ListedCatalogApp[];
-  sourceCount: number;
-  sort: { key: "name" | "vendor"; dir: "asc" | "desc" };
-  nameQuery: string;
-  loading: boolean;
-  collapsedApps: Set<string>;
-  selectedId: string | null;
-  checkedIds: Set<string>;
-  onToggleApp: (key: string) => void;
-  onSelect: (id: string) => void;
-  onToggle: (id: string) => void;
-  onSetMany: (ids: readonly string[], selected: boolean) => void;
-  createLabel?: string;
-  onCreate?: () => void;
-}) {
-  const groups = groupCatalogApps(apps, sort);
-  return (
-    <section className="app-house-catalog">
-      <header>
-        <div className="app-house-catalog-title">
-          <h2>{title}</h2>
-          {path ? <p title={path}>{path}</p> : null}
-        </div>
-        {onCreate && createLabel ? (
-          <button type="button" className="axis-btn axis-btn-primary" onClick={onCreate}>
-            {createLabel}
-          </button>
-        ) : null}
-      </header>
-      {note ? <p className="muted">{note}</p> : null}
-      {path && !loading && sourceCount === 0 ? <p className="muted">No applications in this catalog yet.</p> : null}
-      {path && !loading && sourceCount > 0 && apps.length === 0 && nameQuery.trim() ? (
-        <p className="muted">No applications match that name.</p>
-      ) : null}
-      {groups.map((vendor) => {
-        const vendorIds = vendor.apps.flatMap((app) => app.versions.map((version) => version.listId));
-        const vendorAll = vendorIds.every((id) => checkedIds.has(id));
-        const vendorSome = vendorIds.some((id) => checkedIds.has(id));
-        return (
-          <section key={`${kind}:${vendor.vendor || "all"}`} className="app-house-vendor">
-            {vendor.vendor ? (
-              <header>
-                <SelectCheckbox
-                  checked={vendorAll}
-                  indeterminate={vendorSome && !vendorAll}
-                  label={`Select ${vendor.vendor}`}
-                  onChange={() => onSetMany(vendorIds, !vendorAll)}
-                />
-                <h3>{vendor.vendor}</h3>
-              </header>
-            ) : null}
-            {vendor.apps.map((app) => {
-              const collapseKey = `${kind}\u0000${app.key}`;
-              const versionIds = app.versions.map((version) => version.listId);
-              const appAll = versionIds.every((id) => checkedIds.has(id));
-              const appSome = versionIds.some((id) => checkedIds.has(id));
-              const expanded = !collapsedApps.has(collapseKey);
-              const shared = sharedCatalogTone(app.versions);
-              const worst = worstCatalogTone(app.versions);
-              const cardTone = !expanded || shared ? worst : null;
-              return (
-                <div key={collapseKey} className={cardTone ? `app-house-app is-${cardTone}` : "app-house-app"}>
-                  <div className="app-house-app-head">
-                    <button
-                      type="button"
-                      className="axis-btn-ghost catalog-chevron"
-                      aria-expanded={expanded}
-                      aria-label={`${expanded ? "Collapse" : "Expand"} ${app.name}`}
-                      onClick={() => onToggleApp(collapseKey)}
-                    >
-                      {expanded ? "▾" : "▸"}
-                    </button>
-                    <SelectCheckbox
-                      checked={appAll}
-                      indeterminate={appSome && !appAll}
-                      label={`Select all versions of ${app.name}`}
-                      onChange={() => onSetMany(versionIds, !appAll)}
-                    />
-                    <button
-                      type="button"
-                      className="app-house-name"
-                      title={catalogToneTitle(worst)}
-                      onClick={() => onToggleApp(collapseKey)}
-                    >
-                      {app.name}
-                      <span>
-                        {sort.key === "name" ? `${app.vendor} · ` : ""}
-                        {app.versions.length} {app.versions.length === 1 ? "version" : "versions"}
-                      </span>
-                    </button>
-                  </div>
-                  {expanded ? (
-                    <ul className="app-house-versions">
-                      {app.versions.map((version) => {
-                        const tone = catalogTone(version);
-                        const selected = selectedId === version.listId;
-                        return (
-                          <li
-                            key={version.listId}
-                            data-catalog-version={version.listId}
-                            className={[selected ? "is-selected" : "", cardTone ? "" : `is-${tone}`]
-                              .filter(Boolean)
-                              .join(" ")}
-                          >
-                            <SelectCheckbox
-                              checked={checkedIds.has(version.listId)}
-                              label={`Select ${app.name} ${version.version}`}
-                              onChange={() => onToggle(version.listId)}
-                            />
-                            <button
-                              type="button"
-                              className="app-house-version"
-                              title={versionStatusTitle(version)}
-                              onClick={() => onSelect(version.listId)}
-                            >
-                              <span className="tabular">{version.version || "no version"}</span>
-                              <span className={`app-house-status is-${tone}`}>{versionStatusLabel(version)}</span>
-                            </button>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  ) : null}
-                </div>
-              );
-            })}
-          </section>
-        );
-      })}
-    </section>
-  );
-}
-
 function DeleteCatalogDialog({
   targets,
   onClose,
@@ -700,7 +644,7 @@ function DeleteCatalogDialog({
       >
         <div className="assignment-dialog-head">
           <div>
-            <p className="axis-kicker">Local catalog</p>
+            <p className="axis-kicker">Local application catalog</p>
             <h2>{title}</h2>
           </div>
           <CloseButton onClick={onClose} disabled={busy} />
@@ -861,24 +805,6 @@ function catalogTone(version: CatalogAppSummary): CatalogTone {
   if (configGaps(version).length > 0) return "incomplete";
   if (version.hasIntuneWin) return "ready";
   return "source";
-}
-
-function sharedCatalogTone(versions: CatalogAppSummary[]): CatalogTone | null {
-  if (versions.length === 0) return null;
-  const first = catalogTone(versions[0]);
-  return versions.every((version) => catalogTone(version) === first) ? first : null;
-}
-
-function worstCatalogTone(versions: CatalogAppSummary[]): CatalogTone {
-  if (versions.some((version) => catalogTone(version) === "incomplete")) return "incomplete";
-  if (versions.some((version) => catalogTone(version) === "source")) return "source";
-  return "ready";
-}
-
-function catalogToneTitle(tone: CatalogTone): string {
-  if (tone === "incomplete") return "Missing required information";
-  if (tone === "ready") return "Ready";
-  return "Source only";
 }
 
 function versionStatusLabel(version: CatalogAppSummary): string {

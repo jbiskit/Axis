@@ -430,7 +430,7 @@ export function PacksKitsView({
             ? workspace.writable
               ? "Kits are named selections of paths inside this policy pack. Saving updates kit membership only — files stay where they are."
               : "GitHub kit packs are read-only in Axis. Browse kits and membership here; edit kits on a local clone."
-            : "Open a kit-shaped policy pack (axis-pack.json at the root). Flat JSON packs stay on the Policy Packs list."
+            : "Open a kit-shaped policy pack (axis-pack.json at the root). Flat packs stay on the Policy Packs list."
         }
         actions={
           <div className="axis-btn-row packs-kits-toolbar">

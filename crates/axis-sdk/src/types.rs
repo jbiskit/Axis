@@ -62,6 +62,27 @@ pub struct DeviceSummary {
     pub by_compliance: HashMap<String, u32>,
     pub active: u32,
     pub stale: u32,
+    /// Windows devices by release, from the OS build. Largest first.
+    #[serde(default)]
+    pub windows_releases: Vec<NamedCount>,
+    /// Devices reporting encryption, and how many report it at all.
+    #[serde(default)]
+    pub encrypted: u32,
+    #[serde(default)]
+    pub encryption_reported: u32,
+    /// `managedDeviceOwnerType`: company, personal, unknown.
+    #[serde(default)]
+    pub by_ownership: HashMap<String, u32>,
+    /// Devices enrolled on each of the last 30 days, oldest first.
+    #[serde(default)]
+    pub enrolled_last_30_days: Vec<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NamedCount {
+    pub label: String,
+    pub count: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -228,6 +249,11 @@ impl TenantGlance {
                 by_compliance: HashMap::new(),
                 active: 0,
                 stale: 0,
+                windows_releases: vec![],
+                encrypted: 0,
+                encryption_reported: 0,
+                by_ownership: HashMap::new(),
+                enrolled_last_30_days: vec![],
             },
             policies: PolicyCounts {
                 compliance_policies: 0,
@@ -311,7 +337,9 @@ pub const GLANCE_OBJECT_TYPES: &[IntuneObjectType] = &[
     },
     IntuneObjectType {
         id: "EndpointSecurity",
-        title: "Endpoint Security",
+        // Templates-era endpoint security and security baselines. Newer endpoint
+        // security policies are Settings Catalog objects and count there.
+        title: "Endpoint security (intents)",
         api: "/deviceManagement/intents",
         category: "endpointSecurity",
     },
@@ -319,6 +347,12 @@ pub const GLANCE_OBJECT_TYPES: &[IntuneObjectType] = &[
         id: "FeatureUpdates",
         title: "Feature Updates",
         api: "/deviceManagement/windowsFeatureUpdateProfiles",
+        category: "updates",
+    },
+    IntuneObjectType {
+        id: "DriverUpdates",
+        title: "Driver Updates",
+        api: "/deviceManagement/windowsDriverUpdateProfiles",
         category: "updates",
     },
     IntuneObjectType {
@@ -335,7 +369,9 @@ pub const GLANCE_OBJECT_TYPES: &[IntuneObjectType] = &[
     },
     IntuneObjectType {
         id: "EnrollmentStatusPage",
-        title: "Enrollment Status Page",
+        // Graph lists ESP, restrictions, device limits, and Windows Hello in one
+        // collection and rejects a type filter on it, so this counts them all.
+        title: "Enrollment configurations",
         api: "/deviceManagement/deviceEnrollmentConfigurations",
         category: "enrollment",
     },
@@ -374,6 +410,18 @@ pub const GLANCE_OBJECT_TYPES: &[IntuneObjectType] = &[
         title: "Compliance Scripts",
         api: "/deviceManagement/deviceComplianceScripts",
         category: "compliance",
+    },
+    IntuneObjectType {
+        id: "Apps",
+        title: "Apps",
+        api: "/deviceAppManagement/mobileApps",
+        category: "apps",
+    },
+    IntuneObjectType {
+        id: "PolicySets",
+        title: "Policy sets",
+        api: "/deviceAppManagement/policySets",
+        category: "tenant",
     },
     IntuneObjectType {
         id: "AppProtection",

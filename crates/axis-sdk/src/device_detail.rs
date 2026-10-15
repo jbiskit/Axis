@@ -4,6 +4,7 @@ use serde_json::Value;
 use crate::device_policies::{
     fetch_managed_device_policies, DevicePolicyState, PolicyConflictSummary, PolicyDiagnostics,
 };
+use crate::device_recovery::annotate_scope;
 use crate::graph::{GraphClient, GraphError};
 use crate::types::ManagedDeviceSummary;
 
@@ -514,6 +515,31 @@ async fn fetch_device_and_user_groups(
     }
 
     (device_groups, user_groups, warnings)
+}
+
+/// Resolve a user's directory group memberships. Used by the what-if simulator,
+/// which evaluates a user without loading a managed device.
+pub async fn fetch_user_group_memberships(
+    access_token: &str,
+    user_id: &str,
+) -> Result<Vec<DirectoryGroupMembership>, GraphError> {
+    let id = user_id.trim();
+    if id.is_empty() {
+        return Err(GraphError::Request {
+            status: 400,
+            code: None,
+            message: "A user id or user principal name is required.".into(),
+            permission_related: false,
+        });
+    }
+    fetch_member_of_groups(
+        &GraphClient::new(),
+        access_token,
+        &format!("/users/{}", encode_id(id)),
+        "user",
+    )
+    .await
+    .map_err(|error| annotate_scope(error, "User.Read.All or GroupMember.Read.All"))
 }
 
 pub async fn fetch_managed_device_detail(

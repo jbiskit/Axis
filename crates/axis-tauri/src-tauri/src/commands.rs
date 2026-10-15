@@ -1,6 +1,6 @@
 use crate::AppState;
 use axis_sdk::{
-    add_settings_to_policy, apply_filter_names, apply_group_metadata, apply_kit_apply,
+    add_directory_group_member, add_settings_to_policy, apply_filter_names, apply_group_metadata, apply_kit_apply,
     apply_restore, assign_object_assignments, assignment_capabilities_for, assignment_target_ids,
     attach_catalog_icon, attach_catalog_intunewin, catalog_dependency_chain,
     collect_managed_device_diagnostics, copy_catalog_app_version, create_autopilot_profile,
@@ -12,38 +12,50 @@ use axis_sdk::{
     delete_graph_object, delete_managed_device, dest_dir_from_save_as, diff_pack_roots,
     download_public_icon, drafts_from_graph_assignments, duplicate_graph_object,
     enable_laps_for_tenant, export_selected_graph_objects, export_tenant_pack,
-    fetch_app_protection_policies, fetch_applied_policy_settings, fetch_autopilot_devices,
-    fetch_autopilot_profile_assigned_devices, fetch_autopilot_profiles, fetch_baseline_export_json,
-    fetch_baseline_reference_sources, fetch_catalog_icon, fetch_compliance_policies,
-    fetch_compliance_policy_status_with_options, fetch_compliance_property_docs,
-    fetch_configuration_policies, fetch_configuration_policy_template, fetch_device_configurations,
+    fetch_app_protection_policies, fetch_applied_policy_settings, fetch_assignment_snapshot,
+    fetch_autopilot_devices, fetch_autopilot_profile_assigned_devices, fetch_autopilot_profiles,
+    fetch_baseline_export_json, fetch_baseline_reference_sources, fetch_catalog_icon,
+    fetch_compliance_policies, fetch_compliance_policy_status_with_options,
+    fetch_compliance_property_docs, fetch_configuration_policies,
+    fetch_configuration_policy_template, fetch_device_configurations,
     fetch_endpoint_security_intents, fetch_enrollment_configurations_filtered,
     fetch_esp_blocking_apps, fetch_graph_object_detail, fetch_group_policy_configurations,
     fetch_intune_readiness, fetch_laps_tenant_status, fetch_managed_device_detail,
+    fetch_mdm_user_scope, update_mdm_user_scope, MdmUserScope, MdmUserScopePatch,
     fetch_mobile_apps, fetch_pack_artifact_text, fetch_policy_sets, fetch_policy_setting_issues,
     fetch_remediation_scripts, fetch_script_run_status, fetch_setting_conflict_details,
-    fetch_store_apps, fetch_store_catalog_manifest, fetch_tenant_scripts, fetch_user_readiness,
-    fetch_win32_apps, fetch_windows_autopilot_settings, fetch_windows_update_policies,
-    finalize_snapshot, find_catalog_upload_matches, generate_environment_report,
-    get_laps_credential_info, import_pack_json_document, import_pack_script_text,
-    initiate_on_demand_remediation, label_assignment_ids, link_win32_app_dependency,
-    link_win32_app_supersedence, list_assignment_filters, list_bitlocker_recovery_keys,
-    list_catalog_apps, list_catalog_categories, list_configuration_policy_templates,
-    list_intune_audit_events, list_restore_candidates, list_snapshots, load_category_settings,
-    mobile_app_delete_links, mobile_app_relationships, normalize_assignment_drafts_for,
-    open_pack_workspace, open_pack_workspace_from_source, plan_kit_apply, plan_restore,
-    prepare_snapshot_export, read_catalog_app_config, read_local_icon, reboot_managed_device,
-    remote_lock_managed_device, remove_settings_from_policy, resolve_directory_groups,
-    retire_managed_device, reveal_bitlocker_recovery_key, reveal_laps_credentials,
-    rotate_managed_device_laps_password, save_catalog_app_config, search_catalog_settings,
-    search_directory_groups, search_readiness_users, search_store_catalog, snapshot_label,
-    snapshot_pack_dir, sync_managed_device, sync_windows_autopilot_devices,
-    unlink_win32_app_dependency, unlink_win32_app_supersedence, update_autopilot_device_properties,
-    update_autopilot_profile, update_compliance_policy, update_enrollment_limit,
-    update_enrollment_platform_restrictions, update_object_metadata, update_script_content,
-    update_win32_app, update_winget_app, upload_catalog_win32, wipe_managed_device, write_pack_kit,
-    AppProtectionPolicy, AppliedPolicySettingsLoad, AssignmentCapabilities, AssignmentDraft,
-    AssignmentFilter, AutopilotDevice, AutopilotProfile, BaselineReferenceSourceInput,
+    fetch_store_apps, fetch_store_catalog_manifest, fetch_tenant_scripts,
+    fetch_user_group_memberships, fetch_user_readiness, fetch_win32_apps,
+    fetch_windows_autopilot_settings, fetch_windows_update_policies, finalize_snapshot,
+    find_catalog_upload_matches, generate_environment_report, get_laps_credential_info,
+    import_pack_json_document, import_pack_script_text, initiate_on_demand_remediation,
+    label_assignment_ids, link_win32_app_dependency, link_win32_app_supersedence,
+    list_assignment_filters, list_bitlocker_recovery_keys, list_catalog_apps,
+    list_catalog_categories, list_configuration_policy_templates, list_directory_group_members,
+    list_directory_groups, list_intune_audit_events,
+    list_restore_candidates, list_snapshots, load_category_settings, mobile_app_delete_links,
+    mobile_app_relationships, normalize_assignment_drafts_for, open_pack_workspace,
+    open_pack_workspace_from_source, plan_kit_apply, plan_restore, prepare_snapshot_export,
+    read_catalog_app_config, read_local_icon, reboot_managed_device, remote_lock_managed_device,
+    remove_directory_group_member, remove_settings_from_policy, resolve_directory_groups,
+    retire_managed_device,
+    reveal_bitlocker_recovery_key, reveal_laps_credentials, rotate_managed_device_laps_password,
+    save_catalog_app_config, search_catalog_settings, search_directory_groups,
+    search_readiness_users, search_store_catalog, snapshot_label, snapshot_pack_dir,
+    sync_managed_device, sync_windows_autopilot_devices, unlink_win32_app_dependency,
+    unlink_win32_app_supersedence, update_autopilot_device_properties, update_autopilot_profile,
+    update_directory_group,
+    update_compliance_policy, update_enrollment_limit, update_enrollment_platform_restrictions,
+    create_windows_update_ring, fetch_windows_update_ring, update_windows_update_ring,
+    WindowsUpdateRing,
+    create_feature_update_profile, fetch_feature_update_profile, update_feature_update_profile,
+    FeatureUpdateProfile,
+    fetch_feature_update_eligibility, FeatureUpdateEligibility,
+    fetch_feature_update_catalog, FeatureUpdateCatalogItem,
+    update_object_metadata, update_script_content, update_win32_app, update_winget_app,
+    upload_catalog_win32, wipe_managed_device, write_pack_kit, AppProtectionPolicy,
+    AppliedPolicySettingsLoad, AssignmentCapabilities, AssignmentDraft, AssignmentFilter,
+    AssignmentSnapshot, AutopilotDevice, AutopilotProfile, BaselineReferenceSourceInput,
     BaselineReferenceSourceLoad, BitLockerRecoveryKeySummary, CatalogAppDocument, CatalogAppIcon,
     CatalogAppSummary, CatalogCategory, CatalogDependencyChain, CatalogIndexState,
     CatalogIntuneWinFile, CatalogPolicySummary, CatalogSearchResult, CategorySettingsLoad,
@@ -53,22 +65,24 @@ use axis_sdk::{
     CreateDomainJoinInput, CreateEnrollmentLimitInput, CreateEnrollmentPlatformRestrictionInput,
     CreateEnrollmentStatusPageInput, CreateLapsPolicyInput, CreateLocalPackInput,
     CreateTenantScriptInput, CreateWinGetAppInput, CreatedCatalogPolicy, CreatedDomainJoinProfile,
-    CreatedEnrollmentStatusPage, DirectoryAuditEvent, DirectoryGroup, DuplicatedObject,
-    EnvironmentReport, EnvironmentReportProgress, EnvironmentReportSelection, EspBlockingApp,
-    GraphObjectDetail, InventoryList, KitApplyPlan, KitApplyResult, LapsCredentialInfo,
-    LapsTenantStatus, MobileAppSummary, PackDiffReport, PackExportObject, PackExportOptions,
-    PackExportProgress, PackExportResult, PackImportResult, PackKitSummary, PackKitWriteInput,
-    PackWorkspace, PolicySetSummary, PolicySettingIssue, ReadinessReport, ReadinessUserHit,
-    RemediationDeviceStatusReport, RestoreApplyResult, RestoreCandidate, RestoreMode, RestorePlan,
-    SaveCatalogAppInput, SelectedExportResult, SessionMode, SettingConflictDetail,
-    SettingsCatalogPlatform, SnapshotManifest, StoreCatalogHit, StoreCatalogManifest,
-    TenantScriptSummary, UpdateAutopilotProfileInput, UpdateCompliancePolicyInput,
-    UpdateEnrollmentLimitInput, UpdateEnrollmentPlatformRestrictionsInput,
-    UpdateObjectMetadataInput, UpdateScriptContentInput, UpdateWin32AppInput, UpdateWinGetAppInput,
-    UpdatedObjectMetadata, UserReadinessReport, Win32AppMatch, Win32UploadResult,
-    WindowsAutopilotSettings, WindowsUpdatePolicy, SNAPSHOT_REPORT_DIR,
+    CreatedEnrollmentStatusPage, DirectoryAuditEvent, DirectoryGroup, DirectoryGroupMember,
+    DirectoryGroupMembership,
+    DuplicatedObject, EnvironmentReport, EnvironmentReportProgress, EnvironmentReportSelection,
+    EspBlockingApp, GraphObjectDetail, InventoryList, KitApplyPlan, KitApplyResult,
+    LapsCredentialInfo, LapsTenantStatus, MobileAppSummary, PackDiffReport, PackExportObject,
+    PackExportOptions, PackExportProgress, PackExportResult, PackImportResult, PackKitSummary,
+    PackKitWriteInput, PackWorkspace, PolicySetSummary, PolicySettingIssue, ReadinessReport,
+    ReadinessUserHit, RemediationDeviceStatusReport, RestoreApplyResult, RestoreCandidate,
+    RestoreMode, RestorePlan, SaveCatalogAppInput, SelectedExportResult, SessionMode,
+    SettingConflictDetail, SettingsCatalogPlatform, SnapshotManifest, StoreCatalogHit,
+    StoreCatalogManifest, TenantScriptSummary, UpdateAutopilotProfileInput,
+    UpdateCompliancePolicyInput, UpdateEnrollmentLimitInput,
+    UpdateEnrollmentPlatformRestrictionsInput, UpdateObjectMetadataInput, UpdateScriptContentInput,
+    UpdateWin32AppInput, UpdateWinGetAppInput, UpdatedObjectMetadata, UserReadinessReport,
+    Win32AppMatch, Win32UploadResult, WindowsAutopilotSettings, WindowsUpdatePolicy,
+    SNAPSHOT_REPORT_DIR,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 
@@ -679,6 +693,134 @@ pub async fn apply_pack_kit_cmd(
     })
     .await
     .map_err(|error| error.to_string())
+}
+
+/// Pack (or one kit) compared with the signed-in tenant, for the Policy Packs drift view.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackComparePlan {
+    pub items: Vec<axis_sdk::RestorePlanItem>,
+    pub warnings: Vec<String>,
+}
+
+fn local_pack_root(pack_root: &str) -> Result<std::path::PathBuf, String> {
+    let root = std::path::PathBuf::from(pack_root.trim());
+    if !root.is_dir() {
+        return Err("Comparing needs a local pack folder. Clone GitHub packs first.".into());
+    }
+    Ok(root)
+}
+
+/// Items in a local pack (kit or flat) without touching the tenant.
+#[tauri::command]
+pub fn list_pack_items_cmd(pack_root: String) -> Result<Vec<axis_sdk::RestoreCandidate>, String> {
+    let root = local_pack_root(&pack_root)?;
+    axis_sdk::list_restore_candidates(&root).map_err(|error| error.to_string())
+}
+
+/// Plan in Add mode: that one pass labels every item as missing (`willAdd`),
+/// identical, differing (`settingsDiffer`), present-but-not-compared
+/// (`skipExists`) or unsupported, which is everything the drift view shows.
+#[tauri::command]
+pub async fn plan_pack_compare_cmd(
+    state: State<'_, AppState>,
+    pack_root: String,
+    kit_rel_path: Option<String>,
+) -> Result<PackComparePlan, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Err("Sign in to compare a pack with this tenant.".into());
+    };
+    let root = local_pack_root(&pack_root)?;
+    match kit_rel_path.as_deref().map(str::trim).filter(|kit| !kit.is_empty()) {
+        Some(kit) => plan_kit_apply(&token, &root, kit, RestoreMode::Add)
+            .await
+            .map(|plan| PackComparePlan {
+                items: plan.items,
+                warnings: plan.warnings,
+            })
+            .map_err(|error| error.to_string()),
+        None => plan_restore(&token, &root, "pack", RestoreMode::Add, &[])
+            .await
+            .map(|plan| PackComparePlan {
+                items: plan.items,
+                warnings: plan.warnings,
+            })
+            .map_err(|error| error.to_string()),
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackApplyChangesResult {
+    pub items: Vec<axis_sdk::RestorePlanItem>,
+    pub added: u32,
+    pub updated: u32,
+    pub skipped: u32,
+    pub failed: u32,
+    pub warnings: Vec<String>,
+}
+
+/// Create the missing items (`add_keys`, Add mode), then update differing ones
+/// in place (`update_keys`, Update mode). Nothing is deleted.
+#[tauri::command]
+pub async fn apply_pack_changes_cmd(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    pack_root: String,
+    kit_rel_path: Option<String>,
+    add_keys: Vec<String>,
+    update_keys: Vec<String>,
+) -> Result<PackApplyChangesResult, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Err("Sign in to apply pack changes.".into());
+    };
+    if add_keys.is_empty() && update_keys.is_empty() {
+        return Err("Select at least one item to apply.".into());
+    }
+    let root = local_pack_root(&pack_root)?;
+    let kit = kit_rel_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|kit| !kit.is_empty())
+        .map(str::to_string);
+
+    let mut out = PackApplyChangesResult {
+        items: Vec::new(),
+        added: 0,
+        updated: 0,
+        skipped: 0,
+        failed: 0,
+        warnings: Vec::new(),
+    };
+    for (mode, keys) in [(RestoreMode::Add, &add_keys), (RestoreMode::Update, &update_keys)] {
+        if keys.is_empty() {
+            continue;
+        }
+        let progress = |message: String| {
+            let _ = app.emit(KIT_APPLY_PROGRESS_EVENT, &message);
+        };
+        let (items, added, updated, skipped, failed, warnings) = match kit.as_deref() {
+            Some(kit) => {
+                let result = apply_kit_apply(&token, &root, kit, mode, keys, progress)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                (result.items, result.added, result.updated, result.skipped, result.failed, result.warnings)
+            }
+            None => {
+                let result = apply_restore(&token, &root, "pack", mode, keys, false, progress)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                (result.items, result.added, result.updated, result.skipped, result.failed, result.warnings)
+            }
+        };
+        out.items.extend(items);
+        out.added += added;
+        out.updated += updated;
+        out.skipped += skipped;
+        out.failed += failed;
+        out.warnings.extend(warnings);
+    }
+    Ok(out)
 }
 
 #[tauri::command]
@@ -1561,6 +1703,52 @@ pub async fn list_intune_audit_events_cmd(
     }
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WriteLogResponse {
+    pub entries: Vec<axis_sdk::WriteLogRow>,
+    pub tenant_id: Option<String>,
+    pub folder: Option<String>,
+    pub truncated: bool,
+}
+
+/// Writes Axis made against the signed-in tenant, newest first.
+#[tauri::command]
+pub async fn list_write_log_cmd(
+    state: State<'_, AppState>,
+    limit: Option<usize>,
+) -> Result<WriteLogResponse, String> {
+    let limit = limit.unwrap_or(500).clamp(1, 5000);
+    let tenant_id = state.auth.session_tenant_id().await;
+    let entries = tenant_id
+        .as_deref()
+        .map(|tenant| axis_sdk::list_write_log(tenant, limit))
+        .unwrap_or_default();
+    let folder = axis_sdk::write_log_dir().map(|root| match tenant_id.as_deref() {
+        Some(tenant) => root.join(tenant).to_string_lossy().into_owned(),
+        None => root.to_string_lossy().into_owned(),
+    });
+    Ok(WriteLogResponse {
+        truncated: entries.len() >= limit,
+        entries,
+        tenant_id,
+        folder,
+    })
+}
+
+/// Reverse one logged write. Without `force`, stops when the object changed since.
+#[tauri::command]
+pub async fn undo_write_cmd(
+    state: State<'_, AppState>,
+    entry_id: String,
+    force: Option<bool>,
+) -> Result<axis_sdk::UndoOutcome, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Err("Not signed in.".into());
+    };
+    Ok(axis_sdk::undo_write(&token, &entry_id, force.unwrap_or(false)).await)
+}
+
 #[tauri::command]
 pub async fn fetch_win32_apps_cmd(
     state: State<'_, AppState>,
@@ -1637,6 +1825,34 @@ pub async fn fetch_app_protection_policies_cmd(
 ) -> Result<InventoryResponse<AppProtectionPolicy>, String> {
     let token = session_token(&state).await?.unwrap_or_default();
     with_inventory(&state, fetch_app_protection_policies(&token)).await
+}
+
+#[tauri::command]
+pub async fn fetch_review_objects_cmd(
+    state: State<'_, AppState>,
+    kind: String,
+) -> Result<InventoryResponse<serde_json::Value>, String> {
+    let token = session_token(&state).await?.unwrap_or_default();
+    with_inventory(&state, axis_sdk::fetch_review_objects(&token, &kind)).await
+}
+
+#[tauri::command]
+pub async fn fetch_conditional_access_coverage_cmd(
+    state: State<'_, AppState>,
+) -> Result<axis_sdk::ConditionalAccessCoverage, String> {
+    let token = session_token(&state).await?.unwrap_or_default();
+    axis_sdk::fetch_conditional_access_coverage(&token)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn resolve_review_names_cmd(
+    state: State<'_, AppState>,
+    refs: axis_sdk::ReviewReferences,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    let token = session_token(&state).await?.unwrap_or_default();
+    Ok(axis_sdk::resolve_review_names(&token, refs).await)
 }
 
 #[tauri::command]
@@ -1832,6 +2048,532 @@ pub async fn fetch_managed_device_detail_cmd(
             device: None,
             error: Some(error.to_string()),
             mode: "live",
+        }),
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssignmentSnapshotResponse {
+    pub snapshot: Option<AssignmentSnapshot>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingUsageIndexResponse {
+    pub index: Option<axis_sdk::SettingUsageIndex>,
+    pub error: Option<String>,
+}
+
+/// Tenant-wide "where used" index for Settings Catalog settings (catalog explorer).
+#[tauri::command]
+pub async fn fetch_setting_usage_index_cmd(
+    state: State<'_, AppState>,
+) -> Result<SettingUsageIndexResponse, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Ok(SettingUsageIndexResponse {
+            index: None,
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match axis_sdk::fetch_setting_usage_index(&token).await {
+        Ok(index) => Ok(SettingUsageIndexResponse {
+            index: Some(index),
+            error: None,
+        }),
+        Err(error) => Ok(SettingUsageIndexResponse {
+            index: None,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn fetch_assignment_snapshot_cmd(
+    state: State<'_, AppState>,
+) -> Result<AssignmentSnapshotResponse, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Ok(AssignmentSnapshotResponse {
+            snapshot: None,
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match fetch_assignment_snapshot(&token).await {
+        Ok(snapshot) => Ok(AssignmentSnapshotResponse {
+            snapshot: Some(snapshot),
+            error: None,
+        }),
+        Err(error) => Ok(AssignmentSnapshotResponse {
+            snapshot: None,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserGroupsResponse {
+    pub groups: Vec<DirectoryGroupMembership>,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn fetch_user_group_memberships_cmd(
+    state: State<'_, AppState>,
+    user_id: String,
+) -> Result<UserGroupsResponse, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Ok(UserGroupsResponse {
+            groups: Vec::new(),
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match fetch_user_group_memberships(&token, &user_id).await {
+        Ok(groups) => Ok(UserGroupsResponse {
+            groups,
+            error: None,
+        }),
+        Err(error) => Ok(UserGroupsResponse {
+            groups: Vec::new(),
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn add_directory_group_member_cmd(
+    state: State<'_, AppState>,
+    group_id: String,
+    member_id: String,
+) -> Result<ActionResponse, String> {
+    ensure_write_allowed(&state).await?;
+    let Some(token) = session_token(&state).await? else {
+        return Ok(ActionResponse {
+            ok: false,
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match add_directory_group_member(&token, &group_id, &member_id).await {
+        Ok(()) => Ok(ActionResponse {
+            ok: true,
+            error: None,
+        }),
+        Err(error) => Ok(ActionResponse {
+            ok: false,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn remove_directory_group_member_cmd(
+    state: State<'_, AppState>,
+    group_id: String,
+    member_id: String,
+) -> Result<ActionResponse, String> {
+    ensure_write_allowed(&state).await?;
+    let Some(token) = session_token(&state).await? else {
+        return Ok(ActionResponse {
+            ok: false,
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match remove_directory_group_member(&token, &group_id, &member_id).await {
+        Ok(()) => Ok(ActionResponse {
+            ok: true,
+            error: None,
+        }),
+        Err(error) => Ok(ActionResponse {
+            ok: false,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateDirectoryGroupInput {
+    pub id: String,
+    pub display_name: Option<String>,
+    pub description: Option<String>,
+    pub membership_rule: Option<String>,
+}
+
+/// Certificates, tokens, and connectors Intune depends on, each graded.
+#[tauri::command]
+pub async fn fetch_tenant_health_cmd(
+    state: State<'_, AppState>,
+) -> Result<axis_sdk::TenantHealth, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Err("Not signed in.".into());
+    };
+    Ok(axis_sdk::fetch_tenant_health(&token).await)
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeatureUpdateCatalogResponse {
+    pub items: Vec<FeatureUpdateCatalogItem>,
+    pub error: Option<String>,
+}
+
+/// Windows versions Intune will accept as a deployment's feature update.
+#[tauri::command]
+pub async fn fetch_feature_update_catalog_cmd(
+    state: State<'_, AppState>,
+) -> Result<FeatureUpdateCatalogResponse, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Ok(FeatureUpdateCatalogResponse {
+            items: vec![],
+            error: Some("Not signed in.".into()),
+        });
+    };
+    Ok(match fetch_feature_update_catalog(&token).await {
+        Ok(items) => FeatureUpdateCatalogResponse { items, error: None },
+        Err(error) => FeatureUpdateCatalogResponse {
+            items: vec![],
+            error: Some(error.to_string()),
+        },
+    })
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeatureUpdateEligibilityResponse {
+    pub eligibility: Option<FeatureUpdateEligibility>,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn fetch_feature_update_eligibility_cmd(
+    state: State<'_, AppState>,
+) -> Result<FeatureUpdateEligibilityResponse, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Ok(FeatureUpdateEligibilityResponse {
+            eligibility: None,
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match fetch_feature_update_eligibility(&token).await {
+        Ok(eligibility) => Ok(FeatureUpdateEligibilityResponse {
+            eligibility: Some(eligibility),
+            error: None,
+        }),
+        Err(error) => Ok(FeatureUpdateEligibilityResponse {
+            eligibility: None,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeatureUpdateProfileResponse {
+    pub profile: Option<FeatureUpdateProfile>,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn fetch_feature_update_profile_cmd(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<FeatureUpdateProfileResponse, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Ok(FeatureUpdateProfileResponse {
+            profile: None,
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match fetch_feature_update_profile(&token, &id).await {
+        Ok(profile) => Ok(FeatureUpdateProfileResponse {
+            profile: Some(profile),
+            error: None,
+        }),
+        Err(error) => Ok(FeatureUpdateProfileResponse {
+            profile: None,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn update_feature_update_profile_cmd(
+    state: State<'_, AppState>,
+    profile: FeatureUpdateProfile,
+) -> Result<ActionResponse, String> {
+    ensure_write_allowed(&state).await?;
+    let Some(token) = session_token(&state).await? else {
+        return Ok(ActionResponse {
+            ok: false,
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match update_feature_update_profile(&token, &profile).await {
+        Ok(()) => Ok(ActionResponse {
+            ok: true,
+            error: None,
+        }),
+        Err(error) => Ok(ActionResponse {
+            ok: false,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn create_feature_update_profile_cmd(
+    state: State<'_, AppState>,
+    profile: FeatureUpdateProfile,
+) -> Result<FeatureUpdateProfileResponse, String> {
+    ensure_write_allowed(&state).await?;
+    let Some(token) = session_token(&state).await? else {
+        return Ok(FeatureUpdateProfileResponse {
+            profile: None,
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match create_feature_update_profile(&token, &profile).await {
+        Ok(profile) => Ok(FeatureUpdateProfileResponse {
+            profile: Some(profile),
+            error: None,
+        }),
+        Err(error) => Ok(FeatureUpdateProfileResponse {
+            profile: None,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowsUpdateRingResponse {
+    pub ring: Option<WindowsUpdateRing>,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn fetch_windows_update_ring_cmd(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<WindowsUpdateRingResponse, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Ok(WindowsUpdateRingResponse {
+            ring: None,
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match fetch_windows_update_ring(&token, &id).await {
+        Ok(ring) => Ok(WindowsUpdateRingResponse {
+            ring: Some(ring),
+            error: None,
+        }),
+        Err(error) => Ok(WindowsUpdateRingResponse {
+            ring: None,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RingActionResult {
+    pub id: String,
+    pub ok: bool,
+    /// Why the ring was left alone, when the action would have done nothing.
+    pub skipped: Option<String>,
+    pub error: Option<String>,
+}
+
+/// Pause, resume, extend, or uninstall quality or feature updates on rings.
+/// One ring at a time, so throttling retries stay per ring; every write is
+/// tagged with one operation label in Write activity.
+#[tauri::command]
+pub async fn apply_windows_update_ring_action_cmd(
+    state: State<'_, AppState>,
+    ids: Vec<String>,
+    channel: axis_sdk::RingChannel,
+    action: axis_sdk::RingAction,
+) -> Result<Vec<RingActionResult>, String> {
+    ensure_write_allowed(&state).await?;
+    let Some(token) = session_token(&state).await? else {
+        return Err("Not signed in.".into());
+    };
+    let verb = match action {
+        axis_sdk::RingAction::Pause => "Pause",
+        axis_sdk::RingAction::Resume => "Resume",
+        axis_sdk::RingAction::Extend => "Extend pause of",
+        axis_sdk::RingAction::Uninstall => "Uninstall",
+    };
+    let what = match channel {
+        axis_sdk::RingChannel::Quality => "quality",
+        axis_sdk::RingChannel::Feature => "feature",
+    };
+    let label = format!(
+        "{verb} {what} updates on {} ring{}",
+        ids.len(),
+        if ids.len() == 1 { "" } else { "s" }
+    );
+    let results = axis_sdk::with_write_operation(label, async {
+        let mut results = Vec::with_capacity(ids.len());
+        for id in &ids {
+            let result = axis_sdk::apply_ring_action_checked(&token, id, channel, action).await;
+            results.push(match result {
+                Ok(skipped) => RingActionResult {
+                    id: id.clone(),
+                    ok: true,
+                    skipped,
+                    error: None,
+                },
+                Err(error) => RingActionResult {
+                    id: id.clone(),
+                    ok: false,
+                    skipped: None,
+                    error: Some(error.to_string()),
+                },
+            });
+        }
+        results
+    })
+    .await;
+    Ok(results)
+}
+
+#[tauri::command]
+pub async fn update_windows_update_ring_cmd(
+    state: State<'_, AppState>,
+    ring: WindowsUpdateRing,
+) -> Result<ActionResponse, String> {
+    ensure_write_allowed(&state).await?;
+    let Some(token) = session_token(&state).await? else {
+        return Ok(ActionResponse {
+            ok: false,
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match update_windows_update_ring(&token, &ring).await {
+        Ok(()) => Ok(ActionResponse {
+            ok: true,
+            error: None,
+        }),
+        Err(error) => Ok(ActionResponse {
+            ok: false,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn create_windows_update_ring_cmd(
+    state: State<'_, AppState>,
+    ring: WindowsUpdateRing,
+) -> Result<WindowsUpdateRingResponse, String> {
+    ensure_write_allowed(&state).await?;
+    let Some(token) = session_token(&state).await? else {
+        return Ok(WindowsUpdateRingResponse {
+            ring: None,
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match create_windows_update_ring(&token, &ring).await {
+        Ok(ring) => Ok(WindowsUpdateRingResponse {
+            ring: Some(ring),
+            error: None,
+        }),
+        Err(error) => Ok(WindowsUpdateRingResponse {
+            ring: None,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn update_directory_group_cmd(
+    state: State<'_, AppState>,
+    input: UpdateDirectoryGroupInput,
+) -> Result<ActionResponse, String> {
+    ensure_write_allowed(&state).await?;
+    let Some(token) = session_token(&state).await? else {
+        return Ok(ActionResponse {
+            ok: false,
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match update_directory_group(
+        &token,
+        &input.id,
+        input.display_name.as_deref(),
+        input.description.as_deref(),
+        input.membership_rule.as_deref(),
+    )
+    .await
+    {
+        Ok(()) => Ok(ActionResponse {
+            ok: true,
+            error: None,
+        }),
+        Err(error) => Ok(ActionResponse {
+            ok: false,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectoryGroupsResponse {
+    pub groups: Vec<DirectoryGroup>,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn list_directory_groups_cmd(
+    state: State<'_, AppState>,
+) -> Result<DirectoryGroupsResponse, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Ok(DirectoryGroupsResponse {
+            groups: Vec::new(),
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match list_directory_groups(&token).await {
+        Ok(groups) => Ok(DirectoryGroupsResponse {
+            groups,
+            error: None,
+        }),
+        Err(error) => Ok(DirectoryGroupsResponse {
+            groups: Vec::new(),
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupMembersResponse {
+    pub members: Vec<DirectoryGroupMember>,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn list_directory_group_members_cmd(
+    state: State<'_, AppState>,
+    group_id: String,
+) -> Result<GroupMembersResponse, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Ok(GroupMembersResponse {
+            members: Vec::new(),
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match list_directory_group_members(&token, &group_id).await {
+        Ok(members) => Ok(GroupMembersResponse {
+            members,
+            error: None,
+        }),
+        Err(error) => Ok(GroupMembersResponse {
+            members: Vec::new(),
+            error: Some(error.to_string()),
         }),
     }
 }
@@ -3041,6 +3783,59 @@ pub async fn fetch_esp_blocking_apps_cmd(
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct MdmUserScopeResponse {
+    pub scope: Option<MdmUserScope>,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn fetch_mdm_user_scope_cmd(
+    state: State<'_, AppState>,
+) -> Result<MdmUserScopeResponse, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Ok(MdmUserScopeResponse {
+            scope: None,
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match fetch_mdm_user_scope(&token).await {
+        Ok(scope) => Ok(MdmUserScopeResponse {
+            scope: Some(scope),
+            error: None,
+        }),
+        Err(error) => Ok(MdmUserScopeResponse {
+            scope: None,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn update_mdm_user_scope_cmd(
+    state: State<'_, AppState>,
+    patch: MdmUserScopePatch,
+) -> Result<ActionResponse, String> {
+    ensure_write_allowed(&state).await?;
+    let Some(token) = session_token(&state).await? else {
+        return Ok(ActionResponse {
+            ok: false,
+            error: Some("Not signed in.".into()),
+        });
+    };
+    match update_mdm_user_scope(&token, patch).await {
+        Ok(()) => Ok(ActionResponse {
+            ok: true,
+            error: None,
+        }),
+        Err(error) => Ok(ActionResponse {
+            ok: false,
+            error: Some(error.to_string()),
+        }),
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ReadinessResponse {
     report: Option<ReadinessReport>,
     error: Option<String>,
@@ -3627,13 +4422,6 @@ pub async fn lint_script_cmd(
     tokio::task::spawn_blocking(move || crate::script_lint::lint_script(&language, &source))
         .await
         .map_err(|error| error.to_string())
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DirectoryGroupsResponse {
-    pub groups: Vec<DirectoryGroup>,
-    pub error: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

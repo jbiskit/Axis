@@ -61,7 +61,7 @@ export function isKitPackSource(source: {
 }
 
 export function storeKindLabel(kind: TemplateStoreKind | undefined): string {
-  if (kind === "flatJson") return "Flat JSON";
+  if (kind === "flatJson") return "Flat pack";
   if (kind === "axisTemplated") return "Kit pack";
   return "";
 }

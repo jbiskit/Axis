@@ -162,6 +162,12 @@ function enrollmentNavChildren(): NavItem[] {
           icon: "enrollment",
           section: "Configure",
         },
+        {
+          href: "/intune/enrollment/windows/automatic-enrollment",
+          label: "Automatic enrollment",
+          icon: "enrollment",
+          section: "Configure",
+        },
       ],
     },
     {
@@ -207,6 +213,8 @@ function enrollmentNavChildren(): NavItem[] {
 export const INTUNE_NAV: NavItem[] = [
   { href: "/intune", label: "Overview", icon: "overview", section: "Workspace" },
   { href: "/intune/activity", label: "Write activity", icon: "overview", section: "Workspace" },
+  { href: "/intune/what-if", label: "What if", icon: "overview", section: "Workspace" },
+  { href: "/intune/tools/autopilot-script", label: "Autopilot script", icon: "enrollment", section: "Tools" },
   { href: "/intune/reports", label: "Environment report", icon: "reports", section: "Workspace" },
   { href: "/intune/client", label: "Compare & restore", icon: "baselines", section: "Workspace" },
   {
@@ -246,6 +254,12 @@ export const INTUNE_NAV: NavItem[] = [
     icon: "enrollment",
     section: "Manage",
     children: enrollmentNavChildren(),
+  },
+  {
+    href: "/intune/groups",
+    label: "Groups",
+    icon: "devices",
+    section: "Manage",
   },
   {
     href: "/intune/policies",
@@ -297,8 +311,48 @@ export const INTUNE_NAV: NavItem[] = [
     ],
   },
   { href: "/intune/packs", label: "Policy Packs", icon: "templates", section: "Library" },
-  { href: "/intune/apps/catalog", label: "Local catalog", icon: "apps", section: "Library" },
+  { href: "/intune/apps/catalog", label: "Local application catalog", icon: "apps", section: "Library" },
 ];
+
+const ENTRA_NAV: NavItem[] = [
+  {
+    href: "/entra",
+    label: "Entra",
+    icon: "endpoint-security",
+    section: "Entra",
+    children: [
+      { href: "/entra/conditional-access/overview", label: "Overview", icon: "overview", section: "Conditional Access" },
+      { href: "/entra/conditional-access/policies", label: "Policies", icon: "policies", section: "Conditional Access" },
+      { href: "/entra/conditional-access/named-locations", label: "Named locations", icon: "policies", section: "Conditional Access" },
+    ],
+  },
+];
+
+const PURVIEW_NAV: NavItem[] = [
+  {
+    href: "/purview",
+    label: "Purview",
+    icon: "policies",
+    section: "Purview",
+    children: [
+      { href: "/purview/information-protection/sensitivity-labels", label: "Sensitivity labels", icon: "policies", section: "Information Protection" },
+      { href: "/purview/data-lifecycle/retention-labels", label: "Retention labels", icon: "policies", section: "Data lifecycle" },
+    ],
+  },
+];
+
+/** Product modules. Each owns a route prefix and a nav tree; non-Intune modules get one rail slot each, in this order. */
+export const NAV_MODULES: Array<{ id: string; label: string; nav: NavItem[] }> = [
+  { id: "intune", label: "Intune", nav: INTUNE_NAV },
+  { id: "entra", label: "Entra", nav: ENTRA_NAV },
+  { id: "purview", label: "Purview", nav: PURVIEW_NAV },
+];
+
+export const ALL_NAV: NavItem[] = NAV_MODULES.flatMap((module) => module.nav);
+
+export function moduleForPath(pathname: string): string {
+  return NAV_MODULES.find((module) => pathname === `/${module.id}` || pathname.startsWith(`/${module.id}/`))?.id ?? "intune";
+}
 
 export const POLICY_HUB_FAMILIES = POLICY_FAMILIES.filter((family) => family.listInHub !== false);
 
@@ -339,5 +393,5 @@ export function matchingNavItems(pathname: string, search: URLSearchParams, nav:
 }
 
 export function breadcrumbLabel(pathname: string, search: URLSearchParams): string {
-  return matchingNavItems(pathname, search, INTUNE_NAV)[0]?.label ?? "Overview";
+  return matchingNavItems(pathname, search, ALL_NAV)[0]?.label ?? "Overview";
 }

@@ -16,6 +16,10 @@ const READ_SCOPE_IDS = [
   "5f8c59db-677d-491f-a6b8-5f174b11ec1d", // Group.Read.All
   "572fea84-0151-49b2-9301-11cb16974376", // Policy.Read.All
   "e4c9e354-4dc5-45b8-9e7c-e1393b0b1a20", // AuditLog.Read.All
+  "4ad84827-5578-4e18-ad7a-86530b12f884", // InformationProtectionPolicy.Read
+  "07f995eb-fc67-4522-ad66-2b8ca8ea3efd", // RecordsManagement.Read.All
+  "741c54c3-0c1e-44a1-818b-3f97ab4e8c83", // RoleManagement.Read.Directory
+  "c79f8feb-a9db-4090-85f9-90d820caa0eb", // Application.Read.All
   "b27a61ec-b99c-4d6a-b126-c4375d08ae30", // BitlockerKey.Read.All
   "280b3b69-0437-44b1-bc20-3b2fca1ee3e9", // DeviceLocalCredential.Read.All
   "f1493658-876a-4c87-8fa7-edb559b3476a", // DeviceManagementConfiguration.Read.All
@@ -36,6 +40,7 @@ const WRITE_SCOPE_IDS = [
   "0c5e8a55-87a6-4556-93ab-adc52c4d862d", // DeviceManagementRBAC.ReadWrite.All
   "4e46008b-f24c-477d-8fff-7bb4ec7aafe0", // Group.ReadWrite.All
   "40b534c3-9552-4550-901b-23879c90bcf9", // Policy.ReadWrite.DeviceConfiguration
+  "a8ead177-1889-4546-9387-f25e658e2a79", // Policy.ReadWrite.MobilityManagement
 ] as const;
 
 /** The manifest `requiredResourceAccess` property, ready to replace that block in the editor. */

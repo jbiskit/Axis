@@ -12,6 +12,7 @@ use tokio::sync::Mutex;
 mod catalog_index;
 mod client_container;
 mod commands;
+mod preferences;
 mod script_lint;
 mod updater;
 
@@ -281,6 +282,12 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .map_err(|error| error.to_string())?;
+            axis_sdk::init_write_log(app_data.join("write-log"));
+            preferences::init(&app_data);
+            let throttle_handle = app.handle().clone();
+            axis_sdk::set_throttle_listener(move |notice| {
+                let _ = tauri::Emitter::emit(&throttle_handle, "graph-throttle", notice);
+            });
             let cache_dir = app_data.join("catalog-index");
             app.manage(AppState {
                 auth: Arc::new(AuthManager::new()),
@@ -306,6 +313,10 @@ pub fn run() {
             fetch_glance,
             refresh_glance,
             commands::list_intune_audit_events_cmd,
+            commands::list_write_log_cmd,
+            commands::undo_write_cmd,
+            preferences::get_preferences_cmd,
+            preferences::set_preferences_cmd,
             fetch_managed_devices,
             sign_out,
             open_external_url,
@@ -318,6 +329,9 @@ pub fn run() {
             commands::fetch_device_configurations_cmd,
             commands::fetch_endpoint_security_intents_cmd,
             commands::fetch_app_protection_policies_cmd,
+            commands::fetch_review_objects_cmd,
+            commands::resolve_review_names_cmd,
+            commands::fetch_conditional_access_coverage_cmd,
             commands::fetch_policy_sets_cmd,
             commands::fetch_tenant_scripts_cmd,
             commands::fetch_autopilot_devices_cmd,
@@ -329,6 +343,27 @@ pub fn run() {
             commands::fetch_configuration_policy_template_cmd,
             commands::list_configuration_policy_templates_cmd,
             commands::fetch_managed_device_detail_cmd,
+            commands::fetch_user_group_memberships_cmd,
+            commands::fetch_assignment_snapshot_cmd,
+            commands::fetch_setting_usage_index_cmd,
+            commands::plan_pack_compare_cmd,
+            commands::list_pack_items_cmd,
+            commands::apply_pack_changes_cmd,
+            commands::list_directory_group_members_cmd,
+            commands::list_directory_groups_cmd,
+            commands::update_directory_group_cmd,
+            commands::fetch_windows_update_ring_cmd,
+            commands::update_windows_update_ring_cmd,
+            commands::create_windows_update_ring_cmd,
+            commands::fetch_feature_update_profile_cmd,
+            commands::fetch_feature_update_eligibility_cmd,
+            commands::fetch_feature_update_catalog_cmd,
+            commands::fetch_tenant_health_cmd,
+            commands::apply_windows_update_ring_action_cmd,
+            commands::update_feature_update_profile_cmd,
+            commands::create_feature_update_profile_cmd,
+            commands::add_directory_group_member_cmd,
+            commands::remove_directory_group_member_cmd,
             commands::fetch_baseline_reference_sources_cmd,
             commands::fetch_baseline_export_cmd,
             commands::fetch_pack_artifact_text_cmd,
@@ -422,6 +457,8 @@ pub fn run() {
             commands::create_enrollment_status_page_cmd,
             commands::fetch_esp_blocking_apps_cmd,
             commands::fetch_intune_readiness_cmd,
+            commands::fetch_mdm_user_scope_cmd,
+            commands::update_mdm_user_scope_cmd,
             commands::search_readiness_users_cmd,
             commands::fetch_user_readiness_cmd,
             commands::update_autopilot_profile_cmd,

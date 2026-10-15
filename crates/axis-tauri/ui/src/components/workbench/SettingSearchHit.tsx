@@ -20,6 +20,7 @@ export function SettingSearchHit({
   alreadyOnPolicy = false,
   disabled = false,
   selected = false,
+  leading,
   trailing,
   onSelect,
 }: {
@@ -28,6 +29,7 @@ export function SettingSearchHit({
   alreadyOnPolicy?: boolean;
   disabled?: boolean;
   selected?: boolean;
+  leading?: ReactNode;
   trailing?: ReactNode;
   onSelect: () => void;
 }) {
@@ -114,6 +116,7 @@ export function SettingSearchHit({
       onMouseLeave={hideTooltip}
     >
       <div className="setting-search-hit-main">
+        {leading ? <div className="setting-search-hit-leading">{leading}</div> : null}
         <button
           type="button"
           className={`setting-search-hit${selected ? " selected" : ""}`}

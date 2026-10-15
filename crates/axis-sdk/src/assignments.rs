@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::device_recovery::annotate_scope;
 use crate::graph::{GraphClient, GraphCollection, GraphError};
 
 const GROUP_SELECT: &str = "id,displayName,groupTypes,membershipRule,membershipRuleProcessingState";
@@ -626,6 +627,27 @@ pub async fn search_directory_groups(
     }
 }
 
+/// Enumerate every group in the tenant. Pages `/groups` with a `$select` so the
+/// list view can show membership type without a second call per row.
+pub async fn list_directory_groups(
+    access_token: &str,
+) -> Result<Vec<DirectoryGroup>, GraphError> {
+    let rows = GraphClient::new()
+        .fetch_all_pages::<Value>(
+            access_token,
+            &format!("/groups?$select={GROUP_SELECT}&$top=200"),
+            "v1.0",
+            200,
+        )
+        .await
+        .map_err(|error| annotate_scope(error, "Group.Read.All"))?;
+    let groups: Vec<GraphGroup> = rows
+        .into_iter()
+        .filter_map(|row| serde_json::from_value(row).ok())
+        .collect();
+    Ok(sort_groups(groups))
+}
+
 pub fn sanitize_mail_nickname(raw: &str) -> String {
     raw.chars()
         .filter(|c| c.is_ascii_alphanumeric())
@@ -751,6 +773,137 @@ pub async fn create_directory_group(
             .or(group.membership_rule);
     }
     Ok(group)
+}
+
+/// A member of an Entra group — a user, device, service principal or nested group.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectoryGroupMember {
+    pub id: String,
+    pub display_name: String,
+    /// `user`, `device`, `group`, `servicePrincipal`, or `unknown`.
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_principal_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operating_system: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
+}
+
+fn member_kind(odata_type: Option<&str>) -> &'static str {
+    let value = odata_type.unwrap_or("").to_ascii_lowercase();
+    if value.contains("user") {
+        "user"
+    } else if value.contains("device") {
+        "device"
+    } else if value.contains("serviceprincipal") {
+        "servicePrincipal"
+    } else if value.contains("group") {
+        "group"
+    } else {
+        "unknown"
+    }
+}
+
+fn map_group_member(raw: &Value) -> Option<DirectoryGroupMember> {
+    let id = raw.get("id").and_then(Value::as_str)?.to_string();
+    let display_name = raw
+        .get("displayName")
+        .and_then(Value::as_str)
+        .unwrap_or("Untitled")
+        .to_string();
+    Some(DirectoryGroupMember {
+        id,
+        display_name,
+        kind: member_kind(raw.get("@odata.type").and_then(Value::as_str)).to_string(),
+        user_principal_name: raw
+            .get("userPrincipalName")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        account_enabled: raw.get("accountEnabled").and_then(Value::as_bool),
+        operating_system: raw
+            .get("operatingSystem")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        device_id: raw.get("deviceId").and_then(Value::as_str).map(str::to_string),
+    })
+}
+
+/// List a group's direct members. Dynamic groups resolve their own membership,
+/// so this returns whatever Entra currently reports.
+pub async fn list_directory_group_members(
+    access_token: &str,
+    group_id: &str,
+) -> Result<Vec<DirectoryGroupMember>, GraphError> {
+    let id = group_id.trim();
+    if id.is_empty() {
+        return Err(input_error("A group id is required."));
+    }
+    let enc = urlencoding::encode(id);
+    let rows = GraphClient::new()
+        .fetch_all_pages::<Value>(
+            access_token,
+            &format!(
+                "/groups/{enc}/members?$select=id,displayName,userPrincipalName,accountEnabled,operatingSystem,deviceId&$top=200"
+            ),
+            "v1.0",
+            200,
+        )
+        .await
+        .map_err(|error| annotate_scope(error, "GroupMember.Read.All"))?;
+    Ok(rows.iter().filter_map(map_group_member).collect())
+}
+
+/// Add a directory object to a group. Graph returns 400 when the object is
+/// already a member, which callers treat as success.
+pub async fn add_directory_group_member(
+    access_token: &str,
+    group_id: &str,
+    member_id: &str,
+) -> Result<(), GraphError> {
+    let group = group_id.trim();
+    let member = member_id.trim();
+    if group.is_empty() || member.is_empty() {
+        return Err(input_error("A group id and member id are required."));
+    }
+    let body = json!({ "@odata.id": format!("https://graph.microsoft.com/v1.0/directoryObjects/{member}") });
+    GraphClient::new()
+        .post_no_content(
+            access_token,
+            &format!("/groups/{}/members/$ref", urlencoding::encode(group)),
+            "v1.0",
+            &body,
+        )
+        .await
+        .map_err(|error| annotate_scope(error, "GroupMember.ReadWrite.All"))
+}
+
+/// Remove a directory object from a group.
+pub async fn remove_directory_group_member(
+    access_token: &str,
+    group_id: &str,
+    member_id: &str,
+) -> Result<(), GraphError> {
+    let group = group_id.trim();
+    let member = member_id.trim();
+    if group.is_empty() || member.is_empty() {
+        return Err(input_error("A group id and member id are required."));
+    }
+    GraphClient::new()
+        .delete(
+            access_token,
+            &format!(
+                "/groups/{}/members/{}/$ref",
+                urlencoding::encode(group),
+                urlencoding::encode(member)
+            ),
+            "v1.0",
+        )
+        .await
+        .map_err(|error| annotate_scope(error, "GroupMember.ReadWrite.All"))
 }
 
 pub async fn resolve_directory_groups(

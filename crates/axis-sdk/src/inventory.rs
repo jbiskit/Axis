@@ -230,12 +230,28 @@ pub struct WindowsUpdatePolicy {
     pub last_modified_date_time: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub odata_type: Option<String>,
+    /// Pause and uninstall state, for rings only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ring_state: Option<crate::windows_update::RingUpdateState>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GraphNamed {
     id: Option<String>,
+    // Windows Update ring pause and uninstall state; absent on other objects.
+    #[serde(default)]
+    quality_updates_paused: Option<bool>,
+    #[serde(default)]
+    feature_updates_paused: Option<bool>,
+    #[serde(default)]
+    quality_updates_pause_expiry_date_time: Option<String>,
+    #[serde(default)]
+    feature_updates_pause_expiry_date_time: Option<String>,
+    #[serde(default)]
+    quality_updates_will_be_rolled_back: Option<bool>,
+    #[serde(default)]
+    feature_updates_will_be_rolled_back: Option<bool>,
     #[serde(default)]
     name: Option<String>,
     #[serde(default)]
@@ -507,7 +523,23 @@ fn as_policy_set(row: GraphNamed) -> Option<PolicySetSummary> {
 
 fn as_windows_update(row: GraphNamed, family: &str) -> Option<WindowsUpdatePolicy> {
     let id = take_id(&row)?;
+    let ring_state = (family == "rings").then(|| {
+        use crate::windows_update::{RingChannelState, RingUpdateState};
+        RingUpdateState {
+            quality: RingChannelState {
+                paused: row.quality_updates_paused.unwrap_or(false),
+                pause_expiry: row.quality_updates_pause_expiry_date_time.clone(),
+                rolling_back: row.quality_updates_will_be_rolled_back.unwrap_or(false),
+            },
+            feature: RingChannelState {
+                paused: row.feature_updates_paused.unwrap_or(false),
+                pause_expiry: row.feature_updates_pause_expiry_date_time.clone(),
+                rolling_back: row.feature_updates_will_be_rolled_back.unwrap_or(false),
+            },
+        }
+    });
     Some(WindowsUpdatePolicy {
+        ring_state,
         family: family.into(),
         name: title(&row),
         description: row.description,
@@ -718,21 +750,29 @@ pub async fn fetch_configuration_policies(
     Ok(InventoryList::from_items(items))
 }
 
+/// Classic deviceCompliancePolicy / deviceConfiguration have no isAssigned property (Graph 400s
+/// if selected). Read assignment state from the assignments navigation, then fall back to
+/// `select_path` alone if Graph rejects the expand.
+async fn list_with_assignments(
+    access_token: &str,
+    select_path: &str,
+) -> Result<Vec<GraphNamed>, GraphError> {
+    for expand in ["$expand=assignments($select=id)", "$expand=assignments"] {
+        if let Ok(rows) = list_named(access_token, &format!("{select_path}&{expand}")).await {
+            return Ok(rows);
+        }
+    }
+    list_named(access_token, select_path).await
+}
+
 pub async fn fetch_compliance_policies(
     access_token: &str,
 ) -> Result<InventoryList<CatalogPolicySummary>, GraphError> {
-    // Classic deviceCompliancePolicy has no isAssigned property; Graph 400s if selected.
-    // Assignment state comes from the assignments navigation, same as scripts.
-    let expanded = "/deviceManagement/deviceCompliancePolicies?$select=id,displayName,description,createdDateTime,lastModifiedDateTime&$expand=assignments($select=id)";
-    let fallback = "/deviceManagement/deviceCompliancePolicies?$select=id,displayName,description,createdDateTime,lastModifiedDateTime&$expand=assignments";
-    let plain = "/deviceManagement/deviceCompliancePolicies?$select=id,displayName,description,createdDateTime,lastModifiedDateTime";
-    let rows = match list_named(access_token, expanded).await {
-        Ok(rows) => rows,
-        Err(_) => match list_named(access_token, fallback).await {
-            Ok(rows) => rows,
-            Err(_) => list_named(access_token, plain).await?,
-        },
-    };
+    let rows = list_with_assignments(
+        access_token,
+        "/deviceManagement/deviceCompliancePolicies?$select=id,displayName,description,createdDateTime,lastModifiedDateTime",
+    )
+    .await?;
     let mut items: Vec<_> = rows
         .into_iter()
         .filter_map(as_policy)
@@ -763,9 +803,9 @@ pub async fn fetch_group_policy_configurations(
 pub async fn fetch_device_configurations(
     access_token: &str,
 ) -> Result<InventoryList<CatalogPolicySummary>, GraphError> {
-    let rows = list_named(
+    let rows = list_with_assignments(
         access_token,
-        "/deviceManagement/deviceConfigurations?$select=id,displayName,description,createdDateTime,lastModifiedDateTime,isAssigned",
+        "/deviceManagement/deviceConfigurations?$select=id,displayName,description,createdDateTime,lastModifiedDateTime",
     )
     .await?;
     let mut items: Vec<_> = rows.into_iter().filter_map(as_policy).collect();

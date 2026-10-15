@@ -41,6 +41,7 @@ import {
   type CatalogPolicySortKey,
 } from "../lib/listSelection";
 import { hrefWithParam, navigate, type AppRoute } from "../lib/route";
+import type { SearchSource } from "../lib/globalSearch";
 import { useWriteGate, WriteActionButton } from "../lib/readOnly";
 import {
   homogeneousBulkAssignKind,
@@ -136,6 +137,10 @@ import { DevicesList } from "./DevicesList";
 import { DeviceDetailView, type DeviceDetailCacheEntry } from "./DeviceDetailView";
 import { SettingsSearchView } from "./SettingsSearchView";
 import { SettingsCatalogWorkbench } from "./SettingsCatalogWorkbench";
+import { AssignmentWhatIf } from "./workbench/AssignmentWhatIf";
+import { AutopilotScriptPanel } from "./workbench/AutopilotScriptPanel";
+import { GroupBuilderView } from "./workbench/GroupBuilderView";
+import { MdmUserScopePanel } from "./workbench/MdmUserScopePanel";
 import { TenantOverview } from "./TenantOverview";
 import { WriteActivityView } from "./WriteActivityView";
 import { EnvironmentReportView } from "./EnvironmentReportView";
@@ -144,10 +149,17 @@ import { GetStartedReadinessView } from "./GetStartedReadinessView";
 import { GetStartedLapsView } from "./GetStartedLapsView";
 import { LocalCatalogView } from "./LocalCatalogView";
 import { PacksKitsView } from "./PacksKitsView";
+import { PacksLibrary } from "./packs/PacksLibrary";
+import { PackDriftView } from "./packs/PackDriftView";
 import { GraphObjectInspector } from "./workbench/GraphObjectInspector";
-import { PageHeader, SignalCard } from "./ui/PageChrome";
+import { PageHeader } from "./ui/PageChrome";
 import { CreateCompliancePolicyDialog } from "./workbench/CreateCompliancePolicyDialog";
 import { CreateStoreAppDialog } from "./workbench/CreateStoreAppDialog";
+import { CreateWindowsUpdateRingDialog } from "./workbench/CreateWindowsUpdateRingDialog";
+import { CreateFeatureUpdateProfileDialog } from "./workbench/CreateFeatureUpdateProfileDialog";
+import { RingActionDialog, ringChannelLabel } from "./workbench/RingActionDialog";
+import type { RingAction } from "../lib/tauri";
+import { requestObjectRefresh } from "../lib/inspectorCache";
 import { CreateEnrollmentRestrictionDialog } from "./workbench/CreateEnrollmentRestrictionDialog";
 import { CreateEnrollmentLimitDialog } from "./workbench/CreateEnrollmentLimitDialog";
 import { CreateAutopilotProfileDialog } from "./workbench/CreateAutopilotProfileDialog";
@@ -211,6 +223,7 @@ export function IntuneWorkspace({
   onRefreshDevices,
   clientContainer = null,
   onRefreshClientContainer,
+  onSearchSourcesChange,
 }: {
   route: AppRoute;
   glance: TenantGlance | null;
@@ -227,6 +240,8 @@ export function IntuneWorkspace({
   onRefreshDevices: () => void;
   clientContainer?: import("../types/clientContainer").ClientContainerStatus | null;
   onRefreshClientContainer?: () => void;
+  /** Reports the tenant objects the titlebar search can match. */
+  onSearchSourcesChange?: (sources: SearchSource[]) => void;
 }) {
   const { pathname, search } = route;
   const platform = platformFromSearchParam(search.get("platform"));
@@ -266,49 +281,136 @@ export function IntuneWorkspace({
     pathname === "/intune/apps/lob";
   const mobile = useInventory(loadMobile, signedIn && appsInventory, signedIn);
   const store = useInventory(loadStore, signedIn && pathname === "/intune/apps/store", signedIn);
-  const catalog = useInventory(
-    loadCatalog,
-    signedIn &&
-      (pathname.startsWith("/intune/policies") ||
-        pathname.startsWith("/intune/endpoint-security") ||
-        pathname === "/intune/packs"),
-    signedIn,
-  );
-  const compliance = useInventory(
-    loadCompliance,
-    signedIn && pathname.includes("compliance"),
-    signedIn,
-  );
+  // Searchable inventories load once the session starts (not per route) so the
+  // titlebar search can match them anywhere. useInventory caches them for an
+  // hour, so this costs one fetch per session rather than one per visit.
+  const catalog = useInventory(loadCatalog, signedIn, signedIn);
+  const compliance = useInventory(loadCompliance, signedIn, signedIn);
   const admx = useInventory(loadAdmx, signedIn && pathname.includes("admx"), signedIn);
   const deviceConfig = useInventory(
     loadDeviceConfig,
     signedIn && pathname.includes("device-configuration"),
     signedIn,
   );
-  const scripts = useInventory(
-    loadScripts,
-    signedIn &&
-      (pathname.includes("/scripts") ||
-        pathname.includes("/remediations") ||
-        pathname.includes("/devices/compliance")),
-    signedIn,
-  );
-  const autopilotDevices = useInventory(
-    loadAutopilotDevices,
-    signedIn && pathname.startsWith(ENROLLMENT_AUTOPILOT_DEVICES_PATH),
-    signedIn,
-  );
-  const autopilotProfiles = useInventory(
-    loadAutopilotProfiles,
-    signedIn && pathname.startsWith(ENROLLMENT_AUTOPILOT_PROFILES_PATH),
-    signedIn,
-  );
-  const windowsUpdate = useInventory(
-    loadWu,
-    signedIn && pathname.startsWith("/intune/windows-update"),
-    signedIn,
-  );
-  const mam = useInventory(loadMam, signedIn && pathname.includes("protection"), signedIn);
+  const scripts = useInventory(loadScripts, signedIn, signedIn);
+  const autopilotDevices = useInventory(loadAutopilotDevices, signedIn, signedIn);
+  const autopilotProfiles = useInventory(loadAutopilotProfiles, signedIn, signedIn);
+  const windowsUpdate = useInventory(loadWu, signedIn, signedIn);
+  const mam = useInventory(loadMam, signedIn, signedIn);
+
+  const searchSources = useMemo<SearchSource[]>(() => {
+    const sources: SearchSource[] = [
+      {
+        group: "Devices",
+        tokens: ["type:device"],
+        href: (id) => hrefWithParam("/intune/devices/all", new URLSearchParams(), "device", id),
+        rows: devices.map((device) => ({
+          id: device.id,
+          title: device.deviceName || "Untitled device",
+          meta: [device.operatingSystem, device.complianceState].filter(Boolean).join(" · ") || null,
+        })),
+      },
+      {
+        group: "Policies",
+        tokens: ["type:policy", "type:settings", "type:catalog"],
+        href: (id) =>
+          hrefWithParam("/intune/policies/settings-catalog", new URLSearchParams(), "policy", id),
+        rows: catalog.items.map((policy) => ({
+          id: policy.id,
+          title: policy.name,
+          meta: policy.platforms ?? null,
+        })),
+      },
+      {
+        group: "Compliance",
+        tokens: ["type:compliance", "type:policy"],
+        href: (id) =>
+          hrefWithParam("/intune/policies/compliance", new URLSearchParams(), "policy", id),
+        rows: compliance.items.map((policy) => ({
+          id: policy.id,
+          title: policy.name,
+          meta: policy.platforms ?? null,
+        })),
+      },
+      {
+        group: "Apps",
+        tokens: ["type:app", "type:application"],
+        href: (id) => hrefWithParam("/intune/apps/tenant", new URLSearchParams(), "app", id),
+        rows: mobile.items.map((app) => ({
+          id: app.id,
+          title: app.displayName,
+          meta: [app.appTypeLabel ?? app.kind, app.platform].filter(Boolean).join(" · ") || null,
+        })),
+      },
+      {
+        group: "Scripts",
+        tokens: ["type:script", "type:remediation"],
+        href: (id) => hrefWithParam("/intune/devices/scripts", new URLSearchParams(), "script", id),
+        rows: scripts.items.map((script) => ({
+          id: script.id,
+          title: script.displayName,
+          meta: script.kind ?? null,
+        })),
+      },
+      {
+        group: "Autopilot devices",
+        tokens: ["type:autopilot", "type:device"],
+        href: (id) =>
+          hrefWithParam(ENROLLMENT_AUTOPILOT_DEVICES_PATH, new URLSearchParams(), "device", id),
+        rows: autopilotDevices.items.map((device) => ({
+          id: device.id,
+          title: device.serialNumber || device.id,
+          meta: device.model ?? null,
+        })),
+      },
+      {
+        group: "Autopilot profiles",
+        tokens: ["type:autopilot", "type:profile"],
+        href: (id) =>
+          hrefWithParam(ENROLLMENT_AUTOPILOT_PROFILES_PATH, new URLSearchParams(), "profile", id),
+        rows: autopilotProfiles.items.map((profile) => ({
+          id: profile.id,
+          title: profile.displayName,
+          meta: profile.deviceJoinType ?? null,
+        })),
+      },
+      {
+        group: "Windows Update",
+        tokens: ["type:update", "type:policy"],
+        href: (id) => hrefWithParam("/intune/windows-update/update-rings", new URLSearchParams(), "policy", id),
+        rows: windowsUpdate.items.map((policy) => ({
+          id: policy.id,
+          title: policy.name,
+          meta: policy.family ?? null,
+        })),
+      },
+      {
+        group: "App protection",
+        tokens: ["type:protection", "type:policy"],
+        href: (id) => hrefWithParam("/intune/apps/protection", new URLSearchParams(), "policy", id),
+        rows: mam.items.map((policy) => ({
+          id: policy.id,
+          title: policy.displayName,
+          meta: policy.odataType ?? null,
+        })),
+      },
+    ];
+    return sources.filter((source) => source.rows.length > 0);
+  }, [
+    autopilotDevices.items,
+    autopilotProfiles.items,
+    catalog.items,
+    compliance.items,
+    devices,
+    mam.items,
+    mobile.items,
+    scripts.items,
+    windowsUpdate.items,
+  ]);
+
+  useEffect(() => {
+    onSearchSourcesChange?.(searchSources);
+  }, [onSearchSourcesChange, searchSources]);
 
   if (pathname === "/intune" || pathname === "/intune/") {
     return (
@@ -324,6 +426,58 @@ export function IntuneWorkspace({
 
   if (pathname === "/intune/activity") {
     return <WriteActivityView pathname={pathname} search={search} />;
+  }
+
+  if (pathname === "/intune/enrollment/windows/automatic-enrollment") {
+    return (
+      <div className="stack">
+        <PageHeader
+          eyebrow="Enrollment · Windows"
+          title="Automatic enrollment"
+          description="Tenant-wide Windows MDM automatic enrollment — the user scope that decides which users enrol when they sign in, plus the MDM service URLs."
+        />
+        <MdmUserScopePanel />
+      </div>
+    );
+  }
+
+  if (pathname === "/intune/groups") {
+    return (
+      <div className="stack">
+        <PageHeader
+          eyebrow="Manage"
+          title="Groups"
+          description="Every Entra group in this tenant, how each one gets its members, and who is currently in it."
+        />
+        <GroupBuilderView />
+      </div>
+    );
+  }
+
+  if (pathname === "/intune/tools/autopilot-script") {
+    return (
+      <div className="stack">
+        <PageHeader
+          eyebrow="Tools"
+          title="Autopilot enrolment script"
+          description="Generate a complete Windows Autopilot enrolment script for a device: hardware hash collection, online registration or CSV export, group tag, and optional Entra group membership."
+        />
+        <AutopilotScriptPanel />
+      </div>
+    );
+  }
+
+  if (pathname === "/intune/what-if") {
+    return (
+      <div className="stack">
+        <PageHeader
+          eyebrow="Workspace"
+          title="What if"
+          description="Pick a device or user, resolve the groups it belongs to, and see which tenant objects would apply."
+        />
+        <AssignmentWhatIf devices={devices} />
+      </div>
+    );
   }
 
   if (pathname === "/intune/client" || pathname === "/intune/client/restore") {
@@ -596,14 +750,15 @@ export function IntuneWorkspace({
 
   if (pathname === "/intune/policies") {
     return (
-      <PoliciesHub
-        items={catalog.items}
+      <SettingsCatalogWorkbench
+        platform={platform}
+        policies={catalog.items}
         loading={catalog.loading}
         error={catalog.error}
         truncated={catalog.truncated}
-        platform={platform}
         selectedId={search.get("policy")}
-        onSelect={(id) => navigate(hrefWithParam(pathname, search, "policy", id))}
+        search={search}
+        pathname={pathname}
         onRefresh={() => void catalog.reload()}
       />
     );
@@ -612,7 +767,6 @@ export function IntuneWorkspace({
   if (pathname === "/intune/policies/settings-catalog" || pathname === "/intune/policies/browse") {
     return (
       <SettingsCatalogWorkbench
-        tab={pathname.endsWith("browse") ? "browse" : "tenant"}
         platform={platform}
         policies={catalog.items}
         loading={catalog.loading}
@@ -808,6 +962,14 @@ export function IntuneWorkspace({
         />
       );
     }
+    const packSourceId = search.get("pack");
+    if (packSourceId) {
+      return <PackDriftView key={packSourceId} sourceId={packSourceId} signedIn={signedIn} />;
+    }
+    // The item-level list (import single items, combine & merge) stays reachable from the library.
+    if (search.get("view") !== "items" && !search.get("check")) {
+      return <PacksLibrary signedIn={signedIn} organizationName={glance?.organizationName ?? null} />;
+    }
     return (
       <PolicyPacksWorkbench
         selectedId={search.get("check")}
@@ -993,6 +1155,9 @@ function WindowsUpdateWorkbench({
   onRefresh: () => void;
 }) {
   const [overlay, setOverlay] = useState<WindowsUpdatePolicy | null>(null);
+  const [creating, setCreating] = useState<"rings" | "feature" | null>(null);
+  const [ringAction, setRingAction] = useState<RingAction | null>(null);
+  const showRingState = family === null || family === "rings";
   const listed = useMemo(() => withTransientItem(items, overlay), [items, overlay]);
   const selectPolicy = (id: string) => navigate(hrefWithParam(pathname, search, "policy", id || null));
   const packImport = useNativeJsonImport({
@@ -1024,6 +1189,33 @@ function WindowsUpdateWorkbench({
       Import
     </WriteActionButton>
   );
+  // Rings and feature updates have a create path; quality and driver profiles
+  // stay import-only for now.
+  const canCreateRing = family === null || family === "rings";
+  const canCreateFeature = family === null || family === "feature";
+  const createButton =
+    canCreateRing || canCreateFeature ? (
+      <>
+        {canCreateRing ? (
+          <WriteActionButton
+            type="button"
+            className="axis-btn axis-btn-primary"
+            onClick={() => setCreating("rings")}
+          >
+            Create ring
+          </WriteActionButton>
+        ) : null}
+        {canCreateFeature ? (
+          <WriteActionButton
+            type="button"
+            className={canCreateRing ? "axis-btn" : "axis-btn axis-btn-primary"}
+            onClick={() => setCreating("feature")}
+          >
+            Create feature update
+          </WriteActionButton>
+        ) : null}
+      </>
+    ) : null;
   const { sort, toggle: toggleSort } = useColumnSort<"name" | "family" | "modified">("name");
   const sorted = useMemo(
     () =>
@@ -1061,6 +1253,33 @@ function WindowsUpdateWorkbench({
       }}
     />
   );
+  // Pause, resume, extend, and uninstall act on the checked rings only.
+  const checkedRings = checkedProfiles
+    .filter((item) => item.family === "rings")
+    .map((item) => ({ id: item.id, name: item.name, ringState: item.ringState }));
+  const ringActions =
+    checkedRings.length > 0 ? (
+      <>
+        {(
+          [
+            ["pause", "Pause"],
+            ["resume", "Resume"],
+            ["extend", "Extend pause"],
+            ["uninstall", "Uninstall"],
+          ] as const
+        ).map(([action, label]) => (
+          <WriteActionButton
+            key={action}
+            type="button"
+            className={action === "uninstall" ? "axis-btn axis-btn-danger" : "axis-btn"}
+            title={`${label} quality or feature updates on ${checkedRings.length} checked ring${checkedRings.length === 1 ? "" : "s"}`}
+            onClick={() => setRingAction(action)}
+          >
+            {label}
+          </WriteActionButton>
+        ))}
+      </>
+    ) : null;
   const bulkBar = (
     <BulkAssignBar
       count={checkedProfiles.length}
@@ -1068,7 +1287,12 @@ function WindowsUpdateWorkbench({
       onClear={selection.clear}
       editDisabled={bulkKind == null}
       editHint={bulkKind == null ? "Select profiles from one update family" : undefined}
-      extra={bulkDelete}
+      extra={
+        <>
+          {ringActions}
+          {bulkDelete}
+        </>
+      }
     />
   );
   const selected = listed.find((item) => item.id === selectedId);
@@ -1113,14 +1337,25 @@ function WindowsUpdateWorkbench({
               id: item.id,
               title: item.name,
               kind: `windowsUpdate:${item.family}`,
-              meta: `${item.family} · ${formatRelative(item.lastModifiedDateTime)}`,
+              meta: [
+                item.family,
+                item.ringState?.quality.paused || item.ringState?.quality.rollingBack
+                  ? `Quality ${ringChannelLabel(item.ringState?.quality).toLowerCase()}`
+                  : null,
+                item.ringState?.feature.paused || item.ringState?.feature.rollingBack
+                  ? `Feature ${ringChannelLabel(item.ringState?.feature).toLowerCase()}`
+                  : null,
+                formatRelative(item.lastModifiedDateTime),
+              ]
+                .filter(Boolean)
+                .join(" · "),
             }))}
             selectedId={selected.id}
             onSelect={(id) => navigate(hrefWithParam(pathname, search, "policy", id))}
             onRefresh={onRefresh}
             loading={loading}
             error={error}
-            actions={importButton}
+            actions={createButton ? <>{createButton}{importButton}</> : importButton}
             checkedIds={selection.checkedIds}
             onToggleChecked={selection.toggle}
             allSelected={selection.allSelected}
@@ -1140,6 +1375,7 @@ function WindowsUpdateWorkbench({
               refreshing={loading}
               actions={
                 <>
+                  {createButton}
                   {importButton}
                   <button type="button" className="axis-btn" onClick={onRefresh} disabled={loading}>
                     {loading ? "Refreshing…" : "Refresh"}
@@ -1164,6 +1400,12 @@ function WindowsUpdateWorkbench({
                     </th>
                     <SortableTh column="name" label="Name" sort={sort} onSort={toggleSort} />
                     <SortableTh column="family" label="Family" sort={sort} onSort={toggleSort} />
+                    {showRingState ? (
+                      <>
+                        <th>Quality</th>
+                        <th>Feature</th>
+                      </>
+                    ) : null}
                     <SortableTh column="modified" label="Modified" sort={sort} onSort={toggleSort} />
                   </tr>
                 </thead>
@@ -1184,6 +1426,16 @@ function WindowsUpdateWorkbench({
                       </td>
                       <td>{item.name}</td>
                       <td className="muted">{item.family}</td>
+                      {showRingState ? (
+                        <>
+                          <td className={item.ringState?.quality.paused || item.ringState?.quality.rollingBack ? "ring-state is-held" : "ring-state muted"}>
+                            {ringChannelLabel(item.ringState?.quality)}
+                          </td>
+                          <td className={item.ringState?.feature.paused || item.ringState?.feature.rollingBack ? "ring-state is-held" : "ring-state muted"}>
+                            {ringChannelLabel(item.ringState?.feature)}
+                          </td>
+                        </>
+                      ) : null}
                       <td className="muted">{formatRelative(item.lastModifiedDateTime)}</td>
                     </tr>
                   ))}
@@ -1217,7 +1469,7 @@ function WindowsUpdateWorkbench({
                 kind={`windowsUpdate:${selected.family}`}
                 id={selected.id}
                 fallbackTitle={selected.name}
-                incomplete="Ring/profile editors are not ported. The full Graph profile and assignments are shown."
+                incomplete="Quality and driver profiles are read-only here. Rings and feature update deployments are editable on the Overview tab."
                 onClose={closeActive}
               />
             ) : null
@@ -1226,6 +1478,35 @@ function WindowsUpdateWorkbench({
       }
     />
     {packImport.dialog}
+    <CreateWindowsUpdateRingDialog
+      open={creating === "rings"}
+      onClose={() => setCreating(null)}
+      onCreated={(created) => {
+        setCreating(null);
+        setOverlay({ id: created.id, family: "rings", name: created.displayName });
+        selectPolicy(created.id);
+        onRefresh();
+      }}
+    />
+    <RingActionDialog
+      action={ringAction}
+      rings={checkedRings}
+      onClose={() => setRingAction(null)}
+      onApplied={() => {
+        onRefresh();
+        for (const ring of checkedRings) requestObjectRefresh(ring.id);
+      }}
+    />
+    <CreateFeatureUpdateProfileDialog
+      open={creating === "feature"}
+      onClose={() => setCreating(null)}
+      onCreated={(created) => {
+        setCreating(null);
+        setOverlay({ id: created.id, family: "feature", name: created.displayName });
+        selectPolicy(created.id);
+        onRefresh();
+      }}
+    />
     <AssignmentsDialog
       open={showBulk}
       kind={bulkKind ?? "windowsUpdate:rings"}
@@ -1439,297 +1720,6 @@ function AppProtectionWorkbench({
         </InspectorWithDocumentTabs>
       }
     />
-  );
-}
-
-function PoliciesHub({
-  items,
-  loading,
-  error,
-  truncated,
-  platform,
-  selectedId,
-  onSelect,
-  onRefresh,
-}: {
-  items: CatalogPolicySummary[];
-  loading: boolean;
-  error: string | null;
-  truncated?: boolean;
-  platform: ReturnType<typeof platformFromSearchParam>;
-  selectedId: string | null;
-  onSelect: (id: string) => void;
-  onRefresh: () => void;
-}) {
-  const { query, setQuery, assignedFilter, setAssignedFilter, platformFilter, setPlatformFilter } =
-    useListSearchState();
-  const { sort, toggle: toggleSort } = useColumnSort<CatalogPolicySortKey>("name");
-  const [overlay, setOverlay] = useState<CatalogPolicySummary | null>(null);
-  const listed = useMemo(() => withTransientItem(items, overlay), [items, overlay]);
-  const scoped = platform
-    ? listed.filter((item) => matchesIntunePlatform(item.platforms, platform))
-    : listed;
-  const platformOptions = useMemo(
-    () => platformFilterOptionsFromList(scoped.map((item) => item.platforms)),
-    [scoped],
-  );
-  const filtered = useMemo(() => {
-    const rows = scoped.filter((item) =>
-      matchesCatalogPolicyFilters(item, query, assignedFilter, platformFilter),
-    );
-    return sortRows(rows, sort.dir, (a, b) => compareCatalogPolicy(a, b, sort.key));
-  }, [assignedFilter, platformFilter, query, scoped, sort]);
-  const selected =
-    filtered.find((item) => item.id === selectedId) ?? scoped.find((item) => item.id === selectedId);
-  const assigned = scoped.filter((item) => item.isAssigned).length;
-  const filteredIds = useMemo(() => filtered.map((item) => item.id), [filtered]);
-  const selection = useCheckedIds(filteredIds);
-  const checkedPolicies = filtered.filter((item) => selection.checkedIds.has(item.id));
-  const bulkPolicies = filtered.filter((item) => selection.bulkTargetIds.includes(item.id));
-  const showBulk = selection.bulkEditorOpen && bulkPolicies.length > 0;
-  const bulkDelete = (
-    <BulkListActions
-      targets={checkedPolicies.map((item) => ({
-        id: item.id,
-        title: item.name,
-        kind: "configurationPolicy",
-      }))}
-      onDeleted={(deleted) => {
-        if (deleted.some((target) => target.id === overlay?.id)) setOverlay(null);
-        if (deleted.some((target) => target.id === selectedId)) onSelect("");
-        selection.clear();
-        onRefresh();
-      }}
-    />
-  );
-  const inspectorOpen = Boolean(selected);
-  const titleFor = useCallback(
-    (id: string) =>
-      scoped.find((item) => item.id === id)?.name ??
-      items.find((item) => item.id === id)?.name ??
-      id,
-    [items, scoped],
-  );
-  const catalogImport = useNativeJsonImport({
-    title: "Settings Catalog",
-    description:
-      "Import Axis pack JSON (file or paste). Settings Catalog policies are created unassigned in this tenant.",
-    acceptKinds: ["catalogPolicy"],
-    onImported: (created) => {
-      setOverlay({
-        id: created.id,
-        name: created.displayName,
-        isAssigned: false,
-      });
-      window.setTimeout(() => onRefresh(), 0);
-    },
-  });
-  const importButton = (
-    <WriteActionButton
-      type="button"
-      className="axis-btn"
-      onClick={() => catalogImport.openDialog()}
-    >
-      Import
-    </WriteActionButton>
-  );
-  return (
-    <>
-    <WorkspaceSplit
-      inspectorPrimary={inspectorOpen}
-      master={
-        <ObjectListMenuHost
-          onDuplicated={(created) => {
-            setOverlay({ id: created.id, name: created.title, isAssigned: false });
-            onSelect(created.id);
-            onRefresh();
-          }}
-          onMetadataUpdated={(updated) => {
-            setOverlay({
-              id: updated.id,
-              name: updated.title,
-              description: updated.description,
-              isAssigned: selected?.isAssigned,
-            });
-            onRefresh();
-          }}
-          onDeleted={(target) => {
-            if (overlay?.id === target.id) setOverlay(null);
-            if (selectedId === target.id) onSelect("");
-            onRefresh();
-          }}
-        >
-        {selected ? (
-          <div className="stack">
-            <BulkAssignBar
-              count={checkedPolicies.length}
-              onEdit={selection.openBulkEditor}
-              onClear={selection.clear}
-              extra={bulkDelete}
-            />
-            <LoadedInventoryBanner truncated={truncated} />
-            <CompactObjectList
-              title="Policies"
-              description="Loaded catalog policies. Select a row to edit settings on this policy."
-              objectKind="configurationPolicy"
-              items={filtered.map((item) => ({
-                id: item.id,
-                title: item.name,
-                meta: `${item.platforms ?? "—"} · ${item.settingCount ?? 0} settings`,
-              }))}
-              selectedId={selected.id}
-              onSelect={onSelect}
-              onRefresh={onRefresh}
-              loading={loading}
-              error={error}
-              actions={importButton}
-              checkedIds={selection.checkedIds}
-              onToggleChecked={selection.toggle}
-              query={query}
-              onQueryChange={setQuery}
-              assignedFilter={assignedFilter}
-              onAssignedFilterChange={setAssignedFilter}
-              platformFilter={platformFilter}
-              onPlatformFilterChange={setPlatformFilter}
-              platformOptions={platformOptions}
-              showPlatformFilter
-              countLabel={`${filtered.length} of ${scoped.length}`}
-              searchPlaceholder="Name, platform, assigned…"
-              allSelected={selection.allSelected}
-              onToggleAll={selection.toggleAll}
-              selectAllIndeterminate={checkedPolicies.length > 0 && !selection.allSelected}
-              selectAllDisabled={filtered.length === 0}
-              selectAllLabel="Select all filtered policies"
-            />
-          </div>
-        ) : (
-          <div className="stack">
-            <PageHeader
-              eyebrow="Policies"
-              title={platform ? `${platform} policies` : "Policies"}
-              description="Select a catalog row to edit its settings here; checkboxes bulk-edit assignments."
-              onRefresh={onRefresh}
-              refreshing={loading}
-              actions={
-                <div className="device-actions">
-                  {importButton}
-                  <button type="button" className="axis-btn" onClick={onRefresh} disabled={loading}>
-                    {loading ? "Refreshing…" : "Refresh"}
-                  </button>
-                </div>
-              }
-            />
-            {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
-            <LoadedInventoryBanner truncated={truncated} />
-            <div className="overview-grid-6">
-              <SignalCard label="Catalog policies" value={loading ? "…" : scoped.length} />
-              <SignalCard label="Assigned" value={assigned} tone="good" />
-              <SignalCard label="Unassigned" value={scoped.length - assigned} tone="warn" />
-            </div>
-            <BulkAssignBar
-              count={checkedPolicies.length}
-              onEdit={selection.openBulkEditor}
-              onClear={selection.clear}
-              extra={bulkDelete}
-            />
-            <SearchableTable
-              query={query}
-              onQueryChange={setQuery}
-              assignedFilter={assignedFilter}
-              onAssignedFilterChange={setAssignedFilter}
-              platformFilter={platformFilter}
-              onPlatformFilterChange={setPlatformFilter}
-              platformOptions={platformOptions}
-              showPlatformFilter
-              countLabel={`${filtered.length} of ${scoped.length}`}
-              placeholder="Name, platform, assigned…"
-            >
-              <table className="axis-table">
-                <thead>
-                  <tr>
-                    <th className="axis-table-check">
-                      <SelectCheckbox
-                        checked={selection.allSelected}
-                        indeterminate={checkedPolicies.length > 0 && !selection.allSelected}
-                        disabled={filtered.length === 0}
-                        label="Select all filtered policies"
-                        onChange={selection.toggleAll}
-                      />
-                    </th>
-                    <SortableTh column="name" label="Name" sort={sort} onSort={toggleSort} />
-                    <SortableTh column="platform" label="Platform" sort={sort} onSort={toggleSort} />
-                    <SortableTh column="settings" label="Settings" sort={sort} onSort={toggleSort} />
-                    <SortableTh column="assigned" label="Assigned" sort={sort} onSort={toggleSort} />
-                    <SortableTh column="modified" label="Last modified" sort={sort} onSort={toggleSort} />
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.map((item) => (
-                    <tr
-                      key={item.id}
-                      className={`row-link${selectedId === item.id ? " selected" : ""}`}
-                      onClick={() => onSelect(item.id)}
-                      {...listTargetProps(item.id, item.name, "configurationPolicy")}
-                    >
-                      <td className="axis-table-check">
-                        <SelectCheckbox
-                          checked={selection.checkedIds.has(item.id)}
-                          label={`Select ${item.name}`}
-                          onChange={() => selection.toggle(item.id)}
-                        />
-                      </td>
-                      <td>{item.name}</td>
-                      <td className="muted">{item.platforms ?? "—"}</td>
-                      <td className="muted">{item.settingCount ?? "—"}</td>
-                      <td className="muted">{item.isAssigned ? "Yes" : "No"}</td>
-                      <td className="muted">{formatRelative(item.lastModifiedDateTime)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {!loading && filtered.length === 0 ? (
-                <p className="muted" style={{ padding: "1rem" }}>
-                  No policies.
-                </p>
-              ) : null}
-            </SearchableTable>
-          </div>
-        )}
-        </ObjectListMenuHost>
-      }
-      inspector={
-        <InspectorWithDocumentTabs
-          selectedId={selected?.id ?? null}
-          titleFor={titleFor}
-          onSelect={onSelect}
-          onClear={() => onSelect("")}
-        >
-          {({ closeActive }) =>
-            selected ? (
-              <GraphObjectInspector
-                key={selected.id}
-                kind="configurationPolicy"
-                id={selected.id}
-                fallbackTitle={selected.name}
-                onClose={closeActive}
-              />
-            ) : null
-          }
-        </InspectorWithDocumentTabs>
-      }
-    />
-    <AssignmentsDialog
-      open={showBulk}
-      kind="configurationPolicy"
-      policies={bulkPolicies}
-      onClose={selection.closeBulkEditor}
-      onSaved={() => {
-        onRefresh();
-        selection.clear();
-      }}
-    />
-    {catalogImport.dialog}
-    </>
   );
 }
 
@@ -4069,9 +4059,13 @@ function PolicyPacksWorkbench({
         ) : (
           <div className="stack">
             <PageHeader
-              eyebrow="Manage"
-              title="Policy Packs"
-              description="GitHub or local packs in kit shape (axis-pack.json) or flat JSON. Import creates objects in this tenant. Open a device to grade a policy set from a pack."
+              eyebrow={
+                <button type="button" className="axis-link packs-back" onClick={() => navigate("/intune/packs")}>
+                  ← Policy Packs
+                </button>
+              }
+              title="All pack items"
+              description="GitHub or local packs in kit shape (axis-pack.json) or flat packs. Import creates objects in this tenant. Open a device to grade a policy set from a pack."
               actions={
                 <div className="baseline-actions">
                   <WriteActionButton
@@ -4169,7 +4163,7 @@ function PolicyPacksWorkbench({
                   <p className="baseline-pack-kicker">Policy packs</p>
                   <p className="muted baseline-sources-hint">
                     Packs are read-only listings of policy files. Kit packs read{" "}
-                    <code>axis-pack.json</code> at the store root; flat JSON lists a folder of policy
+                    <code>axis-pack.json</code> at the store root; flat packs list a folder of policy
                     files.{" "}
                     <button
                       type="button"
@@ -4736,7 +4730,7 @@ function TemplateSourceDialog({
               className={`axis-seg-btn${storeKind === "flatJson" ? " is-active" : ""}`}
               onClick={() => setStoreKind("flatJson")}
             >
-              Flat JSON
+              Flat pack
             </button>
           </div>
           <p className="muted baseline-source-kind-hint">

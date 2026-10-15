@@ -182,7 +182,12 @@ fn spec_for(kind: &str, id: &str) -> Result<KindSpec, GraphError> {
             decode_scripts: true,
         },
         "autopilotDevice" => KindSpec {
-            object_path: format!("/deviceManagement/windowsAutopilotDeviceIdentities/{enc}"),
+            // The portal expands the deployment profiles; without it Graph
+            // returns a reduced projection where deploymentProfileAssignmentStatus
+            // is "unknown".
+            object_path: format!(
+                "/deviceManagement/windowsAutopilotDeviceIdentities/{enc}?$expand=deploymentProfile,intendedDeploymentProfile"
+            ),
             assignments_path: None,
             settings_path: None,
             extra_paths: vec![],
@@ -233,7 +238,16 @@ fn spec_for(kind: &str, id: &str) -> Result<KindSpec, GraphError> {
             extra_paths: vec![],
             decode_scripts: false,
         },
-        other => return Err(unknown_kind(other)),
+        other => match crate::review::collection_path(other) {
+            Some(collection) => KindSpec {
+                object_path: format!("{collection}/{enc}"),
+                assignments_path: None,
+                settings_path: None,
+                extra_paths: vec![],
+                decode_scripts: false,
+            },
+            None => return Err(unknown_kind(other)),
+        },
     })
 }
 

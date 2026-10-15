@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { BooleanToggle } from "./BooleanToggle";
 import {
+  assignmentFingerprint,
   assignmentTargetLabel,
   graphHasAllDevicesTarget,
   graphHasAllUsersTarget,
@@ -33,6 +34,11 @@ import {
 import { READ_ONLY_WRITE_HINT, useReadOnly } from "../../lib/readOnly";
 import { CreateEntraGroupPanel } from "./CreateEntraGroupPanel";
 import { IncludeExcludeToggle } from "./IncludeExcludeToggle";
+import {
+  AssignmentReviewDialog,
+  assignmentChangeNeedsReview,
+  diffAssignments,
+} from "./AssignmentReviewDialog";
 
 type AssignmentRow = AssignmentDraft & { key: string };
 
@@ -71,31 +77,6 @@ function draftsToRows(drafts: AssignmentDraft[]): AssignmentRow[] {
     ...draft,
     key: rowKey(draft.targetKind, draft.groupId, draft.intent),
   }));
-}
-
-/** Graph-relevant assignment identity, ignoring display-only names/membership. */
-function assignmentFingerprint(drafts: AssignmentDraft[]): string {
-  return drafts
-    .map((draft) => {
-      const filterId = draft.filterId ?? "";
-      const filterMode = filterId ? (draft.filterMode ?? "include") : "";
-      const schedule = draft.runSchedule;
-      return [
-        draft.targetKind,
-        draft.groupId ?? "",
-        draft.intent ?? "",
-        filterId,
-        filterMode,
-        draft.runRemediationScript ?? "",
-        schedule?.kind ?? "",
-        schedule?.interval ?? "",
-        schedule?.time ?? "",
-        schedule?.useUtc ?? "",
-        schedule?.date ?? "",
-      ].join("\0");
-    })
-    .sort()
-    .join("\n");
 }
 
 function membershipLabel(kind?: GroupMembershipKind | null): string | null {
@@ -192,6 +173,11 @@ export function AssignmentsEditor({
   onDraftChangeRef.current = onDraftChange;
   const [rows, setRows] = useState<AssignmentRow[]>([]);
   const [baselineFingerprint, setBaselineFingerprint] = useState("");
+  const [baselineDrafts, setBaselineDrafts] = useState<AssignmentDraft[]>([]);
+  const [review, setReview] = useState<{
+    drafts: AssignmentDraft[];
+    baseline: AssignmentDraft[] | null;
+  } | null>(null);
   const [filters, setFilters] = useState<AssignmentFilter[]>([]);
   const [filtersError, setFiltersError] = useState<string | null>(null);
   const [filtersLoading, setFiltersLoading] = useState(true);
@@ -231,6 +217,7 @@ export function AssignmentsEditor({
         );
         setRows(nextRows);
         setBaselineFingerprint(assignmentFingerprint(nextRows));
+        setBaselineDrafts(nextRows);
         setFilters(response.filters);
         setFiltersError(response.filtersError);
         setWritable(response.capabilities.writable);
@@ -504,6 +491,20 @@ export function AssignmentsEditor({
     setSaveMessage(null);
   };
 
+  /** Bulk saves, and single saves that remove, rewrite, or broaden assignments, are reviewed first. */
+  function requestSave() {
+    const drafts: AssignmentDraft[] = rows.map(({ key: _key, ...draft }) => draft);
+    if (isBulk) {
+      setReview({ drafts, baseline: null });
+      return;
+    }
+    if (assignmentChangeNeedsReview(diffAssignments(baselineDrafts, drafts))) {
+      setReview({ drafts, baseline: baselineDrafts });
+      return;
+    }
+    void save();
+  }
+
   async function save() {
     setSaveBusy(true);
     setSaveError(null);
@@ -544,6 +545,7 @@ export function AssignmentsEditor({
         );
         if (okCount > 0) {
           setBaselineFingerprint(assignmentFingerprint(drafts));
+          setBaselineDrafts(drafts);
           onSaved?.();
         }
         return;
@@ -558,6 +560,7 @@ export function AssignmentsEditor({
             : "Cleared all assignments.",
       );
       setBaselineFingerprint(assignmentFingerprint(drafts));
+      setBaselineDrafts(drafts);
       onSaved?.();
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : "Save failed");
@@ -599,7 +602,7 @@ export function AssignmentsEditor({
             saveBlockedReason ??
             (dirty || isBulk ? undefined : "No assignment changes to save.")
           }
-          onClick={() => void save()}
+          onClick={requestSave}
         >
           {saveBusy
             ? "Saving…"
@@ -958,6 +961,22 @@ export function AssignmentsEditor({
         >
           Clear list
         </button>
+      ) : null}
+      {review ? (
+        <AssignmentReviewDialog
+          kind={kind}
+          objectOdataType={objectOdataType}
+          targets={resolvedTargets}
+          drafts={review.drafts}
+          baseline={review.baseline}
+          supportsIntent={supportsIntent}
+          supportsSchedule={supportsSchedule}
+          busy={saveBusy}
+          onCancel={() => setReview(null)}
+          onConfirm={() => {
+            void save().finally(() => setReview(null));
+          }}
+        />
       ) : null}
     </section>
   );

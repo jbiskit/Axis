@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   CatalogCategory,
   CatalogIndexState,
@@ -12,8 +12,10 @@ import {
   ancestorCategoryIds,
   bundleFromCategoryMap,
   buildSettingInstance,
+  catalogSettingSourceLabel,
   categoryBreadcrumb,
   childCatalogCategories,
+  collectConfiguredSettingIds,
   defaultDraftForSetting,
   draftValueSummary,
   instancesReadyForGraph,
@@ -26,6 +28,7 @@ import {
   addSettingsToPolicy,
   catalogIndexStatus,
   ensureCatalogIndex,
+  fetchGraphObjectDetail,
   listCatalogCategories,
   loadCategorySettings,
   pauseCatalogIndex,
@@ -33,8 +36,8 @@ import {
   createSettingsCatalogPolicy,
 } from "../lib/tauri";
 import { INTUNE_PLATFORM_LABELS } from "../lib/platforms";
-import { SettingDraftEditor } from "./workbench/SettingDraftEditor";
 import { SettingSearchHit } from "./workbench/SettingSearchHit";
+import { SettingConfigureDialog } from "./workbench/SettingConfigureDialog";
 
 type CartItem = {
   detail: CatalogSettingDetail;
@@ -174,13 +177,26 @@ export function BrowseCatalogPanel({
   const [settingCount, setSettingCount] = useState(0);
   const [loadingSettings, setLoadingSettings] = useState(false);
   const [settingFilter, setSettingFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState<
+    "all" | "configured" | "notConfigured" | "queued"
+  >("all");
+  const [configuredIds, setConfiguredIds] = useState<Set<string>>(() => new Set());
   const [activeId, setActiveId] = useState<string | null>(null);
   const [detail, setDetail] = useState<CatalogSettingDetail | null>(null);
   const [dependents, setDependents] = useState<Record<string, CatalogSettingDetail>>({});
   const [draft, setDraft] = useState<SettingValueDraft | null>(null);
+  const [configureOpen, setConfigureOpen] = useState(false);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [targetMode, setTargetMode] = useState<"new" | "existing">("new");
   const [targetPolicyId, setTargetPolicyId] = useState("");
+  const [policyFilter, setPolicyFilter] = useState("");
+  const [policyListOpen, setPolicyListOpen] = useState(false);
+  const [policyListRect, setPolicyListRect] = useState<{
+    left: number;
+    width: number;
+    bottom: number;
+  } | null>(null);
+  const policyFieldRef = useRef<HTMLDivElement | null>(null);
   const [newName, setNewName] = useState(`New ${platformLabel} catalog policy`);
   const [globalQuery, setGlobalQuery] = useState("");
   const [globalResults, setGlobalResults] = useState<CatalogSettingSummary[]>([]);
@@ -197,6 +213,58 @@ export function BrowseCatalogPanel({
     [policies, platform],
   );
 
+  const filteredPolicies = useMemo(() => {
+    const needle = policyFilter.trim().toLowerCase();
+    if (!needle) return freeformPolicies;
+    return freeformPolicies.filter((policy) => policy.name.toLowerCase().includes(needle));
+  }, [freeformPolicies, policyFilter]);
+
+  const selectedPolicy = freeformPolicies.find((policy) => policy.id === targetPolicyId) ?? null;
+
+  // "Configured" means already on the target policy, so load that policy's
+  // settings whenever the target changes.
+  useEffect(() => {
+    if (!targetPolicyId) {
+      setConfiguredIds(new Set());
+      return;
+    }
+    let cancelled = false;
+    void fetchGraphObjectDetail("configurationPolicy", targetPolicyId)
+      .then((response) => {
+        if (cancelled) return;
+        setConfiguredIds(collectConfiguredSettingIds(response.detail?.settings ?? []));
+      })
+      .catch(() => {
+        if (!cancelled) setConfiguredIds(new Set());
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [targetPolicyId]);
+
+  // The list is `position: fixed` so it floats over the catalog tree instead of
+  // being clipped by the footer. Anchor it to the field's viewport rect.
+  const positionPolicyList = useCallback(() => {
+    const rect = policyFieldRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    setPolicyListRect({
+      left: rect.left,
+      width: rect.width,
+      bottom: window.innerHeight - rect.top + 4,
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!policyListOpen) return;
+    positionPolicyList();
+    window.addEventListener("resize", positionPolicyList);
+    window.addEventListener("scroll", positionPolicyList, true);
+    return () => {
+      window.removeEventListener("resize", positionPolicyList);
+      window.removeEventListener("scroll", positionPolicyList, true);
+    };
+  }, [policyListOpen, positionPolicyList]);
+
   useEffect(() => {
     setFocusHandledFor(null);
     setNewName(`New ${INTUNE_PLATFORM_LABELS[platform]} catalog policy`);
@@ -208,6 +276,8 @@ export function BrowseCatalogPanel({
     setDetail(null);
     setDraft(null);
     setTargetPolicyId("");
+    setPolicyFilter("");
+    setPolicyListOpen(false);
   }, [platform]);
 
   useEffect(() => {
@@ -345,13 +415,26 @@ export function BrowseCatalogPanel({
 
   const filteredSettings = useMemo(() => {
     const q = settingFilter.trim().toLowerCase();
-    if (!q) return settings;
-    return settings.filter((setting) =>
-      `${setting.displayName} ${setting.description ?? ""} ${setting.id} ${setting.keywords.join(" ")}`
-        .toLowerCase()
-        .includes(q),
-    );
-  }, [settings, settingFilter]);
+    let rows = settings;
+    if (q) {
+      rows = rows.filter((setting) =>
+        `${setting.displayName} ${setting.description ?? ""} ${setting.id} ${setting.keywords.join(" ")}`
+          .toLowerCase()
+          .includes(q),
+      );
+    }
+    if (statusFilter === "queued") {
+      rows = rows.filter((setting) => cart.some((item) => item.detail.id === setting.id));
+    } else if (statusFilter === "configured") {
+      rows = rows.filter((setting) => configuredIds.has(setting.id));
+    } else if (statusFilter === "notConfigured") {
+      rows = rows.filter(
+        (setting) =>
+          !configuredIds.has(setting.id) && !cart.some((item) => item.detail.id === setting.id),
+      );
+    }
+    return rows;
+  }, [cart, configuredIds, settings, settingFilter, statusFilter]);
 
   function openSetting(setting: CatalogSettingDetail) {
     const bundled = bundleFromCategoryMap(setting.id, byId) ?? {
@@ -363,6 +446,7 @@ export function BrowseCatalogPanel({
     setDependents(bundled.dependents);
     const existing = cart.find((item) => item.detail.id === setting.id);
     setDraft(existing?.draft ?? defaultDraftForSetting(bundled.detail, bundled.dependents));
+    setConfigureOpen(true);
   }
 
   async function revealSetting(setting: CatalogSettingSummary) {
@@ -392,6 +476,7 @@ export function BrowseCatalogPanel({
       return next;
     });
     setMessage(`Queued “${detail.displayName}”.`);
+    setConfigureOpen(false);
   }
 
   async function applyCart() {
@@ -563,6 +648,30 @@ export function BrowseCatalogPanel({
                 onChange={(event) => setSettingFilter(event.target.value)}
               />
             ) : null}
+            {selectedCategory && globalQuery.trim().length < 2 ? (
+              <div className="catalog-filter-chips">
+                {(
+                  [
+                    ["all", "All"],
+                    ["configured", "Configured"],
+                    ["notConfigured", "Not configured"],
+                    ["queued", "Queued"],
+                  ] as const
+                ).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    className={`catalog-filter-chip${statusFilter === value ? " is-active" : ""}`}
+                    onClick={() => setStatusFilter(value)}
+                  >
+                    {label}
+                  </button>
+                ))}
+                <span className="catalog-filter-count">
+                  {filteredSettings.length} of {settings.length}
+                </span>
+              </div>
+            ) : null}
           </div>
           <div className="catalog-pane-body">
             {globalQuery.trim().length >= 2 ? (
@@ -590,6 +699,7 @@ export function BrowseCatalogPanel({
               <>
                 {filteredSettings.map((setting) => {
                   const queued = cart.some((item) => item.detail.id === setting.id);
+                  const configured = configuredIds.has(setting.id);
                   const group = /settingGroup/i.test(setting.kind);
                   return (
                     <SettingSearchHit
@@ -598,10 +708,57 @@ export function BrowseCatalogPanel({
                       categories={categories}
                       selected={activeId === setting.id}
                       onSelect={() => openSetting(setting)}
+                      leading={
+                        <input
+                          type="checkbox"
+                          className="setting-row-check"
+                          checked={queued}
+                          aria-label={`Queue ${setting.displayName}`}
+                          onClick={(event) => event.stopPropagation()}
+                          onChange={() => {
+                            if (queued) {
+                              setCart((current) =>
+                                current.filter((item) => item.detail.id !== setting.id),
+                              );
+                            } else {
+                              openSetting(setting);
+                              setCart((current) => {
+                                const bundled = bundleFromCategoryMap(setting.id, byId) ?? {
+                                  detail: setting,
+                                  dependents: {},
+                                };
+                                const next = current.filter(
+                                  (item) => item.detail.id !== setting.id,
+                                );
+                                next.push({
+                                  detail: bundled.detail,
+                                  draft: defaultDraftForSetting(
+                                    bundled.detail,
+                                    bundled.dependents,
+                                  ),
+                                  dependents: bundled.dependents,
+                                  categoryPath:
+                                    categoryBreadcrumb(categories, setting.categoryId) ||
+                                    "Category unknown",
+                                });
+                                return next;
+                              });
+                            }
+                          }}
+                        />
+                      }
                       trailing={
                         <>
-                          {group ? <span className="axis-pill axis-pill-warning">Group collection</span> : null}
-                          {queued ? <span className="axis-pill">Queued</span> : null}
+                          {group ? (
+                            <span className="axis-pill axis-pill-warning">Group collection</span>
+                          ) : null}
+                          {queued ? (
+                            <span className="axis-pill axis-pill-success">Queued</span>
+                          ) : configured ? (
+                            <span className="axis-pill axis-pill-success">Configured</span>
+                          ) : (
+                            <span className="axis-pill">Not configured</span>
+                          )}
                         </>
                       }
                     />
@@ -630,27 +787,12 @@ export function BrowseCatalogPanel({
                     {detail.description}
                   </p>
                 ) : null}
-                <SettingDraftEditor
-                  detail={detail}
-                  draft={draft}
-                  dependents={dependents}
-                  onChange={(next) => {
-                    setDraft(next);
-                    setCart((current) => {
-                      const index = current.findIndex((item) => item.detail.id === detail.id);
-                      if (index < 0) return current;
-                      const copy = [...current];
-                      copy[index] = { ...copy[index], draft: next };
-                      return copy;
-                    });
-                  }}
-                />
                 <WriteActionButton
                   type="button"
                   className="axis-btn axis-btn-primary"
-                  onClick={addActiveToCart}
+                  onClick={() => setConfigureOpen(true)}
                 >
-                  {cart.some((item) => item.detail.id === detail.id) ? "Update selected" : "Add to policy"}
+                  {cart.some((item) => item.detail.id === detail.id) ? "Edit value" : "Configure value"}
                 </WriteActionButton>
               </>
             ) : (
@@ -722,22 +864,82 @@ export function BrowseCatalogPanel({
             />
           </label>
         ) : (
-          <label className="device-field catalog-footer-field">
-            Freeform {platformLabel} policy
-            <select
-              className="axis-input"
-              value={targetPolicyId}
-              disabled={writeDisabled}
-              onChange={(event) => setTargetPolicyId(event.target.value)}
-            >
-              <option value="">Select a policy</option>
-              {freeformPolicies.map((policy) => (
-                <option key={policy.id} value={policy.id}>
-                  {policy.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          <div className="device-field catalog-footer-field">
+            <label htmlFor="catalog-policy-combobox">
+              Freeform {platformLabel} policy
+            </label>
+            <div className="catalog-policy-picker" ref={policyFieldRef}>
+              <input
+                id="catalog-policy-combobox"
+                className="axis-input"
+                type="text"
+                role="combobox"
+                autoComplete="off"
+                value={policyFilter}
+                disabled={writeDisabled}
+                placeholder={selectedPolicy?.name ?? "Select or filter a policy…"}
+                aria-expanded={policyListOpen}
+                aria-controls="catalog-policy-listbox"
+                aria-autocomplete="list"
+                onChange={(event) => {
+                  setPolicyFilter(event.target.value);
+                  setPolicyListOpen(true);
+                }}
+                onFocus={() => setPolicyListOpen(true)}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") setPolicyListOpen(false);
+                }}
+              />
+              <button
+                type="button"
+                className="catalog-policy-chevron"
+                disabled={writeDisabled}
+                aria-label="Show policies"
+                onClick={() => setPolicyListOpen((value) => !value)}
+              >
+                <span aria-hidden="true">▾</span>
+              </button>
+              {policyListOpen ? (
+                <div
+                  id="catalog-policy-listbox"
+                  className="catalog-policy-list"
+                  role="listbox"
+                  style={
+                    policyListRect
+                      ? {
+                          left: policyListRect.left,
+                          width: policyListRect.width,
+                          bottom: policyListRect.bottom,
+                        }
+                      : undefined
+                  }
+                >
+                  {filteredPolicies.length === 0 ? (
+                    <p className="catalog-policy-empty">No policies matched.</p>
+                  ) : (
+                    filteredPolicies.map((policy) => (
+                      <button
+                        key={policy.id}
+                        type="button"
+                        role="option"
+                        aria-selected={policy.id === targetPolicyId}
+                        className={`catalog-policy-option${
+                          policy.id === targetPolicyId ? " is-selected" : ""
+                        }`}
+                        onClick={() => {
+                          setTargetPolicyId(policy.id);
+                          setPolicyFilter("");
+                          setPolicyListOpen(false);
+                        }}
+                      >
+                        {policy.name}
+                      </button>
+                    ))
+                  )}
+                </div>
+              ) : null}
+            </div>
+          </div>
         )}
         <div className="catalog-footer-actions">
           <WriteActionButton
@@ -754,6 +956,31 @@ export function BrowseCatalogPanel({
           </p>
         </div>
       </footer>
+
+      {configureOpen && detail && draft ? (
+        <SettingConfigureDialog
+          detail={detail}
+          draft={draft}
+          dependents={dependents}
+          path={
+            (selectedCategory ? categoryBreadcrumb(categories, selectedCategory.id) : null) ||
+            categoryBreadcrumb(categories, detail.categoryId)
+          }
+          source={catalogSettingSourceLabel(detail)}
+          onChange={(next) => {
+            setDraft(next);
+            setCart((current) => {
+              const index = current.findIndex((item) => item.detail.id === detail.id);
+              if (index < 0) return current;
+              const copy = [...current];
+              copy[index] = { ...copy[index], draft: next };
+              return copy;
+            });
+          }}
+          onApply={addActiveToCart}
+          onClose={() => setConfigureOpen(false)}
+        />
+      ) : null}
     </div>
   );
 }

@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::device_recovery::annotate_scope;
 use crate::graph::{GraphClient, GraphCollection, GraphError};
 
 #[derive(Debug, Clone, Deserialize)]
@@ -49,6 +50,7 @@ pub fn can_delete_graph_object(kind: &str) -> bool {
             | "script:platform-shell"
             | "script:remediation"
             | "script:compliance"
+            | "directoryGroup"
     )
 }
 
@@ -72,6 +74,7 @@ fn object_path(kind: &str, id: &str) -> Result<String, GraphError> {
         "script:platform-shell" => "deviceManagement/deviceShellScripts",
         "script:remediation" => "deviceManagement/deviceHealthScripts",
         "script:compliance" => "deviceManagement/deviceComplianceScripts",
+        "directoryGroup" => "groups",
         other => {
             return Err(GraphError::Request {
                 status: 400,
@@ -143,6 +146,51 @@ pub async fn sync_windows_autopilot_devices(
         )
         .await?;
     fetch_windows_autopilot_settings(access_token).await
+}
+
+/// Update a group's display name, description, or dynamic membership rule.
+///
+/// Graph rejects `membershipRule` on an assigned group, so the rule is only
+/// sent when the group is dynamic. Changing the rule restarts evaluation.
+pub async fn update_directory_group(
+    access_token: &str,
+    id: &str,
+    display_name: Option<&str>,
+    description: Option<&str>,
+    membership_rule: Option<&str>,
+) -> Result<(), GraphError> {
+    let id = id.trim();
+    if id.is_empty() {
+        return Err(GraphError::Request {
+            status: 400,
+            code: None,
+            message: "A group id is required.".into(),
+            permission_related: false,
+        });
+    }
+    let mut body = serde_json::Map::new();
+    if let Some(name) = display_name.map(str::trim).filter(|value| !value.is_empty()) {
+        body.insert("displayName".into(), json!(name));
+    }
+    if let Some(text) = description {
+        body.insert("description".into(), json!(text.trim()));
+    }
+    if let Some(rule) = membership_rule.map(str::trim).filter(|value| !value.is_empty()) {
+        body.insert("membershipRule".into(), json!(rule));
+        body.insert("membershipRuleProcessingState".into(), json!("On"));
+    }
+    if body.is_empty() {
+        return Ok(());
+    }
+    GraphClient::new()
+        .patch_no_content(
+            access_token,
+            &format!("/groups/{}", urlencoding::encode(id)),
+            "v1.0",
+            &Value::Object(body),
+        )
+        .await
+        .map_err(|error| annotate_scope(error, "Group.ReadWrite.All"))
 }
 
 pub async fn delete_graph_object(

@@ -1,4 +1,5 @@
 use chrono::{DateTime, Duration, Utc};
+
 use std::collections::HashMap;
 
 use crate::graph::{format_graph_error, GraphClient, GraphCollection, GraphError};
@@ -21,6 +22,14 @@ struct ManagedDevice {
     compliance_state: Option<String>,
     #[serde(default)]
     last_sync_date_time: Option<String>,
+    #[serde(default)]
+    os_version: Option<String>,
+    #[serde(default)]
+    is_encrypted: Option<bool>,
+    #[serde(default)]
+    managed_device_owner_type: Option<String>,
+    #[serde(default)]
+    enrolled_date_time: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -153,6 +162,15 @@ pub async fn fetch_tenant_glance(
         by_compliance: by_compliance.clone(),
         active: freshness.active,
         stale: freshness.stale,
+        windows_releases: windows_releases(&device_list),
+        encrypted: device_list.iter().filter(|device| device.is_encrypted == Some(true)).count() as u32,
+        encryption_reported: device_list.iter().filter(|device| device.is_encrypted.is_some()).count() as u32,
+        by_ownership: tally(
+            device_list
+                .iter()
+                .filter_map(|device| device.managed_device_owner_type.as_deref()),
+        ),
+        enrolled_last_30_days: enrolled_per_day(&device_list, 30),
     };
 
     let policies = PolicyCounts {
@@ -337,7 +355,7 @@ async fn fetch_organization(client: &GraphClient, access_token: &str) -> Organiz
 }
 
 async fn fetch_managed_devices(client: &GraphClient, access_token: &str) -> DevicesResult {
-    let path = "/deviceManagement/managedDevices?$select=operatingSystem,complianceState,lastSyncDateTime&$top=999";
+    let path = "/deviceManagement/managedDevices?$select=operatingSystem,osVersion,complianceState,lastSyncDateTime,isEncrypted,managedDeviceOwnerType,enrolledDateTime&$top=999";
     match client
         .fetch_all_pages::<ManagedDevice>(access_token, path, "beta", 5000)
         .await
@@ -359,27 +377,58 @@ async fn fetch_managed_devices(client: &GraphClient, access_token: &str) -> Devi
     }
 }
 
+/// Count every inventory family, six at a time. Results keep the list order.
+///
+/// Each batch's futures are built into a Vec before awaiting. A stream with a
+/// borrowing `map` closure here made every command above this one non-`Send`.
 async fn fetch_inventory(client: &GraphClient, access_token: &str) -> Vec<InventoryCount> {
     let mut results = Vec::with_capacity(GLANCE_OBJECT_TYPES.len());
-    for object_type in GLANCE_OBJECT_TYPES {
-        match client.count(access_token, object_type.api, "beta").await {
-            Ok(count) => results.push(InventoryCount {
-                id: object_type.id.into(),
-                title: object_type.title.into(),
-                category: object_type.category.into(),
-                count,
-                api: object_type.api.into(),
-                error: None,
-                permission_related: None,
-                status: None,
-                code: None,
-            }),
-            Err(GraphError::Request {
-                status,
-                code,
-                message,
-                permission_related,
-            }) => results.push(InventoryCount {
+    for batch in GLANCE_OBJECT_TYPES.chunks(6) {
+        let counts: Vec<_> = batch
+            .iter()
+            .map(|object_type| count_family(client, access_token, object_type))
+            .collect();
+        results.extend(futures::future::join_all(counts).await);
+    }
+    results
+}
+
+async fn count_family(
+    client: &GraphClient,
+    access_token: &str,
+    object_type: &IntuneObjectType,
+) -> InventoryCount {
+    match client.count(access_token, object_type.api, "beta").await {
+        Ok(count) => InventoryCount {
+            id: object_type.id.into(),
+            title: object_type.title.into(),
+            category: object_type.category.into(),
+            count,
+            api: object_type.api.into(),
+            error: None,
+            permission_related: None,
+            status: None,
+            code: None,
+        },
+        Err(GraphError::Request {
+            status,
+            code,
+            message,
+            permission_related,
+        }) => InventoryCount {
+            id: object_type.id.into(),
+            title: object_type.title.into(),
+            category: object_type.category.into(),
+            count: 0,
+            api: object_type.api.into(),
+            error: Some(message),
+            permission_related: Some(permission_related),
+            status: Some(status),
+            code,
+        },
+        Err(error) => {
+            let (message, permission_related) = format_graph_error(&object_type.title, &error);
+            InventoryCount {
                 id: object_type.id.into(),
                 title: object_type.title.into(),
                 category: object_type.category.into(),
@@ -387,26 +436,11 @@ async fn fetch_inventory(client: &GraphClient, access_token: &str) -> Vec<Invent
                 api: object_type.api.into(),
                 error: Some(message),
                 permission_related: Some(permission_related),
-                status: Some(status),
-                code,
-            }),
-            Err(error) => {
-                let (message, permission_related) = format_graph_error(&object_type.title, &error);
-                results.push(InventoryCount {
-                    id: object_type.id.into(),
-                    title: object_type.title.into(),
-                    category: object_type.category.into(),
-                    count: 0,
-                    api: object_type.api.into(),
-                    error: Some(message),
-                    permission_related: Some(permission_related),
-                    status: None,
-                    code: None,
-                });
+                status: None,
+                code: None,
             }
         }
     }
-    results
 }
 
 async fn fetch_conflicts(client: &GraphClient, access_token: &str) -> ConflictResult {
@@ -676,6 +710,73 @@ fn title_case_result(value: String) -> String {
         other if other.starts_with("unknown") => "Unknown".into(),
         _ => value,
     }
+}
+
+/// Windows releases by OS build. Graph reports only the build (`10.0.26100.x`),
+/// so the release name comes from Microsoft's published build numbers. An
+/// unlisted build is shown by number rather than guessed.
+const WINDOWS_RELEASES: &[(u32, &str)] = &[
+    (26200, "Windows 11 25H2"),
+    (26100, "Windows 11 24H2"),
+    (22631, "Windows 11 23H2"),
+    (22621, "Windows 11 22H2"),
+    (22000, "Windows 11 21H2"),
+    (19045, "Windows 10 22H2"),
+    (19044, "Windows 10 21H2"),
+    (19043, "Windows 10 21H1"),
+];
+
+fn windows_releases(devices: &[ManagedDevice]) -> Vec<NamedCount> {
+    let labels = devices
+        .iter()
+        .filter(|device| {
+            device
+                .operating_system
+                .as_deref()
+                .is_some_and(|os| os.eq_ignore_ascii_case("windows"))
+        })
+        .map(|device| {
+            let build = device
+                .os_version
+                .as_deref()
+                .and_then(|version| version.split('.').nth(2))
+                .and_then(|build| build.parse::<u32>().ok());
+            match build {
+                Some(build) => WINDOWS_RELEASES
+                    .iter()
+                    .find(|(known, _)| *known == build)
+                    .map(|(_, label)| (*label).to_string())
+                    .unwrap_or_else(|| format!("Windows build {build}")),
+                None => "Unknown build".to_string(),
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut counts: Vec<NamedCount> = tally(labels.iter().map(String::as_str))
+        .into_iter()
+        .map(|(label, count)| NamedCount { label, count })
+        .collect();
+    counts.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.label.cmp(&b.label)));
+    counts
+}
+
+/// Enrollments per day for the last `days` days (UTC), oldest first.
+fn enrolled_per_day(devices: &[ManagedDevice], days: i64) -> Vec<u32> {
+    let today = Utc::now().date_naive();
+    let mut buckets = vec![0u32; days as usize];
+    for device in devices {
+        let Some(enrolled) = device
+            .enrolled_date_time
+            .as_deref()
+            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        else {
+            continue;
+        };
+        let age = (today - enrolled.with_timezone(&Utc).date_naive()).num_days();
+        if (0..days).contains(&age) {
+            buckets[(days - 1 - age) as usize] += 1;
+        }
+    }
+    buckets
 }
 
 fn tally<'a>(values: impl Iterator<Item = &'a str>) -> HashMap<String, u32> {

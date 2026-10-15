@@ -1,6 +1,8 @@
 import type { TenantGlance } from "../types/glance";
 import { STALE_DEVICE_DAYS } from "../types/glance";
 import { navigate } from "../lib/route";
+import { TenantHealthPanel } from "./TenantHealthPanel";
+import { ConfiguredObjectsPanel } from "./ConfiguredObjectsPanel";
 import {
   DistributionBar,
   PageHeader,
@@ -8,6 +10,13 @@ import {
   PanelHead,
   SignalCard,
 } from "./ui/PageChrome";
+
+/** `managedDeviceOwnerType` values, worded as the Intune portal shows them. */
+const OWNERSHIP_LABELS: Record<string, string> = {
+  company: "Corporate",
+  personal: "Personal",
+  unknown: "Unknown",
+};
 
 function actorLabel(event: TenantGlance["recentActivity"][number]): string {
   return (
@@ -53,7 +62,6 @@ export function TenantOverview({
     return <p className="muted">No tenant data available yet.</p>;
   }
 
-  const inventory = [...glance.inventory].sort((a, b) => b.count - a.count);
   const organizationLabel = glance.organizationName;
   const failureTotal =
     (glance.failures.appFailedDeviceCount ?? 0) +
@@ -75,6 +83,25 @@ export function TenantOverview({
     { label: "Active", count: glance.devices.active },
     { label: `Stale (>${STALE_DEVICE_DAYS}d)`, count: glance.devices.stale },
   ];
+
+  // Fleet shape: Windows releases (top six, rest grouped), ownership, encryption, enrollments.
+  const releases = glance.devices.windowsReleases ?? [];
+  const releaseBars = [
+    ...releases.slice(0, 6),
+    ...(releases.length > 6
+      ? [{ label: "Other builds", count: releases.slice(6).reduce((sum, row) => sum + row.count, 0) }]
+      : []),
+  ];
+  const ownershipBars = Object.entries(glance.devices.byOwnership ?? {})
+    .map(([key, count]) => ({ label: OWNERSHIP_LABELS[key] ?? key, count }))
+    .sort((a, b) => b.count - a.count);
+  const encryptionReported = glance.devices.encryptionReported ?? 0;
+  const encryptedPct =
+    encryptionReported > 0 ? Math.round(((glance.devices.encrypted ?? 0) / encryptionReported) * 100) : null;
+  const enrolled = glance.devices.enrolledLast30Days ?? [];
+  const enrolledTotal = enrolled.reduce((sum, count) => sum + count, 0);
+  const enrolledWeek = enrolled.slice(-7).reduce((sum, count) => sum + count, 0);
+  const enrolledPeak = Math.max(1, ...enrolled);
 
   return (
     <div className="stack">
@@ -129,6 +156,8 @@ export function TenantOverview({
           </ul>
         </div>
       ) : null}
+
+      <TenantHealthPanel refreshKey={glance.fetchedAt} />
 
       <div className="overview-grid-6">
         <SignalCard
@@ -216,6 +245,49 @@ export function TenantOverview({
           emptyLabel="No managed devices"
         />
       </div>
+
+      <div className="overview-grid-2">
+        <DistributionBar title="Windows releases" data={releaseBars} emptyLabel="No Windows devices" />
+        <DistributionBar title="Ownership" data={ownershipBars} emptyLabel="No managed devices" />
+      </div>
+
+      <div className="overview-grid-2">
+        <Panel padded>
+          <PanelHead
+            title="Enrollments, last 30 days"
+            hint={`${enrolledTotal} enrolled · ${enrolledWeek} in the last 7 days`}
+          />
+          <div
+            className="enroll-spark"
+            role="img"
+            aria-label={`Enrollments per day for the last 30 days, ${enrolledTotal} in total`}
+          >
+            {enrolled.map((count, index) => {
+              const day = new Date(Date.now() - (enrolled.length - 1 - index) * 86_400_000);
+              return (
+                <span
+                  key={index}
+                  className={count === 0 ? "is-zero" : undefined}
+                  style={{ height: `${Math.max(4, (count / enrolledPeak) * 100)}%` }}
+                  title={`${day.toLocaleDateString()}: ${count} enrolled`}
+                />
+              );
+            })}
+          </div>
+        </Panel>
+        <SignalCard
+          label="Encrypted"
+          value={encryptedPct == null ? "—" : `${encryptedPct}%`}
+          hint={
+            encryptedPct == null
+              ? "No devices report encryption"
+              : `${glance.devices.encrypted ?? 0} of ${encryptionReported} reporting devices`
+          }
+          tone={encryptedPct == null ? "default" : encryptedPct >= 95 ? "good" : encryptedPct >= 80 ? "warn" : "bad"}
+        />
+      </div>
+
+      <ConfiguredObjectsPanel inventory={glance.inventory} />
 
       <div className="overview-grid-2">
         <Panel padded>
@@ -393,7 +465,7 @@ export function TenantOverview({
             </tr>
           </thead>
           <tbody>
-            {inventory.map((item) => (
+            {[...glance.inventory].sort((a, b) => b.count - a.count).map((item) => (
               <tr key={item.id}>
                 <td style={{ fontWeight: 500 }}>
                   {item.title}

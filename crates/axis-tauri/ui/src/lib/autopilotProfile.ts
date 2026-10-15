@@ -303,6 +303,8 @@ export const PROFILE_ASSIGNMENT_LABELS: Record<string, string> = {
   availableForAssignment: "Available for assignment",
   pending: "Pending",
   assigned: "Assigned",
+  assignedInSync: "Assigned and in sync",
+  assignedOutOfSync: "Assigned, out of sync",
   failed: "Failed",
   unassignPending: "Unassign pending",
   unassignFailed: "Unassign failed",
@@ -334,6 +336,21 @@ export function autopilotDeviceSections(
       PROFILE_ASSIGNMENT_LABELS,
     ),
   );
+  const assigned = asRecord(object.deploymentProfile);
+  const intended = asRecord(object.intendedDeploymentProfile);
+  const assignedName = text(assigned?.displayName);
+  const intendedName = text(intended?.displayName);
+  if (assignedName || intendedName) {
+    pushRow(enrollment, "Deployment profile", assignedName ?? "—");
+    // Only worth a separate row when it differs from what is applied.
+    if (intendedName && intendedName !== assignedName) {
+      pushRow(enrollment, "Intended profile", intendedName);
+    }
+  }
+  const assignedAt = text(object.deploymentProfileAssignedDateTime);
+  if (assignedAt && !assignedAt.startsWith("0001-01-01")) {
+    pushRow(enrollment, "Profile assigned", assignedAt);
+  }
   pushRow(enrollment, "User", text(object.userPrincipalName) ?? "—");
   pushRow(enrollment, "Last contacted", text(object.lastContactedDateTime) ?? "—");
 

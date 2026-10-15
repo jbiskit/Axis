@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   applyDraftToCatalogConfig,
@@ -39,7 +39,7 @@ import { ScriptCodeEditor } from "../ui/ScriptCodeEditor";
 import { MarkdownField } from "./MarkdownField";
 import { finishUpload, trackUpload } from "../../lib/uploadTasks";
 import { BooleanToggle } from "./BooleanToggle";
-import { DetectionRuleFields, Field, Pane, SelectOptions, ToggleRow } from "./Win32AppEditor";
+import { DetectionRuleFields, Field, SelectOptions, ToggleRow } from "./Win32AppEditor";
 
 export function CatalogAppBuilder({
   app,
@@ -557,42 +557,69 @@ export function CatalogAppBuilder({
     draft.minimumCpuSpeedInMHz ? `${draft.minimumCpuSpeedInMHz} MHz` : "",
   ].filter(Boolean);
 
+  const checklist: Array<{ title: string; ok: boolean; hint: string }> = [
+    {
+      title: "Identity",
+      ok: !(missingName || missingDescription || missingPublisher),
+      hint: missingName || missingDescription || missingPublisher ? "Name, description, publisher" : draft.publisher,
+    },
+    {
+      title: "Install / uninstall",
+      ok: !(missingInstall || missingUninstall),
+      hint: missingInstall || missingUninstall ? "Commands required" : draft.runAsAccount === "user" ? "User" : "System",
+    },
+    {
+      title: "Requirements",
+      ok: !(missingArchitecture || missingMinimumOs),
+      hint: missingArchitecture || missingMinimumOs ? "Architecture, minimum OS" : String(draft.allowedArchitectures || "Set"),
+    },
+    {
+      title: "Detection rules",
+      ok: !missingDetection,
+      hint: missingDetection ? "Required" : `${draft.detectionRules.length} rule${draft.detectionRules.length === 1 ? "" : "s"}`,
+    },
+    {
+      title: "Dependencies",
+      ok: true,
+      hint: draft.dependencies.length ? `${draft.dependencies.length}` : "None",
+    },
+    { title: "Package", ok: !missingFile, hint: missingFile ? "Attach .intunewin" : ".intunewin" },
+  ];
+  const readyCount = checklist.filter((item) => item.ok).length;
+  const firstGap = checklist.find((item) => !item.ok);
+
   return (
-    <section className="app-house-build">
-      <header className="app-house-build-head">
-        <div>
-          <p className="axis-kicker">Win32 package</p>
-          <h2>{draft.displayName || app.name}</h2>
-          <p className="muted">{app.relativePath}</p>
-        </div>
-        <button type="button" className="axis-btn axis-btn-primary" disabled={!dirty || busy} onClick={() => void save()}>
-          {busy && !uploading ? "Saving…" : "Save config"}
-        </button>
-      </header>
-      <div className="app-house-package">
-        <div>
-          <p className="axis-kicker">
-            IntuneWin
-            {missingFile ? <span className="win32-pane-missing">Missing</span> : null}
+    <section className="app-house-build catalog-build">
+      <div className="catalog-build-body">
+        <nav className="catalog-checklist" aria-label="Readiness">
+          <p className="catalog-checklist-head">
+            Ready to upload · {readyCount} of {checklist.length}
           </p>
-          <p className={missingFile ? "app-house-package-file is-incomplete" : "app-house-package-file"}>
-            {packageFile ?? "No package file attached"}
-          </p>
+          {checklist.map((item) => (
+            <a
+              key={item.title}
+              href={`#${sectionId(item.title)}`}
+              className={`catalog-check${item.ok ? "" : " is-missing"}`}
+              onClick={(event) => {
+                event.preventDefault();
+                if (item.title === "Package") void attachPackage();
+                else document.getElementById(sectionId(item.title))?.scrollIntoView({ block: "start", behavior: "smooth" });
+              }}
+            >
+              <span className="catalog-check-mark" aria-hidden="true">
+                {item.ok ? "✓" : "!"}
+              </span>
+              <span className="catalog-check-title">{item.title}</span>
+              <span className="catalog-check-hint">{item.hint}</span>
+            </a>
+          ))}
+        </nav>
+        <div className="catalog-build-sections">
+      {firstGap && firstGap.title !== "Package" ? (
+        <div className="axis-alert axis-alert-warning">
+          {firstGap.title} {firstGap.title.endsWith("s") ? "are" : "is"} incomplete. Intune needs it before this package can be uploaded.
         </div>
-        <div className="app-house-package-actions">
-          <button type="button" className="axis-btn" disabled={busy} onClick={() => void attachPackage()}>
-            Attach .intunewin
-          </button>
-          <button
-            type="button"
-            className="axis-btn axis-btn-primary"
-            disabled={busy || !packageFile}
-            onClick={() => void uploadPackage()}
-          >
-            {uploading ? "Uploading…" : "Upload to Intune"}
-          </button>
-        </div>
-      </div>
+      ) : null}
       {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
       {progress ? <div className="axis-alert axis-alert-info">{progress}</div> : null}
       {message ? <div className="axis-alert axis-alert-info">{message}</div> : null}
@@ -627,7 +654,7 @@ export function CatalogAppBuilder({
         />
       ) : null}
       <div className="win32-panes">
-        <Pane
+        <Section
           title="Identity"
           hint={draft.displayName || "Untitled"}
           defaultOpen
@@ -693,9 +720,9 @@ export function CatalogAppBuilder({
               <textarea className="axis-input" rows={2} value={draft.notes} disabled={disabled} onChange={(event) => patch({ notes: event.target.value })} />
             </Field>
           </div>
-        </Pane>
+        </Section>
 
-        <Pane title="Install / uninstall" hint={draft.installCommandLine || "No install command"} invalid={missingInstall || missingUninstall}>
+        <Section title="Install / uninstall" hint={draft.installCommandLine || "No install command"} invalid={missingInstall || missingUninstall}>
           <div className="win32-grid">
             <Field label="Install command line" wide invalid={missingInstall}>
               <input className="axis-input" style={{ fontFamily: "ui-monospace, monospace", fontSize: "0.8rem" }} value={draft.installCommandLine} disabled={disabled} onChange={(event) => patch({ installCommandLine: event.target.value })} />
@@ -726,9 +753,9 @@ export function CatalogAppBuilder({
             </Field>
             <ToggleRow label="Allow available uninstall" checked={draft.allowAvailableUninstall} disabled={disabled} onChange={(allowAvailableUninstall) => patch({ allowAvailableUninstall })} />
           </div>
-        </Pane>
+        </Section>
 
-        <Pane title="Requirements" hint={requirementBits.length ? requirementBits.join(" · ") : "None set"}>
+        <Section title="Requirements" hint={requirementBits.length ? requirementBits.join(" · ") : "None set"}>
           <div className="win32-grid">
             <Field label="Min free disk (MB)">
               <input className="axis-input" type="number" min={0} value={draft.minimumFreeDiskSpaceInMB} disabled={disabled} onChange={(event) => patch({ minimumFreeDiskSpaceInMB: event.target.value })} />
@@ -743,9 +770,9 @@ export function CatalogAppBuilder({
               <input className="axis-input" type="number" min={0} value={draft.minimumCpuSpeedInMHz} disabled={disabled} onChange={(event) => patch({ minimumCpuSpeedInMHz: event.target.value })} />
             </Field>
           </div>
-        </Pane>
+        </Section>
 
-        <Pane
+        <Section
           title="Dependencies"
           hint={
             draft.dependencies.length === 0
@@ -828,9 +855,9 @@ export function CatalogAppBuilder({
               </button>
             </div>
           </div>
-        </Pane>
+        </Section>
 
-        <Pane
+        <Section
           title="Detection rules"
           hint={
             draft.detectionRules.length === 1
@@ -888,8 +915,65 @@ export function CatalogAppBuilder({
               ))}
             </ul>
           )}
-        </Pane>
+        </Section>
       </div>
+        </div>
+      </div>
+      <footer className="catalog-build-bar">
+        <span className={`catalog-build-file${missingFile ? " is-incomplete" : ""}`}>
+          <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M14 3H6v18h12V7zM14 3v4h4" />
+          </svg>
+          <b>{packageFile ? packageFile.split(/[\\/]/).pop() : "No .intunewin attached"}</b>
+        </span>
+        <button type="button" className="axis-btn" disabled={busy} onClick={() => void attachPackage()}>
+          {packageFile ? "Replace .intunewin" : "Attach .intunewin"}
+        </button>
+        <div className="catalog-build-bar-actions">
+          {dirty ? <span className="muted catalog-build-dirty">Unsaved changes</span> : null}
+          <button type="button" className="axis-btn" disabled={!dirty || busy} onClick={() => void save()}>
+            {busy && !uploading ? "Saving…" : "Save"}
+          </button>
+          <button
+            type="button"
+            className="axis-btn axis-btn-primary"
+            disabled={busy || !packageFile}
+            title={packageFile ? "Upload this version to Intune" : "Attach a .intunewin first"}
+            onClick={() => void uploadPackage()}
+          >
+            {uploading ? "Uploading…" : "Upload to Intune"}
+          </button>
+        </div>
+      </footer>
+    </section>
+  );
+}
+
+function sectionId(title: string): string {
+  return `catalog-section-${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+}
+
+/** Always-open builder section; the readiness checklist links to it by title. */
+function Section({
+  title,
+  hint,
+  invalid,
+  children,
+}: {
+  title: string;
+  hint: string;
+  defaultOpen?: boolean;
+  invalid?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <section id={sectionId(title)} className={`axis-panel catalog-section${invalid ? " is-invalid" : ""}`}>
+      <header className="catalog-section-head">
+        <h3>{title}</h3>
+        {invalid ? <span className="win32-pane-missing">Missing</span> : null}
+        <span className="win32-pane-hint">{hint}</span>
+      </header>
+      <div className="win32-pane-body">{children}</div>
     </section>
   );
 }

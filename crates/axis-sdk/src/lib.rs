@@ -3,6 +3,7 @@ mod app_icon;
 mod assignments;
 mod auth;
 mod autopilot_profiles;
+mod ca_coverage;
 mod catalog_index;
 mod client_container;
 mod compliance_docs;
@@ -20,6 +21,7 @@ mod enrollment_esp;
 mod enrollment_limits;
 mod enrollment_restrictions;
 mod environment_report;
+mod feature_updates;
 mod glance;
 mod graph;
 mod intunewin;
@@ -34,12 +36,18 @@ mod pack_kits;
 mod pack_restore;
 mod policy_health;
 mod readiness;
+mod review;
 mod script_status;
 mod session_store;
+mod setting_usage;
 mod settings_catalog;
 mod store_apps;
+mod tenant_health;
 mod types;
+mod whatif;
 mod win32_apps;
+mod windows_update;
+mod write_log;
 
 pub use app_catalog::{
     attach_catalog_intunewin, catalog_dependency_chain, copy_catalog_app_version,
@@ -54,15 +62,16 @@ pub use app_icon::{
     CatalogIconPreview, IconError,
 };
 pub use assignments::{
-    apply_filter_names, apply_group_metadata, assign_object_assignments, assignment_capabilities,
-    assignment_capabilities_for, classify_group_membership, create_directory_group,
-    default_remediation_schedule, drafts_from_graph_assignments, list_assignment_filters,
+    add_directory_group_member, apply_filter_names, apply_group_metadata, assign_object_assignments,
+    assignment_capabilities, assignment_capabilities_for, classify_group_membership,
+    create_directory_group, default_remediation_schedule, drafts_from_graph_assignments,
+    list_assignment_filters, list_directory_group_members, list_directory_groups,
     mail_nickname_from_display_name, normalize_assignment_drafts, normalize_assignment_drafts_for,
-    resolve_directory_groups, search_directory_groups, AssignmentCapabilities, AssignmentDraft,
-    AssignmentFilter, AssignmentFilterMode, AssignmentIntent, AssignmentTargetKind,
-    CreateDirectoryGroupInput, CreateGroupMembership, DirectoryGroup, GroupMembershipKind,
-    RemediationScheduleDraft, RemediationScheduleKind, DYNAMIC_DEVICE_RULE_TEMPLATE,
-    DYNAMIC_USER_RULE_TEMPLATE,
+    remove_directory_group_member, resolve_directory_groups, search_directory_groups,
+    AssignmentCapabilities, AssignmentDraft, AssignmentFilter, AssignmentFilterMode,
+    AssignmentIntent, AssignmentTargetKind, CreateDirectoryGroupInput, CreateGroupMembership,
+    DirectoryGroup, DirectoryGroupMember, GroupMembershipKind, RemediationScheduleDraft,
+    RemediationScheduleKind, DYNAMIC_DEVICE_RULE_TEMPLATE, DYNAMIC_USER_RULE_TEMPLATE,
 };
 pub use auth::{
     decode_access_token_claims, device_code_client_id, device_code_scopes, device_code_tenant,
@@ -106,8 +115,8 @@ pub use device_compare::{
     AppliedPolicySettings, AppliedPolicySettingsLoad,
 };
 pub use device_detail::{
-    fetch_managed_device_detail, DetectedApp, DirectoryGroupMembership, ManagedApp,
-    ManagedDeviceDetail, ManagedDeviceHardwareDetails,
+    fetch_managed_device_detail, fetch_user_group_memberships, DetectedApp,
+    DirectoryGroupMembership, ManagedApp, ManagedDeviceDetail, ManagedDeviceHardwareDetails,
 };
 pub use device_policies::{
     fetch_policy_setting_issues, fetch_setting_conflict_details, DevicePolicyState,
@@ -141,8 +150,13 @@ pub use environment_report::{
     generate_environment_report, EnvironmentReport, EnvironmentReportProgress,
     EnvironmentReportSelection,
 };
+pub use feature_updates::{
+    create_feature_update_profile, feature_update_body, fetch_feature_update_eligibility,
+    fetch_feature_update_profile, update_feature_update_profile, FeatureUpdateEligibility,
+    fetch_feature_update_catalog, FeatureUpdateCatalogItem, FeatureUpdateProfile,
+};
 pub use glance::{fetch_tenant_glance, list_intune_audit_events};
-pub use graph::GraphError;
+pub use graph::{set_throttle_listener, GraphError, ThrottleNotice};
 pub use intunewin::{
     find_catalog_upload_matches, link_win32_app_dependency, link_win32_app_supersedence,
     unlink_win32_app_dependency, unlink_win32_app_supersedence, upload_catalog_win32,
@@ -165,7 +179,8 @@ pub use object_duplicate::{
 pub use object_metadata::{
     can_delete_graph_object, can_update_object_metadata, delete_graph_object,
     fetch_windows_autopilot_settings, mobile_app_delete_links, mobile_app_relationships,
-    sync_windows_autopilot_devices, update_autopilot_device_properties, update_object_metadata,
+    sync_windows_autopilot_devices, update_autopilot_device_properties, update_directory_group,
+    update_object_metadata,
     MobileAppDeleteLink, UpdateObjectMetadataInput, UpdatedObjectMetadata,
     WindowsAutopilotSettings, AUTOPILOT_SYNC_COOLDOWN_SECS,
 };
@@ -193,8 +208,11 @@ pub use policy_health::{
     fetch_app_install_health, fetch_configuration_policy_health, index_app_install,
     index_policy_health, lookup_app_install, lookup_policy_health, AppInstallHealth, PolicyHealth,
 };
+pub use ca_coverage::{fetch_conditional_access_coverage, ConditionalAccessCoverage};
+pub use review::{fetch_review_objects, resolve_review_names, ReviewReferences};
 pub use readiness::{
-    fetch_intune_readiness, fetch_user_readiness, search_readiness_users, ReadinessReport,
+    fetch_intune_readiness, fetch_mdm_user_scope, fetch_user_readiness, search_readiness_users,
+    update_mdm_user_scope, MdmScopeGroup, MdmUserScope, MdmUserScopePatch, ReadinessReport,
     ReadinessRow, ReadinessSection, ReadinessUserHit, UserReadinessReport,
 };
 pub use script_status::{
@@ -208,7 +226,26 @@ pub use store_apps::{
     create_winget_app, fetch_store_catalog_manifest, search_store_catalog, update_winget_app,
     CreateWinGetAppInput, StoreCatalogHit, StoreCatalogManifest, UpdateWinGetAppInput,
 };
+pub use setting_usage::{
+    fetch_setting_usage_index, SettingUsage, SettingUsageIndex, SettingUsagePolicy,
+    SettingUsageValue,
+};
+pub use tenant_health::{fetch_tenant_health, HealthItem, HealthStatus, TenantHealth};
 pub use types::*;
+pub use whatif::{
+    assignments_by_object, fetch_assignment_snapshot, AssignmentSnapshot, ObjectAssignments,
+};
+pub use windows_update::{
+    apply_ring_action, apply_ring_action_checked, create_windows_update_ring,
+    fetch_windows_update_ring, ring_action_skip_reason, ring_update_body,
+    update_windows_update_ring, RingAction, RingChannel, RingChannelState, RingUpdateState,
+    WindowsUpdateRing,
+};
+pub use write_log::{
+    init_write_log, list_write_log, set_write_state_tracking, undo_write, with_write_operation,
+    write_log_dir, UndoOutcome,
+    WriteLogEntry, WriteLogRow,
+};
 pub use win32_apps::{
     update_win32_app, update_win32_app_body, win32_lob_body_from_catalog, UpdateWin32AppInput,
 };

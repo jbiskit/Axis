@@ -54,13 +54,55 @@
   --axis-shadow-md: 0 10px 28px color-mix(in srgb, #000 42%, var(--axis-crust));
   --axis-ring: color-mix(in srgb, var(--axis-accent) 45%, var(--axis-base));
   --axis-ease: 140ms cubic-bezier(0.22, 1, 0.36, 1);
-  --axis-rail-width: 15.25rem;
+  --axis-rail-width: 14rem;
+  --axis-iconrail-width: 4.5rem;
   --axis-titlebar-height: 2.75rem;
 
   --font-display: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
   --font-body: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   --font-mono: ui-monospace, "Cascadia Mono", "Segoe UI Mono", Consolas, monospace;
   color-scheme: dark;
+}
+
+/* Light mode — Catppuccin Latte. Toggled via `data-theme` on <html>. */
+:root[data-theme="light"] {
+  --axis-crust: #dce0e8;
+  --axis-mantle: #e6e9ef;
+  --axis-base: #eff1f5;
+  --axis-surface: #e6e9ef;
+  --axis-surface-1: #eff1f5;
+  --axis-surface-2: #ccd0da;
+  --axis-surface-3: #bcc0cc;
+  --axis-overlay: #acb0be;
+  --axis-bg: var(--axis-crust);
+  --axis-border: color-mix(in srgb, #bcc0cc 80%, var(--axis-crust));
+  --axis-border-strong: #acb0be;
+  --axis-fg: #4c4f69;
+  --axis-muted: #8c8fa1;
+  --axis-muted-strong: #6c6f85;
+  --axis-ink: #1e66f5;
+  --axis-ink-soft: #7287fd;
+  --axis-accent: #1e66f5;
+  --axis-accent-soft: color-mix(in srgb, var(--axis-accent) 12%, var(--axis-base));
+  --axis-on-accent: #eff1f5;
+  --axis-success: #40a02b;
+  --axis-success-soft: color-mix(in srgb, var(--axis-success) 14%, var(--axis-base));
+  --axis-warning: #df8e1d;
+  --axis-warning-soft: color-mix(in srgb, var(--axis-warning) 16%, var(--axis-base));
+  --axis-danger: #d20f39;
+  --axis-danger-soft: color-mix(in srgb, var(--axis-danger) 12%, var(--axis-base));
+  --axis-info: #209fb5;
+  --axis-info-soft: color-mix(in srgb, var(--axis-info) 14%, var(--axis-base));
+  --axis-shadow: 0 1px 2px color-mix(in srgb, #000 8%, var(--axis-crust));
+  --axis-shadow-md: 0 10px 28px color-mix(in srgb, #000 14%, var(--axis-crust));
+  --axis-ring: color-mix(in srgb, var(--axis-accent) 45%, var(--axis-base));
+  color-scheme: light;
+}
+
+/* The native select arrow is baked into a data URI, so it needs its own
+   light-mode stroke (muted-strong) rather than the dark one. */
+:root[data-theme="light"] select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='none' stroke='%236c6f85' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round' d='M3 4.5 6 7.5 9 4.5'/%3E%3C/svg%3E");
 }
 
 * {

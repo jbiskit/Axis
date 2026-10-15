@@ -660,12 +660,12 @@ export function BulkDeleteAction({
 }) {
   const readOnly = useReadOnly();
   const deletableTargets = targets.filter((target) => canDeleteGraphKind(target.kind));
-  if (readOnly) return null;
   const [open, setOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [linksReady, setLinksReady] = useState(true);
+  if (readOnly) return null;
 
   async function confirmDelete() {
     setDeleting(true);

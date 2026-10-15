@@ -25,7 +25,6 @@ import {
 import { IncompleteBanner, InspectorEmpty, InspectorErrorBoundary, SearchableTable, CompactObjectList, SortableTh, formatRelative, useColumnSort, useListSearchState, WorkspaceSplit } from "./workbench/shared";
 
 export function SettingsCatalogWorkbench({
-  tab,
   platform,
   policies,
   loading,
@@ -36,7 +35,6 @@ export function SettingsCatalogWorkbench({
   pathname,
   onRefresh,
 }: {
-  tab: "tenant" | "browse";
   platform: IntunePlatform | null;
   policies: CatalogPolicySummary[];
   loading: boolean;
@@ -132,11 +130,6 @@ export function SettingsCatalogWorkbench({
     navigate(hrefWithParam(pathname, search, "platform", next));
   }
 
-  function setTab(next: "tenant" | "browse") {
-    const href = next === "browse" ? "/intune/policies/browse" : "/intune/policies/settings-catalog";
-    navigate(hrefWithParam(href, search, "platform", catalogPlatform ?? "windows"));
-  }
-
   if (platform && !catalogPlatform) {
     return (
       <div className="stack">
@@ -164,23 +157,12 @@ export function SettingsCatalogWorkbench({
     </div>
   );
 
-  const catalogTabs = (
-    <div className="tab-row">
-      <button type="button" className={`tab-btn${tab === "tenant" ? " active" : ""}`} onClick={() => setTab("tenant")}>
-        Tenant policies
-      </button>
-      <button type="button" className={`tab-btn${tab === "browse" ? " active" : ""}`} onClick={() => setTab("browse")}>
-        Browse catalog
-      </button>
-    </div>
-  );
-
-  if (tab === "browse") {
+  if (pathname.endsWith("browse")) {
     return (
       <div className="catalog-workbench">
         <div className="catalog-workbench-head">
           <PageHeader
-            title="Browse catalog"
+            title="Add settings"
             description="Add settings from the Intune catalog to a new or existing freeform policy. One policy cannot mix Windows and macOS."
             onRefresh={onRefresh}
             refreshing={loading}
@@ -193,7 +175,6 @@ export function SettingsCatalogWorkbench({
               </div>
             }
           />
-          {catalogTabs}
           {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
         </div>
         <BrowseCatalogPanel
@@ -281,7 +262,6 @@ export function SettingsCatalogWorkbench({
                   {platformSwitcher}
                 </div>
               }
-              toolbar={catalogTabs}
               checkedIds={selection.checkedIds}
               onToggleChecked={selection.toggle}
               query={query}
@@ -318,7 +298,6 @@ export function SettingsCatalogWorkbench({
                 </div>
               }
             />
-            {catalogTabs}
             {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
             {loadedLimitBanner}
             <BulkAssignBar

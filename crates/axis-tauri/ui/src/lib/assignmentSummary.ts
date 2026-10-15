@@ -78,3 +78,28 @@ export function summarizeAssignmentDraft(
 export function intentLabel(intent: AssignmentIntent): string {
   return `${intent[0]?.toUpperCase()}${intent.slice(1)}`;
 }
+
+/** Graph-relevant assignment identity, ignoring display-only names/membership. */
+export function assignmentFingerprint(drafts: AssignmentDraft[]): string {
+  return drafts
+    .map((draft) => {
+      const filterId = draft.filterId ?? "";
+      const filterMode = filterId ? (draft.filterMode ?? "include") : "";
+      const schedule = draft.runSchedule;
+      return [
+        draft.targetKind,
+        draft.groupId ?? "",
+        draft.intent ?? "",
+        filterId,
+        filterMode,
+        draft.runRemediationScript ?? "",
+        schedule?.kind ?? "",
+        schedule?.interval ?? "",
+        schedule?.time ?? "",
+        schedule?.useUtc ?? "",
+        schedule?.date ?? "",
+      ].join("\0");
+    })
+    .sort()
+    .join("\n");
+}

@@ -4,8 +4,29 @@ Notable user-facing changes to Axis are recorded here.
 
 ## [Unreleased]
 
+### Added
+
+- **Entra** and **Purview** sit in the sidebar as their own modules, beside the Intune areas. Their pages are read-only reviews of what Microsoft Graph returns.
+- A **Conditional Access overview** shows policy counts by state and review checks: all-users policies with no exclusions, whether legacy authentication is blocked, references that no longer resolve, the retiring approved client app grant, and named locations no policy uses. Each check lists the policies it found, and each one opens in the inspector.
+- **User coverage** on the Conditional Access overview counts the enabled accounts each policy reaches after nested groups, role holders, and exclusions. It also lists the accounts that no enabled policy, or no enabled MFA policy, covers. App and condition scoping is not factored in.
+- Conditional Access policies and named locations name the users, groups, roles, apps, and locations they reference. The inspector lays a policy out as Assignments, Conditions, and Access controls.
+- Purview lists sensitivity labels and retention labels with their settings. Sensitivity labels are the ones published to the signed-in account. DLP, label policies, and retention policies are not available through Microsoft Graph.
+- The environment report has Entra and Purview chapters. Entra opens with the Conditional Access overview, including user coverage, and each policy card states the users in scope. Entra user coverage can be switched off for a faster report.
+- **Write activity** records every Graph write Axis makes on this device, with the object's state before and after. A write can be undone while the object still matches what Axis wrote.
+- Bulk edits, and assignment changes that remove, rewrite, or broaden targets, open a review before anything is saved.
+- **What if** takes a device or user, resolves the groups it belongs to, and shows which tenant objects would apply.
+- Windows Update rings and feature update profiles can be created and edited. Ring pause and uninstall actions preview what will change first.
+- **Autopilot enrolment script** generates a Windows Autopilot enrolment script for a device: hardware hash collection, online registration or CSV export, group tag, and optional Entra group membership.
+- **Groups** lists every Entra group with how it gets its members, and creates groups.
+- Title bar search finds devices, policies, apps, scripts, Autopilot devices and profiles, Windows Update, and app protection policies. `type:` narrows the results.
+- **Tenant health** on the Overview grades the certificates, tokens, and connectors Intune depends on. Expiry within 30 days, or no sync for 7 days, is flagged.
+- The Settings Catalog setting picker shows where a setting is already used: which policies set it, to what value, and who they are assigned to.
+- **Settings**, opened from the gear beside your name, holds the theme, update checks, and write state tracking.
+- When Microsoft Graph throttles Axis, the title bar shows that requests are being retried.
+
 ### Changed
 
+- Sign-in requests four more read permissions: `InformationProtectionPolicy.Read`, `RecordsManagement.Read.All`, `RoleManagement.Read.Directory`, and `Application.Read.All`. Each tenant is asked to consent again, and an admin must grant them where admin consent is required. The app registration manifest Axis generates includes them.
 - Sign-in opens the system browser and returns to `http://localhost`. Device-code sign-in is gone. Microsoft Graph and a customer app registration both still work, and the refresh token stays in Credential Manager.
 - The sign-in screen lists each app that already has a saved credential, grouped by tenant. Each group is named with the organization and its default domain. A tenant can keep a read-only registration and a read-and-write registration side by side. Sign out keeps the saved credentials.
 - Swapping context on an app registration switches to the other saved registration for that tenant. If that registration is not saved, Axis says so and offers Microsoft Graph sign-in or a new registration for the other access mode. Microsoft Graph still requests the new scopes.

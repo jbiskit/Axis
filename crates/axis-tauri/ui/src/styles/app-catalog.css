@@ -1,0 +1,502 @@
+/* Library › Local application catalog — app list, version switcher, package builder */
+
+.app-catalog-split {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--axis-space-4);
+}
+
+/* App list */
+.app-catalog-list {
+  display: flex;
+  flex: 1 1 22rem;
+  flex-direction: column;
+  max-width: 30rem;
+  max-height: calc(100vh - 10rem);
+  overflow: hidden;
+}
+
+.app-catalog-list-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--axis-space-2);
+  padding: var(--axis-space-3);
+}
+
+.app-catalog-scope {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--axis-border);
+  border-radius: var(--axis-radius-lg);
+  background: var(--axis-mantle);
+}
+
+.app-catalog-scope button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  min-width: 0;
+  min-height: 1.7rem;
+  padding: 0 0.4rem;
+  border: 0;
+  border-radius: var(--axis-radius);
+  background: transparent;
+  color: var(--axis-muted-strong);
+  font: inherit;
+  font-size: var(--axis-text-xs);
+  cursor: pointer;
+}
+
+.app-catalog-scope button.is-active {
+  background: var(--axis-surface-2);
+  color: var(--axis-fg);
+  font-weight: 600;
+}
+
+.app-catalog-scope button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.app-catalog-scope-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-catalog-scope-count {
+  opacity: 0.65;
+}
+
+.app-catalog-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--axis-space-1);
+}
+
+.app-catalog-tools .axis-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.app-catalog-cols,
+.app-catalog-row {
+  display: grid;
+  grid-template-columns: 1.5rem minmax(0, 1fr) 5.5rem;
+  align-items: center;
+  gap: var(--axis-space-2);
+  padding: 0 var(--axis-space-3);
+}
+
+.app-catalog-cols {
+  min-height: 1.9rem;
+  border-top: 1px solid var(--axis-border);
+  border-bottom: 1px solid var(--axis-border);
+  background: color-mix(in srgb, var(--axis-mantle) 88%, var(--axis-surface-2));
+  font-size: var(--axis-text-2xs);
+  font-weight: 600;
+  letter-spacing: var(--axis-tracking-kicker);
+  text-transform: uppercase;
+  color: var(--axis-muted);
+}
+
+.app-catalog-rows {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: var(--axis-space-2);
+}
+
+.app-catalog-empty {
+  margin: 0;
+  padding: var(--axis-space-3);
+}
+
+.app-catalog-vendor-name {
+  margin: 0;
+  padding: var(--axis-space-2) var(--axis-space-3) 0.15rem;
+  font-size: var(--axis-text-2xs);
+  font-weight: 600;
+  letter-spacing: var(--axis-tracking-kicker);
+  text-transform: uppercase;
+  color: var(--axis-muted);
+}
+
+.app-catalog-row {
+  min-height: 2.6rem;
+}
+
+.app-catalog-row:hover {
+  background: color-mix(in srgb, var(--axis-surface-2) 40%, transparent);
+}
+
+.app-catalog-row.is-open {
+  background: var(--axis-accent-soft);
+  box-shadow: inset 2px 0 0 var(--axis-accent);
+}
+
+.app-catalog-row-main {
+  display: flex;
+  align-items: center;
+  gap: var(--axis-space-2);
+  min-width: 0;
+  padding: 0.3rem 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.app-catalog-icon {
+  display: grid;
+  place-items: center;
+  width: 1.65rem;
+  height: 1.65rem;
+  flex-shrink: 0;
+  border-radius: var(--axis-radius);
+  background: var(--axis-surface-2);
+  color: var(--axis-fg);
+  font-size: var(--axis-text-xs);
+  font-weight: 700;
+}
+
+.app-catalog-icon.is-large {
+  width: 2.9rem;
+  height: 2.9rem;
+  border-radius: 10px;
+  font-size: 1.1rem;
+}
+
+.app-catalog-row-copy {
+  min-width: 0;
+}
+
+.app-catalog-row-name {
+  display: block;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-catalog-row-meta {
+  display: block;
+  font-size: var(--axis-text-2xs);
+  color: var(--axis-muted);
+}
+
+.app-catalog-latest {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: var(--axis-text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.app-catalog-dot {
+  width: 0.4rem;
+  height: 0.4rem;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: var(--axis-overlay);
+}
+
+.is-ready > .app-catalog-dot { background: var(--axis-success); }
+.is-incomplete > .app-catalog-dot { background: var(--axis-warning); }
+
+.app-catalog-bulk {
+  display: flex;
+  align-items: center;
+  gap: var(--axis-space-2);
+  padding: var(--axis-space-2) var(--axis-space-3);
+  border-top: 1px solid var(--axis-border-strong);
+  background: var(--axis-surface-1);
+  font-size: var(--axis-text-xs);
+}
+
+.app-catalog-bulk b {
+  margin-right: auto;
+}
+
+/* Open app */
+.app-catalog-detail {
+  display: flex;
+  flex: 999 1 34rem;
+  flex-direction: column;
+  gap: var(--axis-space-3);
+  min-width: 0;
+}
+
+.app-catalog-detail-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--axis-space-3);
+}
+
+.app-catalog-detail-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.app-catalog-detail-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--axis-space-1);
+}
+
+.app-catalog-detail-title h2 {
+  margin: 0.2rem 0 0;
+  font-family: var(--font-display);
+  font-size: var(--axis-text-xl);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.app-catalog-path {
+  margin: 0.1rem 0 0;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: var(--axis-text-2xs);
+  color: var(--axis-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-catalog-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--axis-space-1);
+}
+
+.app-catalog-versions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--axis-space-2);
+  padding-bottom: var(--axis-space-3);
+  border-bottom: 1px solid var(--axis-border);
+}
+
+.app-catalog-version {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 1.9rem;
+  padding: 0 0.7rem;
+  border: 1px solid var(--axis-border);
+  border-radius: var(--axis-radius-lg);
+  background: var(--axis-surface-1);
+  color: var(--axis-fg);
+  font: inherit;
+  font-size: var(--axis-text-xs);
+  cursor: pointer;
+}
+
+.app-catalog-version .tabular {
+  font-weight: 600;
+}
+
+.app-catalog-version.is-active {
+  border-color: var(--axis-accent);
+  background: var(--axis-accent-soft);
+}
+
+.app-catalog-version-label {
+  font-size: var(--axis-text-2xs);
+  color: var(--axis-muted-strong);
+}
+
+/* Package builder */
+.catalog-build {
+  display: flex;
+  flex-direction: column;
+  gap: var(--axis-space-3);
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+.catalog-build-body {
+  container-type: inline-size;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--axis-space-4);
+}
+
+.catalog-checklist {
+  display: flex;
+  flex: 1 1 100%;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+/* Beside the form there is room to keep the checklist in view while scrolling.
+   When it wraps above the form it scrolls with the page, so it never covers content. */
+@container (min-width: 44rem) {
+  .catalog-checklist {
+    position: sticky;
+    top: var(--axis-space-2);
+    z-index: 1;
+    flex: 0 0 13.5rem;
+    padding: var(--axis-space-2);
+    border: 1px solid var(--axis-border);
+    border-radius: var(--axis-radius-lg);
+    background: var(--axis-surface-1);
+  }
+}
+
+.catalog-checklist-head {
+  margin: 0 0 var(--axis-space-1);
+  font-size: var(--axis-text-2xs);
+  font-weight: 600;
+  letter-spacing: var(--axis-tracking-kicker);
+  text-transform: uppercase;
+  color: var(--axis-muted);
+}
+
+.catalog-check {
+  display: grid;
+  grid-template-columns: 1.1rem minmax(0, 1fr);
+  column-gap: var(--axis-space-2);
+  align-items: center;
+  padding: 0.35rem 0.5rem;
+  border-radius: var(--axis-radius);
+  color: var(--axis-fg);
+  text-decoration: none;
+}
+
+.catalog-check:hover {
+  background: color-mix(in srgb, var(--axis-surface-2) 45%, transparent);
+}
+
+.catalog-check.is-missing {
+  background: var(--axis-warning-soft);
+}
+
+.catalog-check-mark {
+  display: grid;
+  grid-row: span 2;
+  place-items: center;
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: 999px;
+  background: var(--axis-success-soft);
+  color: var(--axis-success);
+  font-size: 0.625rem;
+  font-weight: 700;
+}
+
+.is-missing > .catalog-check-mark {
+  background: color-mix(in srgb, var(--axis-warning) 22%, var(--axis-base));
+  color: var(--axis-warning);
+}
+
+.catalog-check-title {
+  font-size: var(--axis-text-xs);
+  font-weight: 600;
+}
+
+.catalog-check-hint {
+  overflow: hidden;
+  font-size: var(--axis-text-2xs);
+  color: var(--axis-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.catalog-build-sections {
+  display: flex;
+  flex: 999 1 26rem;
+  flex-direction: column;
+  gap: var(--axis-space-3);
+  min-width: 0;
+}
+
+.catalog-section {
+  overflow: hidden;
+  scroll-margin-top: var(--axis-space-4);
+}
+
+.catalog-section.is-invalid {
+  border-color: color-mix(in srgb, var(--axis-warning) 45%, var(--axis-border));
+}
+
+.catalog-section-head {
+  display: flex;
+  align-items: center;
+  gap: var(--axis-space-2);
+  padding: var(--axis-space-2) var(--axis-space-3);
+  border-bottom: 1px solid var(--axis-border);
+}
+
+.catalog-section-head h3 {
+  margin: 0;
+  font-size: var(--axis-text-sm);
+  font-weight: 600;
+}
+
+.catalog-section-head .win32-pane-hint {
+  margin-left: auto;
+}
+
+.catalog-build-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--axis-space-3);
+  padding: var(--axis-space-2) var(--axis-space-4);
+  border: 1px solid var(--axis-border-strong);
+  border-radius: var(--axis-radius-lg);
+  background: var(--axis-surface-1);
+  box-shadow: var(--axis-shadow-md);
+}
+
+.catalog-build-file {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--axis-space-2);
+  min-width: 0;
+  font-size: var(--axis-text-xs);
+  color: var(--axis-muted-strong);
+}
+
+.catalog-build-file b {
+  overflow: hidden;
+  color: var(--axis-fg);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.catalog-build-file.is-incomplete b {
+  color: var(--axis-warning);
+}
+
+.catalog-build-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--axis-space-2);
+  margin-left: auto;
+}
+
+.catalog-build-dirty {
+  font-size: var(--axis-text-2xs);
+}
+
+[data-density="compact"] .app-catalog-row {
+  min-height: 2.1rem;
+}
+
+@container (min-width: 44rem) {
+  [data-density="compact"] .catalog-checklist {
+    flex-basis: 11.5rem;
+  }
+}

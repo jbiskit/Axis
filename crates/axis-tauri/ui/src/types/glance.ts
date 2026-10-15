@@ -6,6 +6,15 @@ export type TenantGlance = {
     byCompliance: Record<string, number>;
     active: number;
     stale: number;
+    /** Windows devices by release, largest first. */
+    windowsReleases?: Array<{ label: string; count: number }>;
+    encrypted?: number;
+    /** Devices that report encryption at all. */
+    encryptionReported?: number;
+    /** managedDeviceOwnerType: company, personal, unknown. */
+    byOwnership?: Record<string, number>;
+    /** Enrollments per day for the last 30 days, oldest first. */
+    enrolledLast30Days?: number[];
   };
   policies: {
     compliancePolicies: number;
@@ -148,6 +157,45 @@ export type IntuneAuditEvent = TenantGlance["recentActivity"][number];
 export type IntuneAuditLogResponse = {
   events: IntuneAuditEvent[];
   error: string | null;
+  truncated: boolean;
+};
+
+/** One Graph write Axis made, from the local write log. */
+export type WriteLogEntry = {
+  id: string;
+  at: string;
+  tenantId: string;
+  actor: string | null;
+  operation: string | null;
+  method: string;
+  path: string;
+  version: string;
+  requestBody: unknown;
+  before: unknown;
+  after: unknown;
+  createdId: string | null;
+  undoes: string | null;
+  /** Why undo is not offered; null when it is. */
+  undoBlocked: string | null;
+  undoneBy: string | null;
+  status: number | null;
+  ok: boolean;
+  error: string | null;
+};
+
+export type UndoOutcome = {
+  ok: boolean;
+  /** Fields that differ from the state Axis left. */
+  conflicts: string[];
+  /** The object could not be read after the write, so a later change cannot be ruled out. */
+  unverified: boolean;
+  error: string | null;
+};
+
+export type WriteLogResponse = {
+  entries: WriteLogEntry[];
+  tenantId: string | null;
+  folder: string | null;
   truncated: boolean;
 };
 

@@ -120,6 +120,12 @@ fn base_scopes() -> Vec<String> {
         "Group.Read.All".to_string(),
         "Policy.Read.All".to_string(),
         "AuditLog.Read.All".to_string(),
+        // Purview reviews: sensitivity labels and retention labels.
+        "InformationProtectionPolicy.Read".to_string(),
+        "RecordsManagement.Read.All".to_string(),
+        // Conditional Access review: role and application names.
+        "RoleManagement.Read.Directory".to_string(),
+        "Application.Read.All".to_string(),
         "BitlockerKey.Read.All".to_string(),
         "DeviceLocalCredential.Read.All".to_string(),
         "DeviceManagementConfiguration.Read.All".to_string(),
@@ -143,6 +149,7 @@ fn write_scopes() -> Vec<String> {
         "DeviceManagementRBAC.ReadWrite.All".to_string(),
         "Group.ReadWrite.All".to_string(),
         "Policy.ReadWrite.DeviceConfiguration".to_string(),
+        "Policy.ReadWrite.MobilityManagement".to_string(),
     ]
 }
 

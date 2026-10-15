@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { closeThisWindow, popOutObject } from "../../lib/popout";
 import {
   graphHasAllDevicesTarget,
@@ -9,6 +9,7 @@ import { intunePortalUrlForKind } from "../../lib/intune/portalLinks";
 import {
   fetchGraphObjectDetail,
   loadAssignmentWorkspace,
+  REVIEW_KINDS,
   saveTextFile,
   updateScriptContent,
 } from "../../lib/tauri";
@@ -45,6 +46,8 @@ import { formatRelative, IncompleteBanner, InspectorErrorBoundary } from "./shar
 import {
   isEnrollmentPlatformRestrictionsObject,
 } from "../../lib/enrollmentRestrictions";
+import { WindowsUpdateRingEditor } from "./WindowsUpdateRingEditor";
+import { FeatureUpdateProfileEditor } from "./FeatureUpdateProfileEditor";
 import { isEnrollmentLimitObject } from "../../lib/enrollmentLimits";
 import {
   autopilotDeviceSections,
@@ -65,6 +68,9 @@ import { CloseButton } from "../ui/CloseButton";
 
 type InspectorTab = "overview" | "status" | "assignments" | "devices" | "payload";
 
+/** Entra / Purview review objects carry their targeting inside the object, not as Graph assignments. */
+const isReviewKind = (kind: string) => (REVIEW_KINDS as readonly string[]).includes(kind);
+
 function text(value: unknown): string | null {
   if (value == null) return null;
   if (typeof value === "string") return value;
@@ -84,6 +90,21 @@ function pretty(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function RefreshIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width={14} height={14} aria-hidden="true">
+      <path
+        d="M20 12a8 8 0 1 1-2.2-5.4M20 4v5h-5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
 }
 
 function exportPayload(detail: GraphObjectDetail): Record<string, unknown> {
@@ -167,8 +188,8 @@ function ExportJsonDialog({
     try {
       const path = await saveTextFile({
         contents: json,
-        suggestedName: `${title.replace(/[<>:"/\\|?*]+/g, "-").slice(0, 120) || "export"}.json`,
-        title: "Save export as",
+        suggestedName: `${title.replace(/[<>:"/\\|?*]+/g, "-").slice(0, 120) || "object"}.json`,
+        title: "Save object JSON as",
       });
       if (!path) return;
       setSaved(true);
@@ -195,10 +216,11 @@ function ExportJsonDialog({
       >
         <div className="assignment-dialog-head">
           <div>
-            <p className="axis-kicker">Export</p>
+            <p className="axis-kicker">Additional information</p>
             <h2 id="export-json-title">{title}</h2>
             <p className="muted" style={{ margin: "0.35rem 0 0", fontSize: "0.75rem" }}>
-              Graph JSON for this object. Copy puts it on the clipboard. Save as writes a file.
+              Everything Graph returned for this object, including fields the Overview does not
+              surface. Copy puts it on the clipboard; Save as writes a file.
             </p>
           </div>
           <div className="device-actions">
@@ -255,8 +277,15 @@ function overviewRows(detail: GraphObjectDetail): Array<{ label: string; value: 
     { label: "Id", value: detail.id },
     { label: "Kind", value: detail.kind },
   ];
-  const assigned =
-    typeof object.isAssigned === "boolean"
+  // "Assigned" answers "does this object have assignment targets?". It only
+  // applies to objects that Graph assigns to groups — Autopilot devices and
+  // policy sets have no assignment concept, so the row is omitted for them
+  // rather than reported as "No".
+  const hasAssignmentConcept =
+    !detail.kind.startsWith("autopilot") && detail.kind !== "policySet" && !isReviewKind(detail.kind);
+  const assigned = !hasAssignmentConcept
+    ? null
+    : typeof object.isAssigned === "boolean"
       ? object.isAssigned
       : Array.isArray(detail.assignments)
         ? detail.assignments.length > 0
@@ -387,12 +416,15 @@ export function GraphObjectInspector({
   appLinksError,
   onAppLinksChanged,
   onSelectApp,
+  summary,
 }: {
   kind: string;
   id: string;
   fallbackTitle?: string;
   incomplete?: string;
   onClose: () => void;
+  /** Readable breakdown shown under the overview fields (review kinds). */
+  summary?: ReactNode;
   popout?: boolean;
   tenantApps?: MobileAppSummary[];
   appLinks?: MobileAppDeleteLink[];
@@ -598,6 +630,10 @@ export function GraphObjectInspector({
   const showAutopilotProfileOverview =
     kind === "autopilotProfile" && isAutopilotProfileObject(asRecord(detail?.object));
   const showAutopilotDeviceOverview = kind === "autopilotDevice";
+  // Only the ring family has a typed editor; the feature/quality/driver
+  // profiles stay on the raw Graph view.
+  const showRingEditor = kind === "windowsUpdate:rings";
+  const showFeatureUpdateEditor = kind === "windowsUpdate:feature";
   const appIcon = kind === "mobileApp" ? graphLargeIcon(asRecord(detail?.object)) : null;
   const showWin32Editor = kind === "mobileApp" && isWin32LobApp(asRecord(detail?.object));
   const showStoreEditor = kind === "mobileApp" && isWinGetApp(asRecord(detail?.object));
@@ -634,14 +670,18 @@ export function GraphObjectInspector({
     kind.startsWith("script:platform-")
       ? ([["status", "Device status"]] as Array<[InspectorTab, string]>)
       : []),
-    [
-      "assignments",
-      `Assignments (${
-        kind === "enrollmentConfiguration" && !assignmentsLoading
-          ? assignmentDrafts.length
-          : assignments.length
-      })`,
-    ],
+    ...(isReviewKind(kind)
+      ? []
+      : ([
+          [
+            "assignments",
+            `Assignments (${
+              kind === "enrollmentConfiguration" && !assignmentsLoading
+                ? assignmentDrafts.length
+                : assignments.length
+            })`,
+          ],
+        ] as Array<[InspectorTab, string]>)),
     ...(kind === "autopilotProfile"
       ? ([["devices", "Assigned devices"]] as Array<[InspectorTab, string]>)
       : []),
@@ -664,7 +704,7 @@ export function GraphObjectInspector({
   ];
   const supportsRemediationSchedule = kind === "script:remediation";
   const canEditScripts = Boolean(scriptInfo);
-  const canAssign = kind !== "autopilotDevice" && kind !== "policySet";
+  const canAssign = kind !== "autopilotDevice" && kind !== "policySet" && !isReviewKind(kind);
   const exportJson = detail ? pretty(exportPayload(detail)) : "";
   const savedMeta = scriptMetaFromDetail(detail);
   const dirty =
@@ -794,6 +834,16 @@ export function GraphObjectInspector({
         actions={
           <div className="device-actions">
             <InspectorSaveButton />
+            <button
+              type="button"
+              className="axis-btn axis-btn-icon"
+              disabled={loading}
+              title="Refresh this object"
+              aria-label="Refresh"
+              onClick={() => void reloadDetail()}
+            >
+              <RefreshIcon />
+            </button>
             {canAssign && detail && !readOnly ? (
               <button
                 type="button"
@@ -808,10 +858,10 @@ export function GraphObjectInspector({
               <button
                 type="button"
                 className="axis-btn"
-                title="Show Graph JSON, copy it, or save as a file"
+                title="Additional information — the full Graph payload for this object"
                 onClick={() => setExportOpen(true)}
               >
-                Export
+                Additional information
               </button>
             ) : null}
             {!popout ? (
@@ -889,6 +939,16 @@ export function GraphObjectInspector({
                   </div>
                 ))}
               </dl>
+              {summary}
+              {showRingEditor ? (
+                <WindowsUpdateRingEditor ringId={detail.id} onSaved={() => void reloadDetail()} />
+              ) : null}
+              {showFeatureUpdateEditor ? (
+                <FeatureUpdateProfileEditor
+                  profileId={detail.id}
+                  onSaved={() => void reloadDetail()}
+                />
+              ) : null}
               {showRestrictionEditor ? (
                 <EnrollmentRestrictionsEditor
                   policyId={detail.id}
@@ -1176,7 +1236,8 @@ export function GraphObjectInspector({
               settings.length === 0 &&
               !extras ? (
                 <p className="muted">
-                  No setting instances or script bodies on this object. Use Export for the Graph payload.
+                  No setting instances or script bodies on this object. Use Additional information
+                  for the full Graph payload.
                 </p>
               ) : null}
             </div>

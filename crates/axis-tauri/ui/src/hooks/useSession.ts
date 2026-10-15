@@ -29,6 +29,7 @@ import {
   saveLastSignInApp,
 } from "../lib/loginPrefs";
 import { clearShellBannerDismissals } from "../lib/readOnly";
+import { clearInventoryCache } from "./useInventory";
 import { isPopoutRoute } from "../lib/popout";
 import { parseHash } from "../lib/route";
 
@@ -107,7 +108,7 @@ export function useSession() {
         setReadOnlyScopeExceedsRequest(Boolean(status.readOnlyScopeExceedsRequest));
         setExceededWriteScopes(status.exceededWriteScopes ?? []);
         setClientId(status.clientId ?? null);
-        tenantId = status.tenantId;
+        tenantId = status.tenantId ?? null;
         if (status.mode === "admin") {
           clearShellBannerDismissals();
         }
@@ -256,6 +257,7 @@ export function useSession() {
   const logout = useCallback(async () => {
     loginGeneration.current += 1;
     setBrowserSignIn(null);
+    clearInventoryCache();
     await signOut();
     setSignedIn(false);
     setAccountName(null);

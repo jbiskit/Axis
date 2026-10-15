@@ -15,7 +15,7 @@ function storedSignInLabel(client: StoredSignIn): string {
 }
 
 function accountDomain(accountName: string | null | undefined): string | null {
-  const domain = accountName?.split("@").at(-1)?.trim();
+  const domain = accountName?.split("@").pop()?.trim();
   if (!accountName?.includes("@") || !domain) return null;
   return domain;
 }

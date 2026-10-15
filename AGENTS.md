@@ -46,3 +46,9 @@ New features and suites are built for bulk editing.
 
 - Do not add or run unit tests during feature work. They are a waste of time at this stage.
 - Do not compile, typecheck, or otherwise test for build failures unless the user says there is a problem.
+
+
+## Context
+
+- Ensure context stays small and related to the task at hand.
+- This is a piecemeal implementation where overal wider context may not be beneficial
