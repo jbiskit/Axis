@@ -4,6 +4,10 @@ Notable user-facing changes to Axis are recorded here.
 
 ## [Unreleased]
 
+Add release notes here before preparing the next version.
+
+## [0.1.8] - 2026-10-15
+
 ### Added
 
 - **Entra** and **Purview** sit in the sidebar as their own modules, beside the Intune areas. Their pages are read-only reviews of what Microsoft Graph returns.
@@ -56,7 +60,6 @@ Notable user-facing changes to Axis are recorded here.
 - An Enrollment Status Page can block on all assigned apps or on apps you select. The app list uses the Intune portal filter, and Win32 apps show their display version.
 - Hybrid Autopilot deployment profiles leave out the device name template and Self-deploying mode. The computer name is set on the domain join profile, and the deployment mode stays user-driven.
 - The Hybrid domain join profile asks for a computer name prefix. The rest of the 15-character name is random, matching the Intune portal.
-
 ## [0.1.7] - 2026-10-02
 
 ### Added
