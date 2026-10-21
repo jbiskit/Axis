@@ -369,6 +369,7 @@ const RAIL_ICON_PATHS: Record<string, string> = {
   "/intune/apps": "M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3zM12 12l8-4.5M12 12v9M12 12L4 7.5",
   "/entra": "M15 7a3 3 0 1 1-6 0 3 3 0 0 1 6 0zM12 10v11M12 15h3M12 18h2",
   "/purview": "M3 12V4h8l10 10-8 8L3 12zM7.5 8.5h.01",
+  "/defender": "M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3zM4 9l8 5 8-5",
 };
 
 const RAIL_SETTINGS_ICON =

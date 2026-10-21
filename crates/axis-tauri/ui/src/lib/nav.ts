@@ -341,11 +341,35 @@ const PURVIEW_NAV: NavItem[] = [
   },
 ];
 
+const DEFENDER_EMAIL = "Email & collaboration";
+const DEFENDER_NAV: NavItem[] = [
+  {
+    href: "/defender",
+    label: "Defender",
+    icon: "endpoint-security",
+    section: "Defender",
+    children: [
+      { href: "/defender/email/preset-policies", label: "Preset security policies", icon: "policies", section: DEFENDER_EMAIL },
+      { href: "/defender/email/anti-phishing", label: "Anti-phishing", icon: "policies", section: DEFENDER_EMAIL },
+      { href: "/defender/email/anti-spam", label: "Anti-spam (inbound)", icon: "policies", section: DEFENDER_EMAIL },
+      { href: "/defender/email/outbound-spam", label: "Anti-spam (outbound)", icon: "policies", section: DEFENDER_EMAIL },
+      { href: "/defender/email/anti-malware", label: "Anti-malware", icon: "policies", section: DEFENDER_EMAIL },
+      { href: "/defender/email/safe-links", label: "Safe Links", icon: "policies", section: DEFENDER_EMAIL },
+      { href: "/defender/email/safe-attachments", label: "Safe Attachments", icon: "policies", section: DEFENDER_EMAIL },
+      { href: "/defender/email/global-settings", label: "Global settings", icon: "policies", section: DEFENDER_EMAIL },
+      { href: "/defender/email/quarantine-policies", label: "Quarantine policies", icon: "policies", section: DEFENDER_EMAIL },
+      { href: "/defender/email/allow-block-list", label: "Tenant Allow/Block List", icon: "policies", section: DEFENDER_EMAIL },
+      { href: "/defender/email/dkim", label: "DKIM", icon: "policies", section: DEFENDER_EMAIL },
+    ],
+  },
+];
+
 /** Product modules. Each owns a route prefix and a nav tree; non-Intune modules get one rail slot each, in this order. */
 export const NAV_MODULES: Array<{ id: string; label: string; nav: NavItem[] }> = [
   { id: "intune", label: "Intune", nav: INTUNE_NAV },
   { id: "entra", label: "Entra", nav: ENTRA_NAV },
   { id: "purview", label: "Purview", nav: PURVIEW_NAV },
+  { id: "defender", label: "Defender", nav: DEFENDER_NAV },
 ];
 
 export const ALL_NAV: NavItem[] = NAV_MODULES.flatMap((module) => module.nav);

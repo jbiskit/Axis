@@ -8210,3 +8210,21 @@ button.packs-kits-mode-option:disabled {
   padding: var(--axis-space-3);
   margin: 0;
 }
+
+.scope-tag-list {
+  gap: 0.45rem;
+  max-height: 22rem;
+  overflow-y: auto;
+}
+
+.scope-tag-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.scope-tag-count {
+  font-size: 0.75rem;
+  white-space: nowrap;
+}

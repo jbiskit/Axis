@@ -571,8 +571,24 @@ export async function fetchAppProtectionPolicies(): Promise<InventoryResponse<Ap
   return invoke("fetch_app_protection_policies_cmd");
 }
 
-/** Read-only Entra / Purview review kinds (mirrors `review::collection_path`). No Graph assignments. */
-export const REVIEW_KINDS = ["conditionalAccessPolicy", "namedLocation", "sensitivityLabel", "retentionLabel"] as const;
+/** Read-only review kinds. Entra / Purview mirror `review::collection_path`; `mdo:` kinds come from Exchange `Get-` cmdlets (`exchange_admin.rs`). */
+export const REVIEW_KINDS = [
+  "conditionalAccessPolicy",
+  "namedLocation",
+  "sensitivityLabel",
+  "retentionLabel",
+  "mdo:antiPhish",
+  "mdo:antiSpam",
+  "mdo:outboundSpam",
+  "mdo:antiMalware",
+  "mdo:safeLinks",
+  "mdo:safeAttachments",
+  "mdo:presetPolicies",
+  "mdo:atpGlobal",
+  "mdo:quarantine",
+  "mdo:allowBlock",
+  "mdo:dkim",
+] as const;
 export type ReviewKind = (typeof REVIEW_KINDS)[number];
 
 export async function fetchReviewObjects(kind: ReviewKind): Promise<InventoryResponse<Record<string, unknown>>> {
@@ -1669,6 +1685,31 @@ export async function updateObjectMetadata(input: {
   description?: string | null;
 }): Promise<UpdateObjectMetadataResponse> {
   return invoke<UpdateObjectMetadataResponse>("update_object_metadata_cmd", { input });
+}
+
+export type RoleScopeTag = {
+  id: string;
+  displayName: string;
+  description?: string | null;
+  isBuiltIn: boolean;
+};
+
+export async function listRoleScopeTags(): Promise<RoleScopeTag[]> {
+  return invoke<RoleScopeTag[]>("list_role_scope_tags_cmd");
+}
+
+export async function fetchObjectScopeTags(kind: string, id: string): Promise<string[]> {
+  return invoke<string[]>("fetch_object_scope_tags_cmd", { kind, id });
+}
+
+/** Returns the tag ids now on the object. */
+export async function updateObjectScopeTags(input: {
+  kind: string;
+  id: string;
+  add: string[];
+  remove: string[];
+}): Promise<string[]> {
+  return invoke<string[]>("update_object_scope_tags_cmd", { input });
 }
 
 export async function deleteGraphObject(kind: string, id: string): Promise<ActionResponse> {

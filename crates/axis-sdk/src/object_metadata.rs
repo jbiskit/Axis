@@ -921,6 +921,135 @@ pub async fn update_object_metadata(
     })
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoleScopeTag {
+    pub id: String,
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub is_built_in: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateObjectScopeTagsInput {
+    pub kind: String,
+    pub id: String,
+    #[serde(default)]
+    pub add: Vec<String>,
+    #[serde(default)]
+    pub remove: Vec<String>,
+}
+
+/// Kinds whose Graph object carries `roleScopeTagIds` and accepts a PATCH of it.
+/// Policy sets use `roleScopeTags`, and groups / Autopilot devices have no tags.
+pub fn can_edit_scope_tags(kind: &str) -> bool {
+    matches!(
+        kind,
+        "configurationPolicy"
+            | "compliancePolicy"
+            | "groupPolicyConfiguration"
+            | "deviceConfiguration"
+            | "enrollmentConfiguration"
+            | "mobileApp"
+            | "autopilotProfile"
+            | "windowsUpdate:rings"
+            | "windowsUpdate:feature"
+            | "windowsUpdate:quality"
+            | "windowsUpdate:drivers"
+            | "script:platform-powershell"
+            | "script:platform-shell"
+            | "script:remediation"
+            | "script:compliance"
+    )
+}
+
+fn ensure_scope_tag_kind(kind: &str) -> Result<(), GraphError> {
+    if can_edit_scope_tags(kind) {
+        return Ok(());
+    }
+    Err(GraphError::Request {
+        status: 400,
+        code: None,
+        message: format!("Scope tags are not available for {kind}."),
+        permission_related: false,
+    })
+}
+
+fn scope_tag_ids(object: &Value) -> Vec<String> {
+    object
+        .get("roleScopeTagIds")
+        .and_then(Value::as_array)
+        .map(|ids| ids.iter().filter_map(Value::as_str).map(str::to_string).collect())
+        .unwrap_or_default()
+}
+
+fn merge_scope_tags(current: &[String], add: &[String], remove: &[String]) -> Vec<String> {
+    let mut next: Vec<String> = current.iter().filter(|id| !remove.contains(id)).cloned().collect();
+    for id in add {
+        if !next.contains(id) {
+            next.push(id.clone());
+        }
+    }
+    // Intune keeps at least one tag; an object left with none falls back to Default ("0").
+    if next.is_empty() {
+        next.push("0".into());
+    }
+    next
+}
+
+pub async fn list_role_scope_tags(access_token: &str) -> Result<Vec<RoleScopeTag>, GraphError> {
+    GraphClient::new()
+        .fetch_all_pages(
+            access_token,
+            "/deviceManagement/roleScopeTags?$select=id,displayName,description,isBuiltIn",
+            "beta",
+            1000,
+        )
+        .await
+}
+
+pub async fn fetch_object_scope_tags(
+    access_token: &str,
+    kind: &str,
+    id: &str,
+) -> Result<Vec<String>, GraphError> {
+    ensure_scope_tag_kind(kind)?;
+    let object: Value = GraphClient::new()
+        .fetch_plain(access_token, &object_path(kind, id)?, "beta")
+        .await?;
+    Ok(scope_tag_ids(&object))
+}
+
+/// Adds and removes tags against the object's current set, so bulk edits keep
+/// tags that differ per object. Returns the tag ids now on the object.
+pub async fn update_object_scope_tags(
+    access_token: &str,
+    input: UpdateObjectScopeTagsInput,
+) -> Result<Vec<String>, GraphError> {
+    ensure_scope_tag_kind(&input.kind)?;
+    let client = GraphClient::new();
+    let path = object_path(&input.kind, &input.id)?;
+    let object: Value = client.fetch_plain(access_token, &path, "beta").await?;
+    let current = scope_tag_ids(&object);
+    let next = merge_scope_tags(&current, &input.add, &input.remove);
+    if next == current {
+        return Ok(current);
+    }
+    let mut body = json!({ "roleScopeTagIds": next });
+    // Derived types (device configurations, apps, compliance) reject a PATCH without @odata.type.
+    if let Some(odata_type) = object.get("@odata.type").cloned() {
+        body["@odata.type"] = odata_type;
+    }
+    client
+        .patch_no_content(access_token, &path, "beta", &body)
+        .await?;
+    Ok(next)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -30,7 +30,7 @@ import { AppDependencyPane } from "./AppDependencyGraph";
 import { OpenInIntune } from "../intune/OpenInIntune";
 import { ContextMenu, type ContextMenuState } from "../ui/ContextMenu";
 import { AutopilotAssignedDevices } from "./AutopilotAssignedDevices";
-import { ObjectDeleteButton } from "./ObjectListMenu";
+import { ObjectDeleteButton, ObjectScopeTagsButton } from "./ObjectListMenu";
 import { ScriptCodeEditor } from "../ui/ScriptCodeEditor";
 import { ScriptRunSettingsFields } from "./ScriptRunSettingsFields";
 import { PageHeader } from "../ui/PageChrome";
@@ -878,6 +878,13 @@ export function GraphObjectInspector({
             {portalHref ? (
               <OpenInIntune href={portalHref} label={detail?.title ?? fallbackTitle} />
             ) : null}
+            <ObjectScopeTagsButton
+              target={{
+                id,
+                kind,
+                title: detail?.title ?? fallbackTitle ?? "this object",
+              }}
+            />
             <ObjectDeleteButton
               target={{
                 id,

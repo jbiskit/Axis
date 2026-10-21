@@ -16,6 +16,21 @@ export function canEditGraphMetadata(kind: string): boolean {
   return canDuplicateGraphKind(kind);
 }
 
+/** Mirrors `can_edit_scope_tags` in axis-sdk. */
+export function canEditScopeTags(kind: string): boolean {
+  return (
+    kind.startsWith("script:") ||
+    kind.startsWith("windowsUpdate:") ||
+    kind === "configurationPolicy" ||
+    kind === "compliancePolicy" ||
+    kind === "groupPolicyConfiguration" ||
+    kind === "deviceConfiguration" ||
+    kind === "enrollmentConfiguration" ||
+    kind === "mobileApp" ||
+    kind === "autopilotProfile"
+  );
+}
+
 export function canDeleteGraphKind(kind: string): boolean {
   return (
     kind.startsWith("script:") ||

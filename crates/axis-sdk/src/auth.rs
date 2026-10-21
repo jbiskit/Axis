@@ -11,6 +11,8 @@ use uuid::Uuid;
 
 use crate::session_store::{self, PersistedSession, SessionMode};
 
+pub const EXCHANGE_NEEDS_APP_REGISTRATION: &str = "Defender for Office 365 policies need Axis signed in with your own app registration that has the Office 365 Exchange Online delegated permission Exchange.Manage, with admin consent granted.";
+
 const GRAPH_COMMAND_LINE_TOOLS_CLIENT_ID: &str = "14d82eec-204b-4c2f-b7e8-296a70dab67e";
 const REFRESH_SKEW_SECONDS: u64 = 300;
 
@@ -305,6 +307,8 @@ pub struct TokenClaims {
     pub upn: Option<String>,
     pub tid: Option<String>,
     pub scp: Option<String>,
+    #[serde(default)]
+    pub aud: Option<String>,
 }
 
 #[derive(Debug, Error)]
@@ -337,9 +341,23 @@ struct DeviceSession {
     extra_scopes: Vec<String>,
 }
 
+/// Exchange Online access token, kept in memory only and tied to the session it came from.
+#[derive(Clone)]
+struct ExchangeToken {
+    client_id: String,
+    tenant_id: Option<String>,
+    access_token: String,
+    expires_on: i64,
+}
+
+/// Exchange Online (adminapi) resource. `.default` takes whatever Exchange
+/// permission the app registration was consented for.
+const EXCHANGE_SCOPE: &str = "https://outlook.office365.com/.default";
+
 pub struct AuthManager {
     pending: Mutex<HashMap<String, BrowserFlow>>,
     session: Mutex<Option<DeviceSession>>,
+    exchange: Mutex<Option<ExchangeToken>>,
     client: reqwest::Client,
 }
 
@@ -355,6 +373,7 @@ impl AuthManager {
         Self {
             pending: Mutex::new(HashMap::new()),
             session: Mutex::new(load_persisted_session()),
+            exchange: Mutex::new(None),
             client: reqwest::Client::new(),
         }
     }
@@ -674,6 +693,75 @@ impl AuthManager {
         }))
     }
 
+    /// Exchange Online token from the session's refresh token, plus the tenant id.
+    /// Only for app registrations: Graph Command Line Tools is not consented for Exchange.
+    pub async fn get_exchange_token(&self) -> Result<Option<(String, String)>, AuthError> {
+        // Refreshes the Graph session first, so the refresh token below is current.
+        if self.get_session_token().await?.is_none() {
+            return Ok(None);
+        }
+        let Some(current) = self.session.lock().await.clone() else {
+            return Ok(None);
+        };
+        if is_graph_command_line_tools_client(&current.client_id) {
+            return Err(AuthError::Message(EXCHANGE_NEEDS_APP_REGISTRATION.into()));
+        }
+        let tenant_id = current
+            .tenant_id
+            .clone()
+            .ok_or_else(|| AuthError::Message("Tenant id is not known for this session.".into()))?;
+        if let Some(cached) = self.exchange.lock().await.as_ref() {
+            let same_session = cached.client_id == current.client_id
+                && cached.tenant_id.as_deref() == Some(tenant_id.as_str());
+            if same_session && cached.expires_on - now_ms() > (REFRESH_SKEW_SECONDS * 1000) as i64 {
+                return Ok(Some((cached.access_token.clone(), tenant_id)));
+            }
+        }
+
+        let response = self
+            .client
+            .post(format!("{}/token", authority_base()))
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(format!(
+                "grant_type=refresh_token&client_id={}&refresh_token={}&scope={}",
+                urlencoding_helper(&current.client_id),
+                urlencoding_helper(&current.refresh_token),
+                urlencoding_helper(EXCHANGE_SCOPE),
+            ))
+            .send()
+            .await?;
+        let status = response.status();
+        let json: serde_json::Value = response.json().await?;
+        if !status.is_success() {
+            // Never clears the Graph session: a missing Exchange consent is not a sign-in failure.
+            let description = describe_error(&json, "Exchange token request failed");
+            return Err(AuthError::Message(format!(
+                "{description} {EXCHANGE_NEEDS_APP_REGISTRATION}"
+            )));
+        }
+        let access_token = json["access_token"]
+            .as_str()
+            .ok_or_else(|| AuthError::Message("Missing access_token".into()))?
+            .to_string();
+        // `.default` still issues a token when Exchange.Manage isn't consented; Exchange then
+        // answers an empty 401. Fail here, uncached, so new consent is picked up on the next try.
+        let scp = decode_access_token_claims(&access_token).scp.unwrap_or_default();
+        if !scp.split(' ').any(|scope| scope == "Exchange.Manage") {
+            return Err(AuthError::Message(format!(
+                "{EXCHANGE_NEEDS_APP_REGISTRATION} The Exchange token this app registration received only has: {}.",
+                if scp.is_empty() { "no scopes" } else { scp.as_str() }
+            )));
+        }
+        let expires_in = json["expires_in"].as_u64().unwrap_or(3600);
+        *self.exchange.lock().await = Some(ExchangeToken {
+            client_id: current.client_id,
+            tenant_id: Some(tenant_id.clone()),
+            access_token: access_token.clone(),
+            expires_on: now_ms() + (expires_in * 1000) as i64,
+        });
+        Ok(Some((access_token, tenant_id)))
+    }
+
     pub async fn restore_session(&self) -> (bool, Option<String>) {
         {
             let session = self.session.lock().await;
@@ -991,6 +1079,7 @@ pub fn decode_access_token_claims(access_token: &str) -> TokenClaims {
         upn: json["upn"].as_str().map(str::to_string),
         tid: json["tid"].as_str().map(str::to_string),
         scp: json["scp"].as_str().map(str::to_string),
+        aud: json["aud"].as_str().map(str::to_string),
     }
 }
 

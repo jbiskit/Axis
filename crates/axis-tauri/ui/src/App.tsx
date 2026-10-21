@@ -5,6 +5,7 @@ import { CreateClientContainerDialog } from "./components/CreateClientContainerD
 import { IntuneWorkspace } from "./components/IntuneWorkspace";
 import { EntraWorkspace } from "./components/modules/EntraWorkspace";
 import { PurviewWorkspace } from "./components/modules/PurviewWorkspace";
+import { DefenderWorkspace } from "./components/modules/DefenderWorkspace";
 import { moduleForPath } from "./lib/nav";
 import { LoginScreen } from "./components/LoginScreen";
 import { PopoutView } from "./components/PopoutView";
@@ -148,6 +149,8 @@ export default function App() {
           <EntraWorkspace route={route} signedIn={session.signedIn} />
         ) : moduleForPath(route.pathname) === "purview" ? (
           <PurviewWorkspace route={route} signedIn={session.signedIn} />
+        ) : moduleForPath(route.pathname) === "defender" ? (
+          <DefenderWorkspace route={route} signedIn={session.signedIn} />
         ) : (
         <IntuneWorkspace
           route={route}

@@ -12,6 +12,7 @@ import {
   canDeleteGraphKind,
   canDuplicateGraphKind,
   canEditGraphMetadata,
+  canEditScopeTags,
   copyDisplayName,
 } from "../../lib/duplicateObject";
 import {
@@ -22,8 +23,13 @@ import {
   type MobileAppDeleteLink,
   exportSelectedObjects,
   fetchGraphObjectDetail,
+  fetchObjectScopeTags,
+  listRoleScopeTags,
   updateObjectMetadata,
+  updateObjectScopeTags,
+  type RoleScopeTag,
 } from "../../lib/tauri";
+import { requestObjectRefresh } from "../../lib/inspectorCache";
 import type { AssignmentDraft } from "../../types/inventory";
 import { READ_ONLY_WRITE_HINT, useReadOnly } from "../../lib/readOnly";
 import {
@@ -100,6 +106,7 @@ export type ObjectListActionContext = {
   openDelete: (target: ObjectListTarget) => void;
   openDuplicate: (target: ObjectListTarget) => void;
   openMetadata: (target: ObjectListTarget) => void;
+  openScopeTags: (target: ObjectListTarget) => void;
 };
 
 export type ObjectListActionDef = {
@@ -120,6 +127,13 @@ export const OBJECT_LIST_ACTIONS: ObjectListActionDef[] = [
     available: (target) => canEditGraphMetadata(target.kind),
     disabled: (_target, ctx) => ctx.busy || ctx.readOnly,
     run: (target, ctx) => ctx.openMetadata(target),
+  },
+  {
+    id: "scope-tags",
+    label: "Scope tags…",
+    available: (target) => canEditScopeTags(target.kind),
+    disabled: (_target, ctx) => ctx.busy || ctx.readOnly,
+    run: (target, ctx) => ctx.openScopeTags(target),
   },
   {
     id: "duplicate",
@@ -571,6 +585,228 @@ function DeleteObjectDialog({
   );
 }
 
+type TagChoice = "add" | "remove";
+
+/** Adds / removes scope tags across one or more objects; untouched tags stay as they are per object. */
+function ScopeTagsDialog({
+  targets,
+  onClose,
+}: {
+  targets: ObjectListTarget[];
+  onClose: () => void;
+}) {
+  const [tags, setTags] = useState<RoleScopeTag[] | null>(null);
+  // null entry = that object's tags could not be read; it still gets the add/remove.
+  const [current, setCurrent] = useState<(string[] | null)[] | null>(null);
+  const [choices, setChoices] = useState<Record<string, TagChoice>>({});
+  const [saving, setSaving] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+  const targetKey = targets.map((target) => `${target.kind}:${target.id}`).join("\n");
+
+  useEffect(() => {
+    let cancelled = false;
+    setTags(null);
+    setCurrent(null);
+    setError(null);
+    void Promise.all([
+      listRoleScopeTags(),
+      Promise.allSettled(targets.map((target) => fetchObjectScopeTags(target.kind, target.id))),
+    ])
+      .then(([tagList, settled]) => {
+        if (cancelled) return;
+        setTags([...tagList].sort((a, b) => compareTagName(a, b)));
+        setCurrent(settled.map((result) => (result.status === "fulfilled" ? result.value : null)));
+        const unread = settled.filter((result) => result.status === "rejected").length;
+        if (unread > 0) {
+          setError(`Could not read current tags for ${unread} object${unread === 1 ? "" : "s"}.`);
+        }
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Could not load scope tags.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [targetKey]);
+
+  const known = (current ?? []).filter((ids): ids is string[] => ids !== null);
+  const countFor = (tagId: string) => known.filter((ids) => ids.includes(tagId)).length;
+  const changes = Object.entries(choices);
+  const add = changes.filter(([, choice]) => choice === "add").map(([id]) => id);
+  const remove = changes.filter(([, choice]) => choice === "remove").map(([id]) => id);
+
+  function toggle(tagId: string, checked: boolean) {
+    const count = countFor(tagId);
+    const next: TagChoice = checked ? "add" : "remove";
+    setChoices((value) => {
+      const copy = { ...value };
+      const unchanged =
+        known.length > 0 && (next === "add" ? count === known.length : count === 0);
+      if (unchanged) delete copy[tagId];
+      else copy[tagId] = next;
+      return copy;
+    });
+  }
+
+  async function save() {
+    setSaving(true);
+    setProgress(0);
+    setError(null);
+    const failures: string[] = [];
+    for (const target of targets) {
+      try {
+        await updateObjectScopeTags({ kind: target.kind, id: target.id, add, remove });
+        requestObjectRefresh(target.id);
+      } catch (err) {
+        failures.push(`${target.title}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      setProgress((value) => value + 1);
+    }
+    setSaving(false);
+    if (failures.length > 0) {
+      setError(
+        `${targets.length - failures.length} updated; ${failures.length} failed. ${failures.slice(0, 3).join(" ")}`,
+      );
+      return;
+    }
+    onClose();
+  }
+
+  const loading = tags === null && !error;
+  const many = targets.length > 1;
+
+  return (
+    <div
+      className="axis-modal-backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !saving) onClose();
+      }}
+    >
+      <div className="axis-modal object-action-pane" role="dialog" aria-modal="true">
+        <div className="assignment-dialog-head">
+          <div>
+            <p className="axis-kicker">Scope tags</p>
+            <h2>{many ? `${targets.length} selected objects` : targets[0]?.title}</h2>
+          </div>
+          <CloseButton onClick={onClose} disabled={saving} />
+        </div>
+        {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
+        {loading ? <p className="muted">Loading scope tags…</p> : null}
+        {tags ? (
+          <div className="object-action-fields scope-tag-list">
+            {tags.length === 0 ? <p className="muted">This tenant has no scope tags.</p> : null}
+            {tags.map((tag) => {
+              const count = countFor(tag.id);
+              const choice = choices[tag.id];
+              const all = known.length > 0 && count === known.length;
+              const checked = choice ? choice === "add" : all;
+              const mixed = !choice && count > 0 && !all;
+              return (
+                <label key={tag.id} className="scope-tag-row">
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    disabled={saving}
+                    ref={(el) => {
+                      if (el) el.indeterminate = mixed;
+                    }}
+                    onChange={(event) => toggle(tag.id, event.target.checked)}
+                  />
+                  <span>
+                    {tag.displayName || tag.id}
+                    {tag.description ? <span className="muted"> — {tag.description}</span> : null}
+                  </span>
+                  {many ? (
+                    <span className="muted scope-tag-count">
+                      {choice === "add"
+                        ? "add to all"
+                        : choice === "remove"
+                          ? "remove from all"
+                          : `on ${count} of ${known.length}`}
+                    </span>
+                  ) : null}
+                </label>
+              );
+            })}
+          </div>
+        ) : null}
+        <div className="object-action-footer">
+          <p className="muted">
+            {saving
+              ? `Updating ${progress} of ${targets.length}…`
+              : changes.length === 0
+                ? "Tick a tag to add it, clear it to remove it."
+                : `${add.length} to add, ${remove.length} to remove. Other tags stay as they are. An object left with no tags gets Default.`}
+          </p>
+          <div className="device-actions">
+            {changes.length > 0 && !saving ? (
+              <button type="button" className="axis-btn" onClick={() => setChoices({})}>
+                Reset
+              </button>
+            ) : null}
+            <button type="button" className="axis-btn" disabled={saving} onClick={onClose}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="axis-btn axis-btn-primary"
+              disabled={saving || changes.length === 0}
+              onClick={() => void save()}
+            >
+              {saving ? "Saving…" : many ? `Update ${targets.length}` : "Save tags"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function compareTagName(a: RoleScopeTag, b: RoleScopeTag): number {
+  // Default ("0") first, then by name.
+  if (a.id === "0") return -1;
+  if (b.id === "0") return 1;
+  return (a.displayName || a.id).localeCompare(b.displayName || b.id);
+}
+
+/** Bulk bar button: edit scope tags on every selected object that supports them. */
+export function BulkScopeTagsAction({ targets }: { targets: ObjectListTarget[] }) {
+  const readOnly = useReadOnly();
+  const [open, setOpen] = useState(false);
+  const taggable = targets.filter((target) => canEditScopeTags(target.kind));
+  if (readOnly || taggable.length === 0) return null;
+  return (
+    <>
+      <button type="button" className="axis-btn" onClick={() => setOpen(true)}>
+        {taggable.length === 1 ? "Scope tags" : `Scope tags (${taggable.length})`}
+      </button>
+      {open ? <ScopeTagsDialog targets={taggable} onClose={() => setOpen(false)} /> : null}
+    </>
+  );
+}
+
+/** Inspector header button for one object. */
+export function ObjectScopeTagsButton({ target }: { target: ObjectListTarget }) {
+  const readOnly = useReadOnly();
+  const [open, setOpen] = useState(false);
+  if (!canEditScopeTags(target.kind)) return null;
+  return (
+    <>
+      <button
+        type="button"
+        className="axis-btn"
+        disabled={readOnly}
+        title={readOnly ? READ_ONLY_WRITE_HINT : `Edit scope tags on ${target.title}`}
+        onClick={() => setOpen(true)}
+      >
+        Scope tags
+      </button>
+      {open ? <ScopeTagsDialog targets={[target]} onClose={() => setOpen(false)} /> : null}
+    </>
+  );
+}
+
 export function BulkExportAction({ targets }: { targets: ObjectListTarget[] }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -646,6 +882,7 @@ export function BulkListActions({
   return (
     <>
       <BulkExportAction targets={targets} />
+      <BulkScopeTagsAction targets={targets} />
       {onDeleted ? <BulkDeleteAction targets={targets} onDeleted={onDeleted} /> : null}
     </>
   );
@@ -793,6 +1030,7 @@ export function ObjectListMenuHost({
   const [menu, setMenu] = useState<ContextMenuState>(null);
   const [pane, setPane] = useState<PaneState>(null);
   const [deleteTarget, setDeleteTarget] = useState<ObjectListTarget | null>(null);
+  const [tagTarget, setTagTarget] = useState<ObjectListTarget | null>(null);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<{ text: string; tone: "info" | "danger" } | null>(
     null,
@@ -815,6 +1053,7 @@ export function ObjectListMenuHost({
       openDelete: (target) => setDeleteTarget(target),
       openDuplicate: (target) => setPane({ mode: "duplicate", target }),
       openMetadata: (target) => setPane({ mode: "metadata", target }),
+      openScopeTags: (target) => setTagTarget(target),
     }),
     [busy, readOnly],
   );
@@ -854,6 +1093,13 @@ export function ObjectListMenuHost({
           onDeleted={onDeleted}
           setBusy={setBusy}
           showToast={showToast}
+        />
+      ) : null}
+      {tagTarget ? (
+        <ScopeTagsDialog
+          key={`${tagTarget.kind}:${tagTarget.id}`}
+          targets={[tagTarget]}
+          onClose={() => setTagTarget(null)}
         />
       ) : null}
       {toast ? <ContextMenuToast tone={toast.tone}>{toast.text}</ContextMenuToast> : null}

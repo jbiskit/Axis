@@ -1832,6 +1832,24 @@ pub async fn fetch_review_objects_cmd(
     state: State<'_, AppState>,
     kind: String,
 ) -> Result<InventoryResponse<serde_json::Value>, String> {
+    if axis_sdk::is_exchange_review_kind(&kind) {
+        let (token, tenant_id) = match state.auth.get_exchange_token().await {
+            Ok(Some(pair)) => pair,
+            Ok(None) => (String::new(), String::new()),
+            Err(error) => {
+                return Ok(InventoryResponse {
+                    list: InventoryList::empty_now(),
+                    error: Some(error.to_string()),
+                    mode: "live",
+                })
+            }
+        };
+        return with_inventory(
+            &state,
+            axis_sdk::fetch_exchange_review_objects(&token, &tenant_id, &kind),
+        )
+        .await;
+    }
     let token = session_token(&state).await?.unwrap_or_default();
     with_inventory(&state, axis_sdk::fetch_review_objects(&token, &kind)).await
 }
@@ -1933,12 +1951,53 @@ pub struct GraphObjectDetailResponse {
     pub mode: &'static str,
 }
 
+/// Defender for Office 365 rows come from Exchange `Get-` cmdlets, shaped like a Graph detail for the inspector.
+async fn exchange_review_detail(
+    state: &State<'_, AppState>,
+    kind: &str,
+    id: &str,
+) -> GraphObjectDetailResponse {
+    let failed = |error: String| GraphObjectDetailResponse {
+        detail: None,
+        error: Some(error),
+        mode: "live",
+    };
+    let (token, tenant_id) = match state.auth.get_exchange_token().await {
+        Ok(Some(pair)) => pair,
+        Ok(None) => return failed("Not signed in.".into()),
+        Err(error) => return failed(error.to_string()),
+    };
+    match axis_sdk::fetch_exchange_review_object(&token, &tenant_id, kind, id).await {
+        Ok(object) => GraphObjectDetailResponse {
+            detail: Some(axis_sdk::GraphObjectDetail {
+                id: id.to_string(),
+                kind: kind.to_string(),
+                title: object["Name"].as_str().unwrap_or(id).to_string(),
+                object,
+                assignments: vec![],
+                settings: None,
+                script_text: None,
+                detection_script_text: None,
+                remediation_script_text: None,
+                extras: None,
+                warnings: vec![],
+            }),
+            error: None,
+            mode: "live",
+        },
+        Err(error) => failed(error.to_string()),
+    }
+}
+
 #[tauri::command]
 pub async fn fetch_graph_object_detail_cmd(
     state: State<'_, AppState>,
     kind: String,
     id: String,
 ) -> Result<GraphObjectDetailResponse, String> {
+    if axis_sdk::is_exchange_review_kind(&kind) {
+        return Ok(exchange_review_detail(&state, &kind, &id).await);
+    }
     let Some(token) = session_token(&state).await? else {
         return Ok(GraphObjectDetailResponse {
             detail: None,
@@ -4257,6 +4316,46 @@ pub async fn update_object_metadata_cmd(
             error: Some(error.to_string()),
         }),
     }
+}
+
+#[tauri::command]
+pub async fn list_role_scope_tags_cmd(
+    state: State<'_, AppState>,
+) -> Result<Vec<axis_sdk::RoleScopeTag>, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Err("Not signed in.".into());
+    };
+    axis_sdk::list_role_scope_tags(&token)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn fetch_object_scope_tags_cmd(
+    state: State<'_, AppState>,
+    kind: String,
+    id: String,
+) -> Result<Vec<String>, String> {
+    let Some(token) = session_token(&state).await? else {
+        return Err("Not signed in.".into());
+    };
+    axis_sdk::fetch_object_scope_tags(&token, &kind, &id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn update_object_scope_tags_cmd(
+    state: State<'_, AppState>,
+    input: axis_sdk::UpdateObjectScopeTagsInput,
+) -> Result<Vec<String>, String> {
+    ensure_write_allowed(&state).await?;
+    let Some(token) = session_token(&state).await? else {
+        return Err("Not signed in.".into());
+    };
+    axis_sdk::update_object_scope_tags(&token, input)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

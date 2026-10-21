@@ -21,6 +21,7 @@ mod enrollment_esp;
 mod enrollment_limits;
 mod enrollment_restrictions;
 mod environment_report;
+mod exchange_admin;
 mod feature_updates;
 mod glance;
 mod graph;
@@ -176,11 +177,15 @@ pub use object_duplicate::{
     can_duplicate_kind, copy_display_name, duplicate_graph_object, strip_for_graph_create,
     strip_keys, strip_setting_definitions, DuplicatedObject,
 };
+pub use exchange_admin::{
+    fetch_exchange_review_object, fetch_exchange_review_objects, is_exchange_review_kind,
+};
 pub use object_metadata::{
     can_delete_graph_object, can_update_object_metadata, delete_graph_object,
     fetch_windows_autopilot_settings, mobile_app_delete_links, mobile_app_relationships,
     sync_windows_autopilot_devices, update_autopilot_device_properties, update_directory_group,
-    update_object_metadata,
+    update_object_metadata, can_edit_scope_tags, list_role_scope_tags, fetch_object_scope_tags,
+    update_object_scope_tags, RoleScopeTag, UpdateObjectScopeTagsInput,
     MobileAppDeleteLink, UpdateObjectMetadataInput, UpdatedObjectMetadata,
     WindowsAutopilotSettings, AUTOPILOT_SYNC_COOLDOWN_SECS,
 };
