@@ -360,6 +360,9 @@ const DEFENDER_NAV: NavItem[] = [
       { href: "/defender/email/quarantine-policies", label: "Quarantine policies", icon: "policies", section: DEFENDER_EMAIL },
       { href: "/defender/email/allow-block-list", label: "Tenant Allow/Block List", icon: "policies", section: DEFENDER_EMAIL },
       { href: "/defender/email/dkim", label: "DKIM", icon: "policies", section: DEFENDER_EMAIL },
+      { href: "/defender/posture/secure-score", label: "Secure Score", icon: "overview", section: "Exposure" },
+      { href: "/defender/endpoints/devices", label: "Device inventory", icon: "devices", section: "Endpoints" },
+      { href: "/defender/endpoints/security-policies", label: "Endpoint security policies", icon: "policies", section: "Endpoints" },
     ],
   },
 ];

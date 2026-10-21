@@ -588,6 +588,9 @@ export const REVIEW_KINDS = [
   "mdo:quarantine",
   "mdo:allowBlock",
   "mdo:dkim",
+  "secureScoreControl",
+  "endpointSecurityPolicy",
+  "defenderDevice",
 ] as const;
 export type ReviewKind = (typeof REVIEW_KINDS)[number];
 

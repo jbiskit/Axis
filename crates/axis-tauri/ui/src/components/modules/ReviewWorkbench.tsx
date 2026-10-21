@@ -112,6 +112,7 @@ export function ReviewWorkbench({
   signedIn,
   resolveNames,
   summary,
+  headline,
 }: {
   kind: ReviewKind;
   eyebrow: string;
@@ -128,6 +129,8 @@ export function ReviewWorkbench({
   resolveNames?: (rows: ReviewRow[]) => Promise<ReviewNames>;
   /** Readable breakdown of one row for the inspector's overview tab. */
   summary?: (row: ReviewRow, names: ReviewNames) => ReactNode;
+  /** Totals across the loaded rows, shown above the list. */
+  headline?: (rows: ReviewRow[]) => ReactNode;
 }) {
   const inventory = useInventory(loaderFor(kind), signedIn, signedIn);
   const rows = useMemo(() => inventory.items.filter((row) => typeof row.id === "string"), [inventory.items]);
@@ -225,6 +228,7 @@ export function ReviewWorkbench({
         }
       />
       {note ? <div className="axis-alert">{note}</div> : null}
+      {headline && rows.length > 0 ? headline(rows) : null}
       {inventory.error ? <div className="axis-alert axis-alert-danger">{inventory.error}</div> : null}
       {inventory.truncated ? <div className="axis-alert">Showing the first {rows.length} items.</div> : null}
       {bulkBar}

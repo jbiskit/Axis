@@ -125,6 +125,9 @@ fn base_scopes() -> Vec<String> {
         // Purview reviews: sensitivity labels and retention labels.
         "InformationProtectionPolicy.Read".to_string(),
         "RecordsManagement.Read.All".to_string(),
+        // Defender reviews: Secure Score, and device inventory through advanced hunting.
+        "SecurityEvents.Read.All".to_string(),
+        "ThreatHunting.Read.All".to_string(),
         // Conditional Access review: role and application names.
         "RoleManagement.Read.Directory".to_string(),
         "Application.Read.All".to_string(),

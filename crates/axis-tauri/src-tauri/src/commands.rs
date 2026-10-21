@@ -1967,12 +1967,26 @@ async fn exchange_review_detail(
         Ok(None) => return failed("Not signed in.".into()),
         Err(error) => return failed(error.to_string()),
     };
-    match axis_sdk::fetch_exchange_review_object(&token, &tenant_id, kind, id).await {
+    let row = axis_sdk::fetch_exchange_review_object(&token, &tenant_id, kind, id).await;
+    review_row_detail(kind, id, row)
+}
+
+/// A review row with no Graph object of its own, shaped like a Graph detail for the inspector.
+fn review_row_detail(
+    kind: &str,
+    id: &str,
+    row: Result<serde_json::Value, axis_sdk::GraphError>,
+) -> GraphObjectDetailResponse {
+    match row {
         Ok(object) => GraphObjectDetailResponse {
             detail: Some(axis_sdk::GraphObjectDetail {
                 id: id.to_string(),
                 kind: kind.to_string(),
-                title: object["Name"].as_str().unwrap_or(id).to_string(),
+                title: ["Name", "DeviceName"]
+                    .iter()
+                    .find_map(|key| object[*key].as_str())
+                    .unwrap_or(id)
+                    .to_string(),
                 object,
                 assignments: vec![],
                 settings: None,
@@ -1985,7 +1999,11 @@ async fn exchange_review_detail(
             error: None,
             mode: "live",
         },
-        Err(error) => failed(error.to_string()),
+        Err(error) => GraphObjectDetailResponse {
+            detail: None,
+            error: Some(error.to_string()),
+            mode: "live",
+        },
     }
 }
 
@@ -1997,6 +2015,11 @@ pub async fn fetch_graph_object_detail_cmd(
 ) -> Result<GraphObjectDetailResponse, String> {
     if axis_sdk::is_exchange_review_kind(&kind) {
         return Ok(exchange_review_detail(&state, &kind, &id).await);
+    }
+    if axis_sdk::is_row_only_review_kind(&kind) {
+        let token = session_token(&state).await?.unwrap_or_default();
+        let row = axis_sdk::fetch_review_row(&token, &kind, &id).await;
+        return Ok(review_row_detail(&kind, &id, row));
     }
     let Some(token) = session_token(&state).await? else {
         return Ok(GraphObjectDetailResponse {

@@ -198,6 +198,10 @@ pub(crate) fn is_write(method: &Method, path: &str) -> bool {
         return false;
     }
     let last = bare.rsplit('/').next().unwrap_or("").to_ascii_lowercase();
+    // Advanced hunting is a read sent as POST.
+    if last == "runhuntingquery" {
+        return false;
+    }
     !["get", "evaluate", "search", "retrieve", "token"]
         .iter()
         .any(|prefix| last.starts_with(prefix))

@@ -214,7 +214,10 @@ pub use policy_health::{
     index_policy_health, lookup_app_install, lookup_policy_health, AppInstallHealth, PolicyHealth,
 };
 pub use ca_coverage::{fetch_conditional_access_coverage, ConditionalAccessCoverage};
-pub use review::{fetch_review_objects, resolve_review_names, ReviewReferences};
+pub use review::{
+    fetch_review_objects, fetch_review_row, is_row_only_review_kind, resolve_review_names,
+    ReviewReferences,
+};
 pub use readiness::{
     fetch_intune_readiness, fetch_mdm_user_scope, fetch_user_readiness, search_readiness_users,
     update_mdm_user_scope, MdmScopeGroup, MdmUserScope, MdmUserScopePatch, ReadinessReport,

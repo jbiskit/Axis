@@ -18,6 +18,8 @@ const READ_SCOPE_IDS = [
   "e4c9e354-4dc5-45b8-9e7c-e1393b0b1a20", // AuditLog.Read.All
   "4ad84827-5578-4e18-ad7a-86530b12f884", // InformationProtectionPolicy.Read
   "07f995eb-fc67-4522-ad66-2b8ca8ea3efd", // RecordsManagement.Read.All
+  "64733abd-851e-478a-bffb-e47a14b18235", // SecurityEvents.Read.All
+  "b152eca8-ea73-4a48-8c98-1a6742673d99", // ThreatHunting.Read.All
   "741c54c3-0c1e-44a1-818b-3f97ab4e8c83", // RoleManagement.Read.Directory
   "c79f8feb-a9db-4090-85f9-90d820caa0eb", // Application.Read.All
   "b27a61ec-b99c-4d6a-b126-c4375d08ae30", // BitlockerKey.Read.All
