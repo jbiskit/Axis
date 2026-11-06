@@ -324,6 +324,8 @@ const ENTRA_NAV: NavItem[] = [
       { href: "/entra/conditional-access/overview", label: "Overview", icon: "overview", section: "Conditional Access" },
       { href: "/entra/conditional-access/policies", label: "Policies", icon: "policies", section: "Conditional Access" },
       { href: "/entra/conditional-access/named-locations", label: "Named locations", icon: "policies", section: "Conditional Access" },
+      { href: "/entra/authentication-methods/registration", label: "User registration", icon: "overview", section: "Authentication methods" },
+      { href: "/entra/authentication-methods/policy", label: "Methods policy", icon: "policies", section: "Authentication methods" },
     ],
   },
 ];

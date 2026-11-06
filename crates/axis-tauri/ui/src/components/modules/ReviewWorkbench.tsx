@@ -8,12 +8,18 @@ import { PageHeader } from "../ui/PageChrome";
 import { InspectorWithDocumentTabs } from "../workbench/DocumentTabs";
 import { GraphObjectInspector } from "../workbench/GraphObjectInspector";
 import { BulkAssignBar, SelectCheckbox, useCheckedIds } from "../workbench/PolicyBulkAssign";
-import { CompactObjectList, InspectorEmpty, SortableTh, useColumnSort, WorkspaceSplit } from "../workbench/shared";
+import { SortableTh, useColumnSort, WorkspaceSplit } from "../workbench/shared";
 
 export type ReviewRow = Record<string, unknown>;
 /** Object id → display name, from `resolveReviewNames`. */
 export type ReviewNames = Record<string, string>;
-export type ReviewColumn = { key: string; label: string; value: (row: ReviewRow, names: ReviewNames) => string };
+export type ReviewColumn = {
+  key: string;
+  label: string;
+  value: (row: ReviewRow, names: ReviewNames) => string;
+  /** Hidden while the inspector is open, so the table narrows by dropping whole columns. */
+  secondary?: boolean;
+};
 
 export const asRecord = (value: unknown): ReviewRow =>
   value && typeof value === "object" && !Array.isArray(value) ? (value as ReviewRow) : {};
@@ -113,6 +119,8 @@ export function ReviewWorkbench({
   resolveNames,
   summary,
   headline,
+  parentOf,
+  defaultSort = "name",
 }: {
   kind: ReviewKind;
   eyebrow: string;
@@ -131,6 +139,10 @@ export function ReviewWorkbench({
   summary?: (row: ReviewRow, names: ReviewNames) => ReactNode;
   /** Totals across the loaded rows, shown above the list. */
   headline?: (rows: ReviewRow[]) => ReactNode;
+  /** Parent row id; children list under their parent (sorted among siblings) and indent. */
+  parentOf?: (row: ReviewRow) => string | null;
+  /** Column key the list starts sorted by. */
+  defaultSort?: string;
 }) {
   const inventory = useInventory(loaderFor(kind), signedIn, signedIn);
   const rows = useMemo(() => inventory.items.filter((row) => typeof row.id === "string"), [inventory.items]);
@@ -147,13 +159,35 @@ export function ReviewWorkbench({
       cancelled = true;
     };
   }, [resolveNames, rows]);
-  const { sort, toggle } = useColumnSort<string>("name");
-  const sorted = useMemo(() => {
+  const { sort, toggle } = useColumnSort<string>(defaultSort);
+  const { sorted, depth } = useMemo(() => {
     const column = columns.find((candidate) => candidate.key === sort.key);
-    return sortRows(rows, sort.dir, (a, b) =>
+    const flat = sortRows(rows, sort.dir, (a, b) =>
       (column ? compareText(column.value(a, names), column.value(b, names)) : 0) || compareText(titleOf(a), titleOf(b)),
     );
-  }, [columns, names, rows, sort, titleOf]);
+    const depth = new Map<string, number>();
+    if (!parentOf) return { sorted: flat, depth };
+    // Depth-first: roots in sort order, each followed by its children in sort order.
+    const ids = new Set(flat.map((row) => String(row.id)));
+    const children = new Map<string, ReviewRow[]>();
+    const roots: ReviewRow[] = [];
+    for (const row of flat) {
+      const parent = parentOf(row);
+      if (parent && ids.has(parent) && parent !== row.id) children.set(parent, [...(children.get(parent) ?? []), row]);
+      else roots.push(row);
+    }
+    const ordered: ReviewRow[] = [];
+    const visit = (row: ReviewRow, level: number) => {
+      const id = String(row.id);
+      if (depth.has(id)) return;
+      depth.set(id, level);
+      ordered.push(row);
+      for (const child of children.get(id) ?? []) visit(child, level + 1);
+    };
+    roots.forEach((row) => visit(row, 0));
+    return { sorted: ordered, depth };
+  }, [columns, names, parentOf, rows, sort, titleOf]);
+  const indent = (row: ReviewRow) => depth.get(String(row.id)) ?? 0;
   const ids = useMemo(() => sorted.map((row) => String(row.id)), [sorted]);
   const selection = useCheckedIds(ids);
   const checked = sorted.filter((row) => selection.checkedIds.has(String(row.id)));
@@ -188,33 +222,9 @@ export function ReviewWorkbench({
     />
   );
 
-  const master = selected ? (
-    <div className="stack">
-      {bulkBar}
-      <CompactObjectList
-        title={title}
-        description="Select an item to inspect it here."
-        items={sorted.map((row) => ({
-          id: String(row.id),
-          title: titleOf(row),
-          meta: columns[0]?.value(row, names) || undefined,
-        }))}
-        selectedId={String(selected.id)}
-        onSelect={select}
-        onRefresh={refresh}
-        loading={inventory.loading}
-        error={inventory.error}
-        checkedIds={selection.checkedIds}
-        onToggleChecked={selection.toggle}
-        allSelected={selection.allSelected}
-        onToggleAll={selection.toggleAll}
-        selectAllIndeterminate={checked.length > 0 && !selection.allSelected}
-        selectAllDisabled={sorted.length === 0}
-        selectAllLabel="Select all shown items"
-      />
-    </div>
-  ) : (
-    <div className="stack">
+  const shown = selected ? columns.filter((column) => !column.secondary) : columns;
+  const master = (
+    <div className="stack review-master">
       <PageHeader
         eyebrow={eyebrow}
         title={title}
@@ -232,8 +242,8 @@ export function ReviewWorkbench({
       {inventory.error ? <div className="axis-alert axis-alert-danger">{inventory.error}</div> : null}
       {inventory.truncated ? <div className="axis-alert">Showing the first {rows.length} items.</div> : null}
       {bulkBar}
-      <section className="axis-panel" style={{ overflow: "hidden" }}>
-        <table className="axis-table">
+      <section className="axis-panel axis-table-wrap workspace-scroll">
+        <table className={`axis-table review-table${selected ? " is-inspecting" : ""}`}>
           <thead>
             <tr>
               <th className="axis-table-check">
@@ -246,7 +256,7 @@ export function ReviewWorkbench({
                 />
               </th>
               <SortableTh column="name" label="Name" sort={sort} onSort={toggle} />
-              {columns.map((column) => (
+              {shown.map((column) => (
                 <SortableTh key={column.key} column={column.key} label={column.label} sort={sort} onSort={toggle} />
               ))}
             </tr>
@@ -256,7 +266,11 @@ export function ReviewWorkbench({
               const id = String(row.id);
               const name = titleOf(row);
               return (
-                <tr key={id} className="row-link" onClick={() => select(id)}>
+                <tr
+                  key={id}
+                  className={`row-link${id === selectedId ? " is-selected" : ""}`}
+                  onClick={() => select(id === selectedId ? "" : id)}
+                >
                   <td className="axis-table-check">
                     <SelectCheckbox
                       checked={selection.checkedIds.has(id)}
@@ -264,8 +278,11 @@ export function ReviewWorkbench({
                       onChange={() => selection.toggle(id)}
                     />
                   </td>
-                  <td>{name}</td>
-                  {columns.map((column) => (
+                  <td style={indent(row) ? { paddingLeft: `${0.75 + indent(row) * 1.25}rem` } : undefined}>
+                    {indent(row) ? <span className="muted">↳ </span> : null}
+                    <span className="review-name">{name}</span>
+                  </td>
+                  {shown.map((column) => (
                     <td key={column.key} className="muted">
                       {column.value(row, names) || "—"}
                     </td>
@@ -275,7 +292,7 @@ export function ReviewWorkbench({
             })}
             {!inventory.loading && !inventory.error && sorted.length === 0 ? (
               <tr>
-                <td colSpan={columns.length + 2} className="muted">
+                <td colSpan={shown.length + 2} className="muted">
                   Nothing found.
                 </td>
               </tr>
@@ -288,15 +305,16 @@ export function ReviewWorkbench({
 
   return (
     <WorkspaceSplit
-      inspectorPrimary={Boolean(selected)}
       master={master}
+      // No selection, no inspector: the table takes the full width.
       inspector={
+        selected ? (
         <InspectorWithDocumentTabs
-          selectedId={selected ? String(selected.id) : null}
+          selectedId={String(selected.id)}
           titleFor={titleFor}
           onSelect={select}
           onClear={() => select("")}
-          empty={<InspectorEmpty label={`Select an item to inspect its full Graph object here.`} />}
+          empty={null}
         >
           {({ closeActive }) =>
             selected ? (
@@ -312,6 +330,7 @@ export function ReviewWorkbench({
             ) : null
           }
         </InspectorWithDocumentTabs>
+        ) : null
       }
     />
   );

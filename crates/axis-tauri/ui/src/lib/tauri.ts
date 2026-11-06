@@ -588,7 +588,10 @@ export const REVIEW_KINDS = [
   "mdo:quarantine",
   "mdo:allowBlock",
   "mdo:dkim",
+  "purview:label",
   "secureScoreControl",
+  "authRegistration",
+  "authMethodConfig",
   "endpointSecurityPolicy",
   "defenderDevice",
 ] as const;

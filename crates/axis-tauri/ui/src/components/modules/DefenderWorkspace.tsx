@@ -97,7 +97,7 @@ const POLICY_COLUMNS: ReviewColumn[] = [
   { key: "status", label: "Status", value: status },
   { key: "priority", label: "Priority", value: priority },
   { key: "appliesTo", label: "Applies to", value: appliesTo },
-  { key: "modified", label: "Modified", value: modified },
+  { key: "modified", secondary: true, label: "Modified", value: modified },
 ];
 
 // Graph-backed pages (Secure Score, hunting, Intune policies).
@@ -269,7 +269,7 @@ const PAGES: DefenderPage[] = [
     title: "Preset security policies",
     description: "Standard and Strict preset protection rules, for Exchange Online Protection and Defender for Office 365.",
     columns: [
-      { key: "layer", label: "Protection", value: (row) => String(row.ProtectionLayer ?? "") },
+      { key: "layer", secondary: true, label: "Protection", value: (row) => String(row.ProtectionLayer ?? "") },
       { key: "status", label: "Status", value: status },
       { key: "priority", label: "Priority", value: priority },
       { key: "appliesTo", label: "Applies to", value: appliesTo },
@@ -282,7 +282,7 @@ const PAGES: DefenderPage[] = [
     title: "Global settings",
     description: "Tenant-wide Defender for Office 365 settings, such as Safe Attachments for SharePoint, OneDrive and Teams.",
     note: MDO_PLAN_NOTE,
-    columns: [{ key: "modified", label: "Modified", value: modified }],
+    columns: [{ key: "modified", secondary: true, label: "Modified", value: modified }],
     sections: plainSections,
   },
   {
@@ -290,7 +290,7 @@ const PAGES: DefenderPage[] = [
     kind: "mdo:quarantine",
     title: "Quarantine policies",
     description: "What users can do with quarantined messages, and notification settings.",
-    columns: [{ key: "modified", label: "Modified", value: modified }],
+    columns: [{ key: "modified", secondary: true, label: "Modified", value: modified }],
     sections: plainSections,
   },
   {
@@ -301,8 +301,8 @@ const PAGES: DefenderPage[] = [
     columns: [
       { key: "listType", label: "Type", value: (row) => humanize(row.ListType) },
       { key: "action", label: "Action", value: (row) => humanize(row.Action) },
-      { key: "expires", label: "Expires", value: (row) => isoDate(row.ExpirationDate) || "Never" },
-      { key: "modified", label: "Modified", value: modified },
+      { key: "expires", secondary: true, label: "Expires", value: (row) => isoDate(row.ExpirationDate) || "Never" },
+      { key: "modified", secondary: true, label: "Modified", value: modified },
     ],
     sections: plainSections,
   },
@@ -327,10 +327,10 @@ const PAGES: DefenderPage[] = [
     headline: secureScoreHeadline,
     columns: [
       { key: "points", label: "Points", value: points },
-      { key: "category", label: "Category", value: (row) => String(row.controlCategory ?? "") },
-      { key: "service", label: "Service", value: (row) => String(row.service ?? "") },
+      { key: "category", secondary: true, label: "Category", value: (row) => String(row.controlCategory ?? "") },
+      { key: "service", secondary: true, label: "Service", value: (row) => String(row.service ?? "") },
       { key: "impact", label: "User impact", value: (row) => String(row.userImpact ?? "") },
-      { key: "cost", label: "Cost", value: (row) => String(row.implementationCost ?? "") },
+      { key: "cost", secondary: true, label: "Cost", value: (row) => String(row.implementationCost ?? "") },
     ],
     sections: secureScoreSections,
   },
@@ -342,11 +342,11 @@ const PAGES: DefenderPage[] = [
     description: "Devices Defender for Endpoint has seen in the last 30 days, with onboarding, sensor health and exposure.",
     note: "From advanced hunting (DeviceInfo). Needs ThreatHunting.Read.All and a Defender role that can run hunting queries.",
     columns: [
-      { key: "platform", label: "Platform", value: (row) => String(row.OSPlatform ?? "") },
+      { key: "platform", secondary: true, label: "Platform", value: (row) => String(row.OSPlatform ?? "") },
       { key: "onboarding", label: "Onboarding", value: (row) => String(row.OnboardingStatus ?? "") },
       { key: "sensor", label: "Sensor health", value: (row) => String(row.SensorHealthState ?? "") },
       { key: "exposure", label: "Exposure", value: (row) => String(row.ExposureLevel ?? "") },
-      { key: "seen", label: "Last seen", value: (row) => isoDate(row.LastSeen) },
+      { key: "seen", secondary: true, label: "Last seen", value: (row) => isoDate(row.LastSeen) },
     ],
     sections: deviceSections,
   },
@@ -359,9 +359,9 @@ const PAGES: DefenderPage[] = [
     note: "Defender for Endpoint in Managed by means the policy also reaches devices through security settings management, without Intune enrollment.",
     columns: [
       { key: "type", label: "Type", value: policyType },
-      { key: "platform", label: "Platform", value: (row) => humanize(row.platforms) },
+      { key: "platform", secondary: true, label: "Platform", value: (row) => humanize(row.platforms) },
       { key: "managedBy", label: "Managed by", value: managedBy },
-      { key: "source", label: "Creation source", value: (row) => String(row.creationSource ?? "") },
+      { key: "source", secondary: true, label: "Creation source", value: (row) => String(row.creationSource ?? "") },
       { key: "assigned", label: "Assigned", value: (row) => (row.isAssigned ? "Yes" : "No") },
     ],
     sections: endpointPolicySections,

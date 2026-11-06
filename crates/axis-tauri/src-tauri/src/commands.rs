@@ -1832,8 +1832,8 @@ pub async fn fetch_review_objects_cmd(
     state: State<'_, AppState>,
     kind: String,
 ) -> Result<InventoryResponse<serde_json::Value>, String> {
-    if axis_sdk::is_exchange_review_kind(&kind) {
-        let (token, tenant_id) = match state.auth.get_exchange_token().await {
+    if axis_sdk::is_exchange_review_kind(&kind) || axis_sdk::is_compliance_review_kind(&kind) {
+        let (token, tenant_id) = match admin_api_token(&state, &kind).await {
             Ok(Some(pair)) => pair,
             Ok(None) => (String::new(), String::new()),
             Err(error) => {
@@ -1951,6 +1951,18 @@ pub struct GraphObjectDetailResponse {
     pub mode: &'static str,
 }
 
+/// Exchange token for `mdo:` kinds, Security & Compliance token for `purview:` kinds.
+async fn admin_api_token(
+    state: &State<'_, AppState>,
+    kind: &str,
+) -> Result<Option<(String, String)>, axis_sdk::AuthError> {
+    if axis_sdk::is_compliance_review_kind(kind) {
+        state.auth.get_compliance_token().await
+    } else {
+        state.auth.get_exchange_token().await
+    }
+}
+
 /// Defender for Office 365 rows come from Exchange `Get-` cmdlets, shaped like a Graph detail for the inspector.
 async fn exchange_review_detail(
     state: &State<'_, AppState>,
@@ -1962,7 +1974,7 @@ async fn exchange_review_detail(
         error: Some(error),
         mode: "live",
     };
-    let (token, tenant_id) = match state.auth.get_exchange_token().await {
+    let (token, tenant_id) = match admin_api_token(state, kind).await {
         Ok(Some(pair)) => pair,
         Ok(None) => return failed("Not signed in.".into()),
         Err(error) => return failed(error.to_string()),
@@ -2013,7 +2025,7 @@ pub async fn fetch_graph_object_detail_cmd(
     kind: String,
     id: String,
 ) -> Result<GraphObjectDetailResponse, String> {
-    if axis_sdk::is_exchange_review_kind(&kind) {
+    if axis_sdk::is_exchange_review_kind(&kind) || axis_sdk::is_compliance_review_kind(&kind) {
         return Ok(exchange_review_detail(&state, &kind, &id).await);
     }
     if axis_sdk::is_row_only_review_kind(&kind) {

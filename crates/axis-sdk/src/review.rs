@@ -86,6 +86,8 @@ pub(crate) fn collection_path(kind: &str) -> Option<&'static str> {
         "sensitivityLabel" => "/me/security/informationProtection/sensitivityLabels",
         "retentionLabel" => "/security/labels/retentionLabels",
         "secureScoreControl" => "/security/secureScoreControlProfiles",
+        "authRegistration" => "/reports/authenticationMethods/userRegistrationDetails",
+        "authMethodConfig" => "/policies/authenticationMethodsPolicy/authenticationMethodConfigurations",
         "endpointSecurityPolicy" => "/deviceManagement/configurationPolicies",
         _ => return None,
     })
@@ -99,6 +101,13 @@ pub async fn fetch_review_objects(
         "secureScoreControl" => secure_score_controls(access_token).await?,
         "endpointSecurityPolicy" => endpoint_security_policies(access_token).await?,
         "defenderDevice" => defender_devices(access_token).await?,
+        // The configurations collection can't be listed (400), only read by id; the policy embeds them.
+        "authMethodConfig" => GraphClient::new()
+            .fetch_plain::<Value>(access_token, "/policies/authenticationMethodsPolicy", "beta")
+            .await?["authenticationMethodConfigurations"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default(),
         _ => {
             let path = collection_path(kind).ok_or_else(|| unknown_kind(kind))?;
             GraphClient::new()
@@ -187,9 +196,33 @@ async fn endpoint_security_policies(access_token: &str) -> Result<Vec<Value>, Gr
         .collect())
 }
 
+/// True when an enabled subscription has an enabled service plan starting with one of `prefixes`.
+async fn has_service_plan(access_token: &str, prefixes: &[&str]) -> Result<bool, GraphError> {
+    let skus: Vec<Value> = GraphClient::new()
+        .fetch_all_pages(access_token, "/subscribedSkus?$select=capabilityStatus,servicePlans", "beta", 500)
+        .await?;
+    Ok(skus.iter().filter(|sku| sku["capabilityStatus"] == "Enabled").any(|sku| {
+        sku["servicePlans"].as_array().into_iter().flatten().any(|plan| {
+            plan["provisioningStatus"] != "Disabled"
+                && plan["servicePlanName"]
+                    .as_str()
+                    .is_some_and(|name| prefixes.iter().any(|prefix| name.starts_with(prefix)))
+        })
+    }))
+}
+
 /// Latest DeviceInfo row per Defender for Endpoint device, through advanced hunting
 /// (a Graph token, unlike the WindowsDefenderATP API). Hunting keeps 30 days.
 async fn defender_devices(access_token: &str) -> Result<Vec<Value>, GraphError> {
+    // Without Defender for Endpoint the DeviceInfo table doesn't exist and hunting answers a bare 400.
+    if !has_service_plan(access_token, &["WINDEFATP", "MDE_"]).await? {
+        return Err(GraphError::Request {
+            status: 403,
+            code: Some("NotLicensed".into()),
+            message: "This tenant has no Defender for Endpoint licence (WINDEFATP or MDE service plan), so there is no device inventory to read.".into(),
+            permission_related: false,
+        });
+    }
     const QUERY: &str = "DeviceInfo
 | where Timestamp > ago(30d)
 | summarize arg_max(Timestamp, *) by DeviceId

@@ -115,9 +115,12 @@ pub struct GraphClient {
 
 impl Default for GraphClient {
     fn default() -> Self {
-        Self {
-            http: reqwest::Client::new(),
-        }
+        // reqwest sends no User-Agent by default; Information Protection label APIs expect one.
+        let http = reqwest::Client::builder()
+            .user_agent(concat!("Axis/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .unwrap_or_default();
+        Self { http }
     }
 }
 

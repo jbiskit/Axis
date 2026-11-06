@@ -356,11 +356,14 @@ struct ExchangeToken {
 /// Exchange Online (adminapi) resource. `.default` takes whatever Exchange
 /// permission the app registration was consented for.
 const EXCHANGE_SCOPE: &str = "https://outlook.office365.com/.default";
+/// Security & Compliance PowerShell (REST) resource, the host Connect-IPPSSession uses.
+const COMPLIANCE_SCOPE: &str = "https://ps.compliance.protection.outlook.com/.default";
 
 pub struct AuthManager {
     pending: Mutex<HashMap<String, BrowserFlow>>,
     session: Mutex<Option<DeviceSession>>,
-    exchange: Mutex<Option<ExchangeToken>>,
+    /// Admin API tokens (Exchange, Security & Compliance), keyed by scope.
+    exchange: Mutex<HashMap<&'static str, ExchangeToken>>,
     client: reqwest::Client,
 }
 
@@ -376,7 +379,7 @@ impl AuthManager {
         Self {
             pending: Mutex::new(HashMap::new()),
             session: Mutex::new(load_persisted_session()),
-            exchange: Mutex::new(None),
+            exchange: Mutex::new(HashMap::new()),
             client: reqwest::Client::new(),
         }
     }
@@ -699,6 +702,20 @@ impl AuthManager {
     /// Exchange Online token from the session's refresh token, plus the tenant id.
     /// Only for app registrations: Graph Command Line Tools is not consented for Exchange.
     pub async fn get_exchange_token(&self) -> Result<Option<(String, String)>, AuthError> {
+        self.get_admin_api_token(EXCHANGE_SCOPE, true).await
+    }
+
+    /// Security & Compliance PowerShell token. The scope check is skipped so a refused
+    /// token still reaches the endpoint and its 401 diagnostics show what the token carried.
+    pub async fn get_compliance_token(&self) -> Result<Option<(String, String)>, AuthError> {
+        self.get_admin_api_token(COMPLIANCE_SCOPE, false).await
+    }
+
+    async fn get_admin_api_token(
+        &self,
+        scope: &'static str,
+        require_exchange_manage: bool,
+    ) -> Result<Option<(String, String)>, AuthError> {
         // Refreshes the Graph session first, so the refresh token below is current.
         if self.get_session_token().await?.is_none() {
             return Ok(None);
@@ -713,7 +730,7 @@ impl AuthManager {
             .tenant_id
             .clone()
             .ok_or_else(|| AuthError::Message("Tenant id is not known for this session.".into()))?;
-        if let Some(cached) = self.exchange.lock().await.as_ref() {
+        if let Some(cached) = self.exchange.lock().await.get(scope) {
             let same_session = cached.client_id == current.client_id
                 && cached.tenant_id.as_deref() == Some(tenant_id.as_str());
             if same_session && cached.expires_on - now_ms() > (REFRESH_SKEW_SECONDS * 1000) as i64 {
@@ -729,7 +746,7 @@ impl AuthManager {
                 "grant_type=refresh_token&client_id={}&refresh_token={}&scope={}",
                 urlencoding_helper(&current.client_id),
                 urlencoding_helper(&current.refresh_token),
-                urlencoding_helper(EXCHANGE_SCOPE),
+                urlencoding_helper(scope),
             ))
             .send()
             .await?;
@@ -737,9 +754,9 @@ impl AuthManager {
         let json: serde_json::Value = response.json().await?;
         if !status.is_success() {
             // Never clears the Graph session: a missing Exchange consent is not a sign-in failure.
-            let description = describe_error(&json, "Exchange token request failed");
+            let description = describe_error(&json, "Token request failed");
             return Err(AuthError::Message(format!(
-                "{description} {EXCHANGE_NEEDS_APP_REGISTRATION}"
+                "{description} [token scope: {scope}] {EXCHANGE_NEEDS_APP_REGISTRATION}"
             )));
         }
         let access_token = json["access_token"]
@@ -749,19 +766,22 @@ impl AuthManager {
         // `.default` still issues a token when Exchange.Manage isn't consented; Exchange then
         // answers an empty 401. Fail here, uncached, so new consent is picked up on the next try.
         let scp = decode_access_token_claims(&access_token).scp.unwrap_or_default();
-        if !scp.split(' ').any(|scope| scope == "Exchange.Manage") {
+        if require_exchange_manage && !scp.split(' ').any(|value| value == "Exchange.Manage") {
             return Err(AuthError::Message(format!(
                 "{EXCHANGE_NEEDS_APP_REGISTRATION} The Exchange token this app registration received only has: {}.",
                 if scp.is_empty() { "no scopes" } else { scp.as_str() }
             )));
         }
         let expires_in = json["expires_in"].as_u64().unwrap_or(3600);
-        *self.exchange.lock().await = Some(ExchangeToken {
-            client_id: current.client_id,
-            tenant_id: Some(tenant_id.clone()),
-            access_token: access_token.clone(),
-            expires_on: now_ms() + (expires_in * 1000) as i64,
-        });
+        self.exchange.lock().await.insert(
+            scope,
+            ExchangeToken {
+                client_id: current.client_id,
+                tenant_id: Some(tenant_id.clone()),
+                access_token: access_token.clone(),
+                expires_on: now_ms() + (expires_in * 1000) as i64,
+            },
+        );
         Ok(Some((access_token, tenant_id)))
     }
 

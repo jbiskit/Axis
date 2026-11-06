@@ -26,6 +26,105 @@ import {
 const OVERVIEW_PATH = "/entra/conditional-access/overview";
 const POLICIES_PATH = "/entra/conditional-access/policies";
 const NAMED_LOCATIONS_PATH = "/entra/conditional-access/named-locations";
+const AUTH_REGISTRATION_PATH = "/entra/authentication-methods/registration";
+const AUTH_POLICY_PATH = "/entra/authentication-methods/policy";
+
+// Authentication methods. Method tokens have no Graph display names, so labels are humanized.
+
+const yes = (value: unknown) => (value ? "Yes" : "No");
+const methods = (row: ReviewRow) => asList(row.methodsRegistered).map(humanize);
+
+function registrationHeadline(rows: ReviewRow[]) {
+  const count = (test: (row: ReviewRow) => boolean) => rows.filter(test).length;
+  const users = rows.length;
+  const mfa = count((row) => Boolean(row.isMfaRegistered));
+  const adminsWithout = count((row) => Boolean(row.isAdmin) && !row.isMfaRegistered);
+  const passwordless = count((row) => Boolean(row.isPasswordlessCapable));
+  return (
+    <div className="axis-panel axis-panel-padded">
+      <p className="axis-kicker">Registration</p>
+      <h2 style={{ margin: 0 }}>
+        {mfa} of {users} users MFA registered ({users ? Math.round((mfa / users) * 100) : 0}%)
+      </h2>
+      <p className="muted" style={{ margin: "0.35rem 0 0" }}>
+        {adminsWithout} admin{adminsWithout === 1 ? "" : "s"} without MFA · {passwordless} passwordless capable
+      </p>
+    </div>
+  );
+}
+
+const REGISTRATION_COLUMNS: ReviewColumn[] = [
+  { key: "mfa", label: "MFA registered", value: (row) => yes(row.isMfaRegistered) },
+  { key: "methods", label: "Methods", value: (row) => methods(row).join(", ") },
+  { key: "default", secondary: true, label: "Default MFA method", value: (row) => (row.defaultMfaMethod === "none" ? "" : humanize(row.defaultMfaMethod)) },
+  { key: "admin", label: "Admin", value: (row) => yes(row.isAdmin) },
+  { key: "type", secondary: true, label: "User type", value: (row) => humanize(row.userType) },
+];
+
+const registrationSections = (row: ReviewRow): ReviewSection[] => [
+  {
+    title: "User",
+    fields: [
+      { label: "User principal name", value: String(row.userPrincipalName ?? "") },
+      { label: "User type", value: humanize(row.userType) },
+      { label: "Admin", value: yes(row.isAdmin) },
+      { label: "Last updated", value: isoDate(row.lastUpdatedDateTime) },
+    ],
+  },
+  {
+    title: "Registration",
+    fields: [
+      { label: "Methods registered", value: methods(row) },
+      { label: "MFA registered", value: yes(row.isMfaRegistered) },
+      { label: "MFA capable", value: yes(row.isMfaCapable) },
+      { label: "Passwordless capable", value: yes(row.isPasswordlessCapable) },
+      { label: "Default MFA method", value: humanize(row.defaultMfaMethod) },
+      { label: "Preferred secondary method", value: humanize(row.userPreferredMethodForSecondaryAuthentication) },
+      { label: "System-preferred MFA", value: yes(row.isSystemPreferredAuthenticationMethodEnabled) },
+    ],
+  },
+  {
+    title: "Self-service password reset",
+    fields: [
+      { label: "Enabled", value: yes(row.isSsprEnabled) },
+      { label: "Registered", value: yes(row.isSsprRegistered) },
+      { label: "Capable", value: yes(row.isSsprCapable) },
+    ],
+  },
+];
+
+const targets = (value: unknown) =>
+  (Array.isArray(value) ? value.map(asRecord) : []).map((target) =>
+    target.id === "all_users" ? "All users" : `${humanize(target.targetType)} ${String(target.id ?? "")}`.trim(),
+  );
+
+const METHOD_COLUMNS: ReviewColumn[] = [
+  { key: "state", label: "State", value: (row) => humanize(row.state) },
+  { key: "include", label: "Included", value: (row) => targets(row.includeTargets).join(", ") },
+  { key: "exclude", secondary: true, label: "Excluded", value: (row) => targets(row.excludeTargets).join(", ") },
+];
+
+const SKIP_METHOD_KEYS = new Set(["id", "state", "includeTargets", "excludeTargets", "@odata.type"]);
+
+const methodSections = (row: ReviewRow): ReviewSection[] => [
+  {
+    title: "Method",
+    fields: [
+      { label: "State", value: humanize(row.state) },
+      { label: "Included", value: targets(row.includeTargets) },
+      { label: "Excluded", value: targets(row.excludeTargets) },
+    ],
+  },
+  {
+    title: "Settings",
+    fields: Object.entries(row)
+      .filter(([key]) => !SKIP_METHOD_KEYS.has(key))
+      .map(([key, value]) => ({
+        label: humanize(key),
+        value: value == null ? "" : typeof value === "object" ? JSON.stringify(value) : String(value),
+      })),
+  },
+];
 
 /** Structural values Graph puts in CA include/exclude lists instead of object ids. */
 const USER_SPECIAL: Record<string, string> = { All: "All users", None: "None", GuestsOrExternalUsers: "Guests or external users" };
@@ -298,19 +397,19 @@ const POLICY_COLUMNS: ReviewColumn[] = [
     value: (row, names) => conditionLines(row, names).map(([label, value]) => `${label}: ${value}`).join("; "),
   },
   { key: "grant", label: "Grant", value: grantText },
-  { key: "session", label: "Session", value: (row) => sessionItems(row).join(", ") },
-  { key: "modified", label: "Modified", value: (row) => isoDate(row.modifiedDateTime ?? row.createdDateTime) },
+  { key: "session", secondary: true, label: "Session", value: (row) => sessionItems(row).join(", ") },
+  { key: "modified", secondary: true, label: "Modified", value: (row) => isoDate(row.modifiedDateTime ?? row.createdDateTime) },
 ];
 
 const LOCATION_COLUMNS: ReviewColumn[] = [
   { key: "type", label: "Type", value: (row) => humanize(locationType(row)) },
-  { key: "trusted", label: "Trusted", value: (row) => (typeof row.isTrusted === "boolean" ? (row.isTrusted ? "Yes" : "No") : "") },
+  { key: "trusted", secondary: true, label: "Trusted", value: (row) => (typeof row.isTrusted === "boolean" ? (row.isTrusted ? "Yes" : "No") : "") },
   {
     key: "entries",
     label: "Entries",
     value: (row) => shortList([...cidrs(row), ...asList(row.countriesAndRegions)]),
   },
-  { key: "modified", label: "Modified", value: (row) => isoDate(row.modifiedDateTime ?? row.createdDateTime) },
+  { key: "modified", secondary: true, label: "Modified", value: (row) => isoDate(row.modifiedDateTime ?? row.createdDateTime) },
 ];
 
 type FindingStatus = "error" | "warning" | "ok" | "info";
@@ -678,6 +777,42 @@ export function EntraWorkspace({ route, signedIn }: { route: { pathname: string;
   const { pathname, search } = route;
   if (pathname === "/entra" || pathname === OVERVIEW_PATH) {
     return <ConditionalAccessOverview signedIn={signedIn} />;
+  }
+  if (pathname === AUTH_REGISTRATION_PATH) {
+    return (
+      <ReviewWorkbench
+        key="authRegistration"
+        kind="authRegistration"
+        eyebrow="Entra · Authentication methods"
+        title="User registration"
+        description="Every user with the authentication methods they have registered, MFA and passwordless readiness, and SSPR."
+        columns={REGISTRATION_COLUMNS}
+        headline={registrationHeadline}
+        titleOf={(row) => String(row.userDisplayName ?? row.userPrincipalName ?? row.id ?? "Untitled")}
+        summary={(row) => <ReviewSections sections={registrationSections(row)} />}
+        pathname={pathname}
+        search={search}
+        signedIn={signedIn}
+      />
+    );
+  }
+  if (pathname === AUTH_POLICY_PATH) {
+    return (
+      <ReviewWorkbench
+        key="authMethodConfig"
+        kind="authMethodConfig"
+        eyebrow="Entra · Authentication methods"
+        title="Methods policy"
+        description="Which authentication methods are enabled for the tenant, and who each one is targeted at."
+        columns={METHOD_COLUMNS}
+        titleOf={(row) => humanize(row.id)}
+        summary={(row) => <ReviewSections sections={methodSections(row)} />}
+        pathname={pathname}
+        search={search}
+        signedIn={signedIn}
+        defaultSort="state"
+      />
+    );
   }
   if (pathname === NAMED_LOCATIONS_PATH) {
     return (

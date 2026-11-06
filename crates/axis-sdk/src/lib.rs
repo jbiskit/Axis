@@ -77,7 +77,7 @@ pub use assignments::{
 pub use auth::{
     decode_access_token_claims, device_code_client_id, device_code_scopes, device_code_tenant,
     is_graph_command_line_tools_client, is_write_or_privileged_scope, parse_extra_scopes,
-    scopes_for_mode, scopes_for_mode_with_extras, token_scp_has_write_scopes, AuthManager,
+    scopes_for_mode, scopes_for_mode_with_extras, token_scp_has_write_scopes, AuthError, AuthManager,
     BrowserSignIn, PollResult, SessionTokens, StoredSignIn, StoredSignInOutcome, TokenClaims,
 };
 pub use autopilot_profiles::{
@@ -157,7 +157,7 @@ pub use feature_updates::{
     fetch_feature_update_catalog, FeatureUpdateCatalogItem, FeatureUpdateProfile,
 };
 pub use glance::{fetch_tenant_glance, list_intune_audit_events};
-pub use graph::{set_throttle_listener, GraphError, ThrottleNotice};
+pub use graph::{set_throttle_listener, GraphClient, GraphError, ThrottleNotice};
 pub use intunewin::{
     find_catalog_upload_matches, link_win32_app_dependency, link_win32_app_supersedence,
     unlink_win32_app_dependency, unlink_win32_app_supersedence, upload_catalog_win32,
@@ -178,7 +178,8 @@ pub use object_duplicate::{
     strip_keys, strip_setting_definitions, DuplicatedObject,
 };
 pub use exchange_admin::{
-    fetch_exchange_review_object, fetch_exchange_review_objects, is_exchange_review_kind,
+    fetch_exchange_review_object, fetch_exchange_review_objects, is_compliance_review_kind,
+    is_exchange_review_kind,
 };
 pub use object_metadata::{
     can_delete_graph_object, can_update_object_metadata, delete_graph_object,
@@ -228,7 +229,7 @@ pub use script_status::{
     RemediationDeviceStatusReport, RemediationRunManagedDevice, RemediationRunSummary,
     ScriptUserRunState,
 };
-pub use session_store::SessionMode;
+pub use session_store::{mark_signed_out, SessionMode};
 pub use settings_catalog::*;
 pub use store_apps::{
     create_winget_app, fetch_store_catalog_manifest, search_store_catalog, update_winget_app,
