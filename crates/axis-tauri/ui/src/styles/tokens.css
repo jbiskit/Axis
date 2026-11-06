@@ -1,32 +1,34 @@
-/* Axis tokens — Catppuccin Mocha, desktop ops console */
+/* Axis tokens — graphite neutrals, one cyan signal accent, status colours kept apart from it.
+   Redesign round 1: docs/design/axis-redesign.html */
 :root {
-  --axis-crust: #11111b;
-  --axis-mantle: #181825;
-  --axis-base: #1e1e2e;
-  --axis-surface: #181825;
-  --axis-surface-1: #1e1e2e;
-  --axis-surface-2: #313244;
-  --axis-surface-3: #45475a;
-  --axis-overlay: #585b70;
+  --axis-crust: #0f1216;
+  --axis-mantle: #161a20;
+  --axis-base: #1a1f26;
+  --axis-surface: #161a20;
+  --axis-surface-1: #1a1f26;
+  --axis-surface-2: #232a33;
+  --axis-surface-3: #2e3641;
+  --axis-overlay: #3a4350;
   --axis-bg: var(--axis-crust);
   /* Opaque mixes — Linux WebKit banding when alpha-backed fills composite poorly. */
-  --axis-border: color-mix(in srgb, #45475a 62%, var(--axis-crust));
-  --axis-border-strong: #585b70;
-  --axis-fg: #cdd6f4;
-  --axis-muted: #7f849c;
-  --axis-muted-strong: #a6adc8;
-  --axis-ink: #89b4fa;
-  --axis-ink-soft: #b4befe;
-  --axis-accent: #89b4fa;
+  --axis-border: #262c35;
+  --axis-border-strong: #3a4350;
+  --axis-fg: #e4e8ee;
+  --axis-muted: #8a95a5;
+  --axis-muted-strong: #b3bcc8;
+  --axis-ink: #3cc4d3;
+  --axis-ink-soft: #7fd8e2;
+  --axis-accent: #3cc4d3;
   --axis-accent-soft: color-mix(in srgb, var(--axis-accent) 14%, var(--axis-base));
-  --axis-on-accent: #11111b;
-  --axis-success: #a6e3a1;
+  --axis-on-accent: #06191c;
+  --axis-success: #5cc07a;
   --axis-success-soft: color-mix(in srgb, var(--axis-success) 14%, var(--axis-base));
-  --axis-warning: #f9e2af;
+  --axis-warning: #e2a84a;
   --axis-warning-soft: color-mix(in srgb, var(--axis-warning) 12%, var(--axis-base));
-  --axis-danger: #f38ba8;
+  --axis-danger: #ef6b7d;
   --axis-danger-soft: color-mix(in srgb, var(--axis-danger) 14%, var(--axis-base));
-  --axis-info: #89b4fa;
+  /* Info is blue, not the cyan accent, so "informational" never reads as "selected". */
+  --axis-info: #6aa9ff;
   --axis-info-soft: color-mix(in srgb, var(--axis-info) 14%, var(--axis-base));
 
   --axis-space-1: 0.25rem;
@@ -58,40 +60,40 @@
   --axis-iconrail-width: 4.5rem;
   --axis-titlebar-height: 2.75rem;
 
-  --font-display: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
-  --font-body: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
-  --font-mono: ui-monospace, "Cascadia Mono", "Segoe UI Mono", Consolas, monospace;
+  --font-display: "IBM Plex Sans Condensed", "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "Cascadia Mono", Consolas, ui-monospace, monospace;
   color-scheme: dark;
 }
 
-/* Light mode — Catppuccin Latte. Toggled via `data-theme` on <html>. */
+/* Light mode — same graphite family, toggled via `data-theme` on <html>. */
 :root[data-theme="light"] {
-  --axis-crust: #dce0e8;
-  --axis-mantle: #e6e9ef;
-  --axis-base: #eff1f5;
-  --axis-surface: #e6e9ef;
-  --axis-surface-1: #eff1f5;
-  --axis-surface-2: #ccd0da;
-  --axis-surface-3: #bcc0cc;
-  --axis-overlay: #acb0be;
+  --axis-crust: #e9ecf0;
+  --axis-mantle: #f6f7f9;
+  --axis-base: #ffffff;
+  --axis-surface: #f6f7f9;
+  --axis-surface-1: #ffffff;
+  --axis-surface-2: #dde1e7;
+  --axis-surface-3: #c9cfd8;
+  --axis-overlay: #aeb6c2;
   --axis-bg: var(--axis-crust);
-  --axis-border: color-mix(in srgb, #bcc0cc 80%, var(--axis-crust));
-  --axis-border-strong: #acb0be;
-  --axis-fg: #4c4f69;
-  --axis-muted: #8c8fa1;
-  --axis-muted-strong: #6c6f85;
-  --axis-ink: #1e66f5;
-  --axis-ink-soft: #7287fd;
-  --axis-accent: #1e66f5;
+  --axis-border: #dde1e7;
+  --axis-border-strong: #c4cbd5;
+  --axis-fg: #18202b;
+  --axis-muted: #5f6b7a;
+  --axis-muted-strong: #3f4a58;
+  --axis-ink: #0f8fa0;
+  --axis-ink-soft: #3aa9b8;
+  --axis-accent: #0f8fa0;
   --axis-accent-soft: color-mix(in srgb, var(--axis-accent) 12%, var(--axis-base));
-  --axis-on-accent: #eff1f5;
-  --axis-success: #40a02b;
+  --axis-on-accent: #ffffff;
+  --axis-success: #2f8a4c;
   --axis-success-soft: color-mix(in srgb, var(--axis-success) 14%, var(--axis-base));
-  --axis-warning: #df8e1d;
+  --axis-warning: #b7791f;
   --axis-warning-soft: color-mix(in srgb, var(--axis-warning) 16%, var(--axis-base));
-  --axis-danger: #d20f39;
+  --axis-danger: #c2384b;
   --axis-danger-soft: color-mix(in srgb, var(--axis-danger) 12%, var(--axis-base));
-  --axis-info: #209fb5;
+  --axis-info: #2f6fd6;
   --axis-info-soft: color-mix(in srgb, var(--axis-info) 14%, var(--axis-base));
   --axis-shadow: 0 1px 2px color-mix(in srgb, #000 8%, var(--axis-crust));
   --axis-shadow-md: 0 10px 28px color-mix(in srgb, #000 14%, var(--axis-crust));
@@ -102,7 +104,7 @@
 /* The native select arrow is baked into a data URI, so it needs its own
    light-mode stroke (muted-strong) rather than the dark one. */
 :root[data-theme="light"] select {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='none' stroke='%236c6f85' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round' d='M3 4.5 6 7.5 9 4.5'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='none' stroke='%233f4a58' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round' d='M3 4.5 6 7.5 9 4.5'/%3E%3C/svg%3E");
 }
 
 * {
@@ -223,7 +225,7 @@ select {
   border: 1px solid var(--axis-border);
   border-radius: var(--axis-radius);
   background-color: var(--axis-mantle);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='none' stroke='%23a6adc8' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round' d='M3 4.5 6 7.5 9 4.5'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='none' stroke='%23b3bcc8' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round' d='M3 4.5 6 7.5 9 4.5'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 0.55rem center;
   background-size: 0.75rem;
@@ -247,7 +249,7 @@ select:disabled {
   cursor: not-allowed;
   color: var(--axis-muted);
   background-color: var(--axis-surface-2);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='none' stroke='%237f849c' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round' d='M3 4.5 6 7.5 9 4.5'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='none' stroke='%238a95a5' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round' d='M3 4.5 6 7.5 9 4.5'/%3E%3C/svg%3E");
 }
 
 @keyframes axis-enter {

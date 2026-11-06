@@ -184,7 +184,6 @@ import { AutopilotGroupTagDialog } from "./workbench/AutopilotGroupTagDialog";
 import { BooleanToggle } from "./workbench/BooleanToggle";
 import {
   CapabilityStub,
-  CompactObjectList,
   formatRelative,
   IncompleteBanner,
   InspectorEmpty,
@@ -1096,7 +1095,6 @@ function DevicesWorkspace({
 
   return (
     <WorkspaceSplit
-      inspectorPrimary={Boolean(selectedDevice)}
       master={
         <DevicesList
           devices={filteredDevices}
@@ -1106,7 +1104,6 @@ function DevicesWorkspace({
           fetchedAt={devicesFetchedAt}
           onRefresh={onRefreshDevices}
           selectedId={selectedDevice}
-          compact={Boolean(selectedDevice)}
           onSelect={(id) => selectDevice(id)}
         />
       }
@@ -1327,45 +1324,6 @@ function WindowsUpdateWorkbench({
         onRefresh();
       }}
     >
-      {selected ? (
-          <div className="stack">
-          {bulkBar}
-          <CompactObjectList
-            title={family ?? "Windows Update"}
-            description="Select a profile to inspect it here."
-            items={sorted.map((item) => ({
-              id: item.id,
-              title: item.name,
-              kind: `windowsUpdate:${item.family}`,
-              meta: [
-                item.family,
-                item.ringState?.quality.paused || item.ringState?.quality.rollingBack
-                  ? `Quality ${ringChannelLabel(item.ringState?.quality).toLowerCase()}`
-                  : null,
-                item.ringState?.feature.paused || item.ringState?.feature.rollingBack
-                  ? `Feature ${ringChannelLabel(item.ringState?.feature).toLowerCase()}`
-                  : null,
-                formatRelative(item.lastModifiedDateTime),
-              ]
-                .filter(Boolean)
-                .join(" · "),
-            }))}
-            selectedId={selected.id}
-            onSelect={(id) => navigate(hrefWithParam(pathname, search, "policy", id))}
-            onRefresh={onRefresh}
-            loading={loading}
-            error={error}
-            actions={createButton ? <>{createButton}{importButton}</> : importButton}
-            checkedIds={selection.checkedIds}
-            onToggleChecked={selection.toggle}
-            allSelected={selection.allSelected}
-            onToggleAll={selection.toggleAll}
-            selectAllIndeterminate={checkedProfiles.length > 0 && !selection.allSelected}
-            selectAllDisabled={sorted.length === 0}
-            selectAllLabel="Select all shown profiles"
-          />
-          </div>
-        ) : (
           <div className="stack">
             <PageHeader
               eyebrow="Windows Update"
@@ -1406,7 +1364,7 @@ function WindowsUpdateWorkbench({
                         <th>Feature</th>
                       </>
                     ) : null}
-                    <SortableTh column="modified" label="Modified" sort={sort} onSort={toggleSort} />
+                    <SortableTh column="modified" label="Modified" sort={sort} onSort={toggleSort} className="col-secondary" />
                   </tr>
                 </thead>
                 <tbody>
@@ -1436,7 +1394,7 @@ function WindowsUpdateWorkbench({
                           </td>
                         </>
                       ) : null}
-                      <td className="muted">{formatRelative(item.lastModifiedDateTime)}</td>
+                      <td className="muted col-secondary">{formatRelative(item.lastModifiedDateTime)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -1444,13 +1402,11 @@ function WindowsUpdateWorkbench({
               {loading && listed.length === 0 ? <p className="muted" style={{ padding: "1rem" }}>Loading…</p> : null}
             </section>
           </div>
-        )}
     </ObjectListMenuHost>
   );
   return (
     <>
     <WorkspaceSplit
-      inspectorPrimary={Boolean(selected)}
       master={menu}
       inspector={
         <InspectorWithDocumentTabs
@@ -1586,7 +1542,6 @@ function AppProtectionWorkbench({
   );
   return (
     <WorkspaceSplit
-      inspectorPrimary={Boolean(selected)}
       master={
         <ObjectListMenuHost
           onDuplicated={(created) => {
@@ -1608,33 +1563,6 @@ function AppProtectionWorkbench({
             onRefresh();
           }}
         >
-        {selected ? (
-          <div className="stack">
-          {bulkBar}
-          <CompactObjectList
-            title="App protection"
-            description="Select a policy to inspect it here."
-            objectKind="appProtection"
-            items={sorted.map((item) => ({
-              id: item.id,
-              title: item.displayName,
-              meta: item.odataType ?? undefined,
-            }))}
-            selectedId={selected.id}
-            onSelect={(id) => navigate(hrefWithParam(pathname, search, "policy", id))}
-            onRefresh={onRefresh}
-            loading={loading}
-            error={error}
-            checkedIds={selection.checkedIds}
-            onToggleChecked={selection.toggle}
-            allSelected={selection.allSelected}
-            onToggleAll={selection.toggleAll}
-            selectAllIndeterminate={checkedPolicies.length > 0 && !selection.allSelected}
-            selectAllDisabled={sorted.length === 0}
-            selectAllLabel="Select all shown policies"
-          />
-          </div>
-        ) : (
           <div className="stack">
             <PageHeader
               eyebrow="Apps"
@@ -1665,7 +1593,7 @@ function AppProtectionWorkbench({
                     </th>
                     <SortableTh column="name" label="Name" sort={sort} onSort={toggleSort} />
                     <SortableTh column="type" label="Type" sort={sort} onSort={toggleSort} />
-                    <SortableTh column="modified" label="Modified" sort={sort} onSort={toggleSort} />
+                    <SortableTh column="modified" label="Modified" sort={sort} onSort={toggleSort} className="col-secondary" />
                   </tr>
                 </thead>
                 <tbody>
@@ -1685,14 +1613,13 @@ function AppProtectionWorkbench({
                       </td>
                       <td>{item.displayName}</td>
                       <td className="muted">{item.odataType ?? "—"}</td>
-                      <td className="muted">{formatRelative(item.lastModifiedDateTime)}</td>
+                      <td className="muted col-secondary">{formatRelative(item.lastModifiedDateTime)}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </section>
           </div>
-        )}
         </ObjectListMenuHost>
       }
       inspector={
@@ -1955,7 +1882,6 @@ function NamedPolicyList({
   const checkedPolicies = filtered.filter((item) => selection.checkedIds.has(item.id));
   const bulkPolicies = filtered.filter((item) => selection.bulkTargetIds.includes(item.id));
   const showBulk = selection.bulkEditorOpen && bulkPolicies.length > 0;
-  const inspectorOpen = Boolean(selected);
   const bulkDelete = (
     <BulkListActions
       targets={checkedPolicies.map((item) => ({
@@ -1978,7 +1904,6 @@ function NamedPolicyList({
   return (
     <>
     <WorkspaceSplit
-      inspectorPrimary={inspectorOpen}
       master={
         <ObjectListMenuHost
           onDuplicated={(created) => {
@@ -2001,57 +1926,6 @@ function NamedPolicyList({
             onRefresh();
           }}
         >
-        {selected ? (
-          <div className="stack">
-            <BulkAssignBar
-              count={checkedPolicies.length}
-              onEdit={selection.openBulkEditor}
-              onClear={selection.clear}
-              extra={bulkDelete}
-            />
-            <LoadedInventoryBanner truncated={truncated} />
-            <CompactObjectList
-              title={title}
-              description="Select a policy to inspect it here."
-              objectKind={objectKind}
-              items={filtered.map((item) => ({
-                id: item.id,
-                title: item.name,
-                meta: showProfile
-                  ? `${profileName(item)} · ${item.platforms ?? eyebrow} · ${formatRelative(item.lastModifiedDateTime)}`
-                  : `${item.platforms ?? eyebrow} · ${formatRelative(item.lastModifiedDateTime)}`,
-              }))}
-              selectedId={selected.id}
-              onSelect={onSelect}
-              onRefresh={onRefresh}
-              loading={loading}
-              error={error}
-              actions={
-                <>
-                  {createButton}
-                  {importButton}
-                </>
-              }
-              checkedIds={selection.checkedIds}
-              onToggleChecked={selection.toggle}
-              query={query}
-              onQueryChange={setQuery}
-              assignedFilter={assignedFilter}
-              onAssignedFilterChange={setAssignedFilter}
-              platformFilter={platformFilter}
-              onPlatformFilterChange={setPlatformFilter}
-              platformOptions={platformOptions}
-              showPlatformFilter
-              countLabel={`${filtered.length} of ${items.length}`}
-              searchPlaceholder={showProfile ? "Name, profile, platform, assigned…" : "Name, platform, assigned…"}
-              allSelected={selection.allSelected}
-              onToggleAll={selection.toggleAll}
-              selectAllIndeterminate={checkedPolicies.length > 0 && !selection.allSelected}
-              selectAllDisabled={filtered.length === 0}
-              selectAllLabel="Select all filtered policies"
-            />
-          </div>
-        ) : (
           <div className="stack">
             <PageHeader
               eyebrow={eyebrow}
@@ -2090,7 +1964,7 @@ function NamedPolicyList({
               countLabel={`${filtered.length} of ${items.length}`}
               placeholder={showProfile ? "Name, profile, platform, assigned…" : "Name, platform, assigned…"}
             >
-              <table className="axis-table">
+              <table className="axis-table list-table">
                 <thead>
                   <tr>
                     <th className="axis-table-check">
@@ -2106,17 +1980,17 @@ function NamedPolicyList({
                     {showProfile ? (
                       <SortableTh column="profile" label="Profile" sort={sort} onSort={toggleSort} />
                     ) : null}
-                    <SortableTh column="platform" label="Platform" sort={sort} onSort={toggleSort} />
+                    <SortableTh column="platform" label="Platform" sort={sort} onSort={toggleSort} className="col-secondary" />
                     {showPriority ? (
                       <SortableTh column="priority" label="Priority" sort={sort} onSort={toggleSort} />
                     ) : null}
                     {showDeviceLimit ? (
-                      <SortableTh column="settings" label="Device limit" sort={sort} onSort={toggleSort} />
+                      <SortableTh column="settings" label="Device limit" sort={sort} onSort={toggleSort} className="col-secondary" />
                     ) : !showPriority ? (
-                      <SortableTh column="settings" label="Settings" sort={sort} onSort={toggleSort} />
+                      <SortableTh column="settings" label="Settings" sort={sort} onSort={toggleSort} className="col-secondary" />
                     ) : null}
                     <SortableTh column="assigned" label="Assigned" sort={sort} onSort={toggleSort} />
-                    <SortableTh column="modified" label="Last modified" sort={sort} onSort={toggleSort} />
+                    <SortableTh column="modified" label="Last modified" sort={sort} onSort={toggleSort} className="col-secondary" />
                   </tr>
                 </thead>
                 <tbody>
@@ -2134,19 +2008,17 @@ function NamedPolicyList({
                           onChange={() => selection.toggle(item.id)}
                         />
                       </td>
-                      <td>{item.name}</td>
+                      <td><span className="list-name">{item.name}</span></td>
                       {showProfile ? <td className="muted">{profileName(item)}</td> : null}
-                      <td className="muted">{item.platforms ?? "—"}</td>
+                      <td className="muted col-secondary">{item.platforms ?? "—"}</td>
                       {showPriority ? (
                         <td className="muted">{item.priority ?? "—"}</td>
                       ) : null}
-                      {showDeviceLimit ? (
-                        <td className="muted">{item.settingCount ?? "—"}</td>
-                      ) : !showPriority ? (
-                        <td className="muted">{item.settingCount ?? "—"}</td>
+                      {showDeviceLimit || !showPriority ? (
+                        <td className="muted col-secondary">{item.settingCount ?? "—"}</td>
                       ) : null}
                       <td className="muted">{item.isAssigned ? "Yes" : "No"}</td>
-                      <td className="muted">{formatRelative(item.lastModifiedDateTime)}</td>
+                      <td className="muted col-secondary">{formatRelative(item.lastModifiedDateTime)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -2154,7 +2026,6 @@ function NamedPolicyList({
               {!loading && filtered.length === 0 ? <p className="muted" style={{ padding: "1rem" }}>No policies.</p> : null}
             </SearchableTable>
           </div>
-        )}
         </ObjectListMenuHost>
       }
       inspector={
@@ -2322,7 +2193,6 @@ function AppsList({
     </button>
   ) : null;
   const showBulk = selection.bulkEditorOpen && bulkApps.length > 0;
-  const inspectorOpen = Boolean(selected);
   const bulkPolicies: CatalogPolicySummary[] = bulkApps.map((item) => ({
     id: item.id,
     name: item.displayName,
@@ -2331,70 +2201,7 @@ function AppsList({
   return (
     <>
     <WorkspaceSplit
-      inspectorPrimary={inspectorOpen}
       master={
-        selected ? (
-          <div className="stack">
-            {relationships.error ? <p className="muted">{relationshipErrorText(relationships.error)}</p> : null}
-            <BulkAssignBar
-              count={checkedApps.length}
-              onEdit={selection.openBulkEditor}
-              onClear={selection.clear}
-              extra={
-                <BulkListActions
-                  targets={checkedApps.map((item) => ({
-                    id: item.id,
-                    title: item.displayName,
-                    kind: "mobileApp",
-                  }))}
-                  onDeleted={onAppsDeleted}
-                />
-              }
-            />
-            <LoadedInventoryBanner truncated={truncated} />
-            <CompactObjectList
-              title={title}
-              description="Select an app to inspect it here."
-              items={filtered.map((item) => ({
-                id: item.id,
-                title: item.displayName,
-                meta: [
-                  item.publisher,
-                  item.appTypeLabel ?? item.kind,
-                  item.platform,
-                  item.displayVersion,
-                  dependencySummary(item.id, relationships.links, appNames),
-                ]
-                  .filter(Boolean)
-                  .join(" · "),
-              }))}
-              selectedId={selected.id}
-              onSelect={onSelect}
-              onRefresh={refreshApps}
-              loading={loading}
-              error={error}
-              checkedIds={selection.checkedIds}
-              onToggleChecked={selection.toggle}
-              query={query}
-              onQueryChange={setQuery}
-              assignedFilter={assignedFilter}
-              onAssignedFilterChange={setAssignedFilter}
-              countLabel={`${filtered.length} of ${rows.length}`}
-              actions={
-                <>
-                  {graphButton}
-                  {createButton}
-                </>
-              }
-              searchPlaceholder={relationships.enabled ? "Name, publisher, dependency…" : "Name, publisher, assigned…"}
-              allSelected={selection.allSelected}
-              onToggleAll={selection.toggleAll}
-              selectAllIndeterminate={checkedApps.length > 0 && !selection.allSelected}
-              selectAllDisabled={filtered.length === 0}
-              selectAllLabel="Select all filtered apps"
-            />
-          </div>
-        ) : (
           <div className="stack">
             <PageHeader
               eyebrow="Apps"
@@ -2463,7 +2270,7 @@ function AppsList({
                       <SortableTh column="dependencies" label="Dependencies" sort={sort} onSort={toggleSort} />
                     ) : null}
                     <SortableTh column="assigned" label="Assigned" sort={sort} onSort={toggleSort} />
-                    <SortableTh column="modified" label="Last modified" sort={sort} onSort={toggleSort} />
+                    <SortableTh column="modified" label="Last modified" sort={sort} onSort={toggleSort} className="col-secondary" />
                   </tr>
                 </thead>
                 <tbody>
@@ -2496,7 +2303,7 @@ function AppsList({
                         </td>
                       ) : null}
                       <td className="muted">{item.isAssigned ? "Yes" : "No"}</td>
-                      <td className="muted">{formatRelative(item.lastModifiedDateTime)}</td>
+                      <td className="muted col-secondary">{formatRelative(item.lastModifiedDateTime)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -2508,7 +2315,6 @@ function AppsList({
               ) : null}
             </SearchableTable>
           </div>
-        )
       }
       inspector={
         selected ? (
@@ -2742,7 +2548,6 @@ function ScriptsWorkbench({
   return (
     <>
     <WorkspaceSplit
-      inspectorPrimary={Boolean(selected)}
       master={
         <ObjectListMenuHost
           onDuplicated={(created, source) => {
@@ -2773,46 +2578,6 @@ function ScriptsWorkbench({
             onRefresh();
           }}
         >
-        {selected ? (
-          <div className="stack">
-            {bulkBar}
-            <CompactObjectList
-              title={title}
-              description="Select a script to inspect it here."
-              items={filtered.map((item) => ({
-                id: item.id,
-                title: item.displayName,
-                kind: inspectorKindForTenantScript(item.kind),
-                meta: `${tenantScriptKindLabel(item.kind)} · ${item.runAsAccount ?? "—"}`,
-              }))}
-              selectedId={selected.id}
-              onSelect={onSelect}
-              onRefresh={onRefresh}
-              loading={loading}
-              error={error}
-              actions={
-                <div className="device-actions">
-                  {importButton}
-                  {createButton}
-                </div>
-              }
-              checkedIds={selection.checkedIds}
-              onToggleChecked={selection.toggle}
-              query={query}
-              onQueryChange={setQuery}
-              assignedFilter={assignedFilter}
-              onAssignedFilterChange={setAssignedFilter}
-              countLabel={countLabel}
-              searchPlaceholder={searchPlaceholder}
-              secondaryFilter={kindSecondaryFilter}
-              allSelected={selection.allSelected}
-              onToggleAll={selection.toggleAll}
-              selectAllIndeterminate={checkedScripts.length > 0 && !selection.allSelected}
-              selectAllDisabled={filtered.length === 0}
-              selectAllLabel={`Select all filtered ${title.toLowerCase()}`}
-            />
-          </div>
-        ) : (
           <div className="stack">
             <PageHeader
               eyebrow="Devices"
@@ -2857,7 +2622,7 @@ function ScriptsWorkbench({
                     <SortableTh column="kind" label="Kind" sort={sort} onSort={toggleSort} />
                     <SortableTh column="runAs" label="Run as" sort={sort} onSort={toggleSort} />
                     <SortableTh column="assignments" label="Assignments" sort={sort} onSort={toggleSort} />
-                    <SortableTh column="modified" label="Last modified" sort={sort} onSort={toggleSort} />
+                    <SortableTh column="modified" label="Last modified" sort={sort} onSort={toggleSort} className="col-secondary" />
                   </tr>
                 </thead>
                 <tbody>
@@ -2883,7 +2648,7 @@ function ScriptsWorkbench({
                       <td className="muted">{tenantScriptKindLabel(item.kind)}</td>
                       <td className="muted">{item.runAsAccount ?? "—"}</td>
                       <td className="muted">{item.assignmentCount ?? "—"}</td>
-                      <td className="muted">{formatRelative(item.lastModifiedDateTime)}</td>
+                      <td className="muted col-secondary">{formatRelative(item.lastModifiedDateTime)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -2895,7 +2660,6 @@ function ScriptsWorkbench({
               ) : null}
             </SearchableTable>
           </div>
-        )}
         </ObjectListMenuHost>
       }
       inspector={
@@ -3162,7 +2926,6 @@ function AutopilotDevicesView({
   return (
     <>
     <WorkspaceSplit
-      inspectorPrimary={Boolean(selected)}
       master={
         <ObjectListMenuHost
           onDeleted={(target) => {
@@ -3170,48 +2933,6 @@ function AutopilotDevicesView({
             void devices.reload();
           }}
         >
-          {selected ? (
-            <div className="stack">
-              <BulkAssignBar
-                count={checkedDevices.length}
-                editLabel="Update group tag"
-                editHint="Set the same group tag on every selected Autopilot device"
-                onEdit={() => setGroupTagOpen(true)}
-                onClear={selection.clear}
-                extra={bulkDelete}
-              />
-              {syncError ? <div className="axis-alert axis-alert-danger">{syncError}</div> : null}
-              <div className="device-list-compact">
-                <CompactObjectList
-                  title="Devices"
-                  objectKind="autopilotDevice"
-                  items={sorted.map((item) => ({
-                    id: item.id,
-                    title: deviceTitle(item),
-                    meta: [item.groupTag, item.enrollmentState].filter(Boolean).join(" · "),
-                  }))}
-                  selectedId={selectedId}
-                  onSelect={onSelect}
-                  onRefresh={() => void devices.reload()}
-                  loading={devices.loading}
-                  error={devices.error}
-                  query={query}
-                  onQueryChange={setQuery}
-                  countLabel={countLabel}
-                  searchPlaceholder="Serial, tag, model, state, user…"
-                  filters={listFilters}
-                  checkedIds={selection.checkedIds}
-                  onToggleChecked={selection.toggle}
-                  allSelected={selection.allSelected}
-                  onToggleAll={selection.toggleAll}
-                  selectAllIndeterminate={checkedDevices.length > 0 && !selection.allSelected}
-                  selectAllDisabled={sorted.length === 0}
-                  selectAllLabel="Select all filtered Autopilot devices"
-                  actions={syncControls}
-                />
-              </div>
-            </div>
-          ) : (
             <div className="stack">
               <PageHeader
                 eyebrow="Enrollment · Autopilot"
@@ -3304,7 +3025,6 @@ function AutopilotDevicesView({
                 ) : null}
               </SearchableTable>
             </div>
-          )}
         </ObjectListMenuHost>
       }
       inspector={
@@ -3461,7 +3181,6 @@ function AutopilotProfilesView({
   return (
     <>
     <WorkspaceSplit
-      inspectorPrimary={Boolean(selected)}
       master={
         <ObjectListMenuHost
           onDuplicated={(created) => {
@@ -3478,45 +3197,6 @@ function AutopilotProfilesView({
             void profiles.reload();
           }}
         >
-          {selected ? (
-            <div className="device-list-compact">
-              {bulkBar}
-              <CompactObjectList
-                title="Deployment profiles"
-                objectKind="autopilotProfile"
-                items={sorted.map((item) => ({
-                  id: item.id,
-                  title: item.displayName,
-                  meta: [autopilotProfileJoinLabel(item), formatRelative(item.lastModifiedDateTime)]
-                    .filter((part) => part && part !== "—")
-                    .join(" · "),
-                }))}
-                selectedId={selectedId}
-                onSelect={onSelect}
-                onRefresh={() => void profiles.reload()}
-                loading={profiles.loading}
-                error={profiles.error}
-                query={query}
-                onQueryChange={setQuery}
-                countLabel={countLabel}
-                searchPlaceholder="Name, join type, description…"
-                filters={listFilters}
-                actions={
-                  <>
-                    {createButton}
-                    {importButton}
-                  </>
-                }
-                checkedIds={selection.checkedIds}
-                onToggleChecked={selection.toggle}
-                allSelected={selection.allSelected}
-                onToggleAll={selection.toggleAll}
-                selectAllIndeterminate={checkedProfiles.length > 0 && !selection.allSelected}
-                selectAllDisabled={sorted.length === 0}
-                selectAllLabel="Select all shown profiles"
-              />
-            </div>
-          ) : (
             <div className="stack">
               <PageHeader
                 eyebrow="Enrollment · Autopilot"
@@ -3564,7 +3244,7 @@ function AutopilotProfilesView({
                       </th>
                       <SortableTh column="name" label="Name" sort={sort} onSort={toggle} />
                       <SortableTh column="join" label="Join type" sort={sort} onSort={toggle} />
-                      <SortableTh column="modified" label="Modified" sort={sort} onSort={toggle} />
+                      <SortableTh column="modified" label="Modified" sort={sort} onSort={toggle} className="col-secondary" />
                     </tr>
                   </thead>
                   <tbody>
@@ -3584,7 +3264,7 @@ function AutopilotProfilesView({
                         </td>
                         <td>{item.displayName}</td>
                         <td className="muted">{autopilotProfileJoinLabel(item)}</td>
-                        <td className="muted">{formatRelative(item.lastModifiedDateTime)}</td>
+                        <td className="muted col-secondary">{formatRelative(item.lastModifiedDateTime)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -3598,7 +3278,6 @@ function AutopilotProfilesView({
                 ) : null}
               </SearchableTable>
             </div>
-          )}
         </ObjectListMenuHost>
       }
       inspector={
@@ -4023,40 +3702,10 @@ function PolicyPacksWorkbench({
     setExportResolved(info);
   }, []);
 
-  const baselineModifiedMeta = (reference: E8BaselineReference) => {
-    const repoModified = reference.repositoryLastModifiedDateTime;
-    const policyExported = reference.policyExportedDateTime;
-    const label = repoModified ? "repo" : policyExported ? "exported" : "unknown";
-    return `${reference.version ?? "version n/a"} · ${label}: ${formatRelative(repoModified ?? policyExported)}`;
-  };
-
   return (
     <>
     <WorkspaceSplit
-      inspectorPrimary={Boolean(selectedReference)}
       master={
-        selectedReference ? (
-          <CompactObjectList
-            title="Pack items"
-            description="Select an item from a policy pack to inspect it here."
-            items={allReferences.map((reference) => ({
-              id: `ref:${reference.sourceId}:${reference.id}`,
-              title: reference.name,
-              meta: baselineModifiedMeta(reference),
-              group: `${reference.sourceName} · ${packArtifactKindLabel(reference.artifactKind)}`,
-              selectable: isImportablePackArtifact(reference.artifactKind),
-            }))}
-            selectedId={selectedId ?? ""}
-            onSelect={onSelect}
-            checkedIds={selection.checkedIds}
-            onToggleChecked={selection.toggle}
-            allSelected={selection.allSelected}
-            onToggleAll={selection.toggleAll}
-            selectAllIndeterminate={selection.checkedIds.size > 0 && !selection.allSelected}
-            selectAllDisabled={importableSelectionIds.length === 0}
-            selectAllLabel="Select all importable items"
-          />
-        ) : (
           <div className="stack">
             <PageHeader
               eyebrow={
@@ -4462,7 +4111,6 @@ function PolicyPacksWorkbench({
             })}
             </div>
           </div>
-        )
       }
       inspector={
         selectedReference ? (

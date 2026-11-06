@@ -1,4 +1,14 @@
-import { Fragment, useCallback, useState, type ReactNode, Component, type ErrorInfo } from "react";
+import {
+  Fragment,
+  useCallback,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type PointerEvent,
+  type ReactNode,
+  Component,
+  type ErrorInfo,
+} from "react";
 import type { AssignedFilter, ColumnSort, ListFilterOption } from "../../lib/listSelection";
 import { requestObjectRefresh } from "../../lib/inspectorCache";
 import { useHeaderRefreshMenu } from "../ui/ContextMenu";
@@ -35,11 +45,13 @@ export function SortableTh<K extends string>({
   label,
   sort,
   onSort,
+  className,
 }: {
   column: K;
   label: string;
   sort: ColumnSort<K>;
   onSort: (key: K) => void;
+  className?: string;
 }) {
   const active = sort.key === column;
   const ariaSort: "ascending" | "descending" | "none" = active
@@ -48,7 +60,7 @@ export function SortableTh<K extends string>({
       : "descending"
     : "none";
   return (
-    <th aria-sort={ariaSort}>
+    <th aria-sort={ariaSort} className={className}>
       <button
         type="button"
         className="axis-th-sort"
@@ -118,16 +130,95 @@ export function WorkspaceSplit({
   inspectorPrimary?: boolean;
 }) {
   const showInspector = inspector != null;
+  const splitRef = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState<number | null>(readInspectorWidth);
+  const clamp = (px: number) => {
+    const total = splitRef.current?.clientWidth ?? 1600;
+    return Math.round(Math.min(Math.max(px, INSPECTOR_MIN_WIDTH), total * INSPECTOR_MAX_SHARE));
+  };
+  const save = (px: number | null) => {
+    setWidth(px);
+    try {
+      if (px == null) localStorage.removeItem(INSPECTOR_WIDTH_KEY);
+      else localStorage.setItem(INSPECTOR_WIDTH_KEY, String(px));
+    } catch {
+      // Width is a convenience; without storage it lasts until the window closes.
+    }
+  };
+  const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    const split = splitRef.current;
+    if (!split || event.button !== 0) return;
+    event.preventDefault();
+    const handle = event.currentTarget;
+    handle.setPointerCapture(event.pointerId);
+    const right = split.getBoundingClientRect().right;
+    let latest = width;
+    const move = (moveEvent: globalThis.PointerEvent) => {
+      latest = clamp(right - moveEvent.clientX);
+      setWidth(latest);
+    };
+    const up = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", up);
+      handle.removeEventListener("pointercancel", up);
+      save(latest);
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up);
+    handle.addEventListener("pointercancel", up);
+  };
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const current = width ?? splitRef.current?.querySelector(".workspace-inspector")?.clientWidth ?? 480;
+    if (event.key === "ArrowLeft") save(clamp(current + 32));
+    else if (event.key === "ArrowRight") save(clamp(current - 32));
+    else return;
+    event.preventDefault();
+  };
+  // A chosen width applies to the push layout; inspector-primary surfaces keep their own sizing.
+  const sized = showInspector && !inspectorPrimary && width != null;
   return (
     <div
+      ref={splitRef}
       className={`workspace-split${inspectorPrimary && showInspector ? " inspector-primary" : ""}${
         showInspector ? "" : " inspector-hidden"
       }`}
     >
       <div className="workspace-master">{master}</div>
-      {showInspector ? <aside className="workspace-inspector">{inspector}</aside> : null}
+      {showInspector ? (
+        <div
+          className="workspace-resizer"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize inspector. Arrow keys change the width; double-click resets it."
+          tabIndex={0}
+          onPointerDown={onPointerDown}
+          onKeyDown={onKeyDown}
+          onDoubleClick={() => save(null)}
+        />
+      ) : null}
+      {showInspector ? (
+        <aside
+          className="workspace-inspector"
+          style={sized ? { flex: `0 0 ${width}px`, maxWidth: "none" } : undefined}
+        >
+          {inspector}
+        </aside>
+      ) : null}
     </div>
   );
+}
+
+const INSPECTOR_WIDTH_KEY = "axis.inspectorWidth";
+const INSPECTOR_MIN_WIDTH = 320;
+const INSPECTOR_MAX_SHARE = 0.7;
+
+function readInspectorWidth(): number | null {
+  try {
+    const value = Number(localStorage.getItem(INSPECTOR_WIDTH_KEY));
+    return Number.isFinite(value) && value >= INSPECTOR_MIN_WIDTH ? value : null;
+  } catch {
+    return null;
+  }
 }
 
 export function InspectorEmpty({ label }: { label: string }) {

@@ -22,7 +22,7 @@ import {
   SelectCheckbox,
   useCheckedIds,
 } from "./workbench/PolicyBulkAssign";
-import { IncompleteBanner, InspectorEmpty, InspectorErrorBoundary, SearchableTable, CompactObjectList, SortableTh, formatRelative, useColumnSort, useListSearchState, WorkspaceSplit } from "./workbench/shared";
+import { IncompleteBanner, InspectorEmpty, InspectorErrorBoundary, SearchableTable, SortableTh, formatRelative, useColumnSort, useListSearchState, WorkspaceSplit } from "./workbench/shared";
 
 export function SettingsCatalogWorkbench({
   platform,
@@ -92,7 +92,6 @@ export function SettingsCatalogWorkbench({
       }}
     />
   );
-  const inspectorOpen = Boolean(selected);
   const titleFor = useCallback(
     (id: string) =>
       listed.find((item) => item.id === id)?.name ??
@@ -210,7 +209,6 @@ export function SettingsCatalogWorkbench({
   return (
     <>
     <WorkspaceSplit
-      inspectorPrimary={inspectorOpen}
       master={
         <ObjectListMenuHost
           onDuplicated={(created) => {
@@ -233,55 +231,6 @@ export function SettingsCatalogWorkbench({
             onRefresh();
           }}
         >
-        {selected ? (
-          <div className="stack">
-            <BulkAssignBar
-              count={checkedPolicies.length}
-              onEdit={selection.openBulkEditor}
-              onClear={selection.clear}
-              extra={bulkDelete}
-            />
-            {loadedLimitBanner}
-            <CompactObjectList
-              title="Settings Catalog"
-              description="Select a policy to edit settings and assignments here."
-              objectKind="configurationPolicy"
-              items={filtered.map((item) => ({
-                id: item.id,
-                title: item.name,
-                meta: `${item.platforms ?? "—"} · ${item.settingCount ?? 0} settings`,
-              }))}
-              selectedId={selected.id}
-              onSelect={(id) => navigate(hrefWithParam(pathname, search, "policy", id))}
-              onRefresh={onRefresh}
-              loading={loading}
-              error={error}
-              actions={
-                <div className="device-actions">
-                  {importButton}
-                  {platformSwitcher}
-                </div>
-              }
-              checkedIds={selection.checkedIds}
-              onToggleChecked={selection.toggle}
-              query={query}
-              onQueryChange={setQuery}
-              assignedFilter={assignedFilter}
-              onAssignedFilterChange={setAssignedFilter}
-              platformFilter={platformFilter}
-              onPlatformFilterChange={setPlatformFilter}
-              platformOptions={platformOptions}
-              showPlatformFilter
-              countLabel={`${filtered.length} of ${scoped.length}`}
-              searchPlaceholder="Name, platform, assigned…"
-              allSelected={selection.allSelected}
-              onToggleAll={selection.toggleAll}
-              selectAllIndeterminate={checkedPolicies.length > 0 && !selection.allSelected}
-              selectAllDisabled={filtered.length === 0}
-              selectAllLabel="Select all filtered policies"
-            />
-          </div>
-        ) : (
           <div className="stack">
             <PageHeader
               title="Settings Catalog"
@@ -327,7 +276,6 @@ export function SettingsCatalogWorkbench({
               onSort={toggleSort}
             />
           </div>
-        )}
         </ObjectListMenuHost>
       }
       inspector={
@@ -437,11 +385,11 @@ function TenantPolicyTable({
               />
             </th>
             <SortableTh column="name" label="Name" sort={sort} onSort={onSort} />
-            <SortableTh column="platform" label="Platform" sort={sort} onSort={onSort} />
-            <SortableTh column="settings" label="Settings" sort={sort} onSort={onSort} />
+            <SortableTh column="platform" label="Platform" sort={sort} onSort={onSort} className="col-secondary" />
+            <SortableTh column="settings" label="Settings" sort={sort} onSort={onSort} className="col-secondary" />
             <SortableTh column="assigned" label="Assigned" sort={sort} onSort={onSort} />
             <SortableTh column="family" label="Family" sort={sort} onSort={onSort} />
-            <SortableTh column="modified" label="Last modified" sort={sort} onSort={onSort} />
+            <SortableTh column="modified" label="Last modified" sort={sort} onSort={onSort} className="col-secondary" />
           </tr>
         </thead>
         <tbody>
@@ -460,11 +408,11 @@ function TenantPolicyTable({
                 />
               </td>
               <td>{item.name}</td>
-              <td className="muted">{item.platforms ?? "—"}</td>
-              <td className="muted">{item.settingCount ?? "—"}</td>
+              <td className="muted col-secondary">{item.platforms ?? "—"}</td>
+              <td className="muted col-secondary">{item.settingCount ?? "—"}</td>
               <td className="muted">{item.isAssigned ? "Yes" : "No"}</td>
               <td className="muted">{item.templateFamily ?? "none"}</td>
-              <td className="muted">{formatRelative(item.lastModifiedDateTime)}</td>
+              <td className="muted col-secondary">{formatRelative(item.lastModifiedDateTime)}</td>
             </tr>
           ))}
         </tbody>

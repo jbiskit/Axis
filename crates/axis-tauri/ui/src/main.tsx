@@ -2,6 +2,14 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import { applyDensity, applyTheme, loadDensity, loadTheme } from "./lib/theme";
+// IBM Plex, bundled so the desktop app works offline; only the weights the tokens use.
+import "@fontsource/ibm-plex-sans/400.css";
+import "@fontsource/ibm-plex-sans/500.css";
+import "@fontsource/ibm-plex-sans/600.css";
+import "@fontsource/ibm-plex-sans-condensed/500.css";
+import "@fontsource/ibm-plex-sans-condensed/600.css";
+import "@fontsource/ibm-plex-mono/400.css";
+import "@fontsource/ibm-plex-mono/500.css";
 import "./styles/tokens.css";
 import "./styles/layout.css";
 import "./styles/packs.css";

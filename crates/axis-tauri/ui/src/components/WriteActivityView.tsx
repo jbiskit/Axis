@@ -311,7 +311,6 @@ function AxisWriteActivity({ pathname, search }: { pathname: string; search: URL
 
   return (
     <WorkspaceSplit
-      inspectorPrimary={Boolean(selected)}
       master={
         <CompactObjectList
           title="Write activity"
@@ -500,7 +499,6 @@ function IntuneAuditActivity({ pathname, search }: { pathname: string; search: U
 
   return (
     <WorkspaceSplit
-      inspectorPrimary={Boolean(selected)}
       master={
         <CompactObjectList
           title="Write activity"
