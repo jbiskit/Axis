@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Axis Redesign Boards</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* Layout idea: one shell (titlebar modules + single sidebar), one object pattern (filters → table → inspector) on every surface. */
+:root {
+  --bg: #eef0f3;        /* app canvas */
+  --panel: #ffffff;     /* surfaces */
+  --line: #dde1e7;      /* hairlines */
+  --ink: #18202b;       /* text */
+  --mute: #5f6b7a;      /* secondary text */
+  --signal: #0f8fa0;    /* the one accent */
+  --signal-soft: #dff2f4;
+  --ok: #2f8a4c; --ok-soft: #e1f2e6;
+  --warn: #b7791f; --warn-soft: #f8eedb;
+  --bad: #c2384b; --bad-soft: #f8e1e4;
+  --raise: #f6f7f9;
+  --font-display: "IBM Plex Sans Condensed", "Segoe UI Variable Display", sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI Variable Text", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1216; --panel: #161a20; --line: #262c35; --ink: #e4e8ee; --mute: #8a95a5;
+    --signal: #3cc4d3; --signal-soft: #143036; --raise: #1c2129;
+    --ok: #5cc07a; --ok-soft: #15291c; --warn: #e2a84a; --warn-soft: #2e2414; --bad: #ef6b7d; --bad-soft: #321a1f;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1216; --panel: #161a20; --line: #262c35; --ink: #e4e8ee; --mute: #8a95a5;
+  --signal: #3cc4d3; --signal-soft: #143036; --raise: #1c2129;
+  --ok: #5cc07a; --ok-soft: #15291c; --warn: #e2a84a; --warn-soft: #2e2414; --bad: #ef6b7d; --bad-soft: #321a1f;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 var(--font-body); }
+.page { display: grid; gap: 40px; padding: 32px 24px 64px; max-width: 1360px; margin: 0 auto; }
+.intro { display: grid; gap: 8px; max-width: 70ch; }
+.intro h1 { font: 600 30px/1.15 var(--font-display); margin: 0; text-wrap: balance; }
+.intro p { margin: 0; color: var(--mute); }
+.principles { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+.principle { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; display: grid; gap: 4px; }
+.principle b { font: 600 15px var(--font-display); }
+.principle span { color: var(--mute); font-size: 13px; }
+
+.board { display: grid; gap: 10px; }
+.board-head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+.board-head .num { font: 500 12px var(--font-mono); color: var(--signal); }
+.board-head h2 { font: 600 20px var(--font-display); margin: 0; }
+.board-head p { margin: 0; color: var(--mute); font-size: 13px; flex-basis: 100%; max-width: 80ch; }
+.frame-scroll { overflow-x: auto; border-radius: 10px; border: 1px solid var(--line); }
+.frame { min-width: 1240px; height: 720px; background: var(--bg); display: grid; grid-template-rows: 44px 1fr; }
+
+/* Titlebar: tenant, modules, search */
+.titlebar { display: flex; align-items: center; gap: 16px; padding: 0 14px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.mark { font: 600 15px var(--font-display); letter-spacing: 0.02em; display: flex; align-items: center; gap: 8px; }
+.mark i { width: 18px; height: 18px; border-radius: 4px; background: var(--signal); display: block; }
+.tenant { display: flex; align-items: center; gap: 6px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 6px; font-size: 12.5px; }
+.tenant small { color: var(--mute); font: 11px var(--font-mono); }
+.modules { display: flex; gap: 2px; height: 100%; }
+.modules a { display: flex; align-items: center; padding: 0 12px; color: var(--mute); text-decoration: none; font-weight: 500; font-size: 13px; border-bottom: 2px solid transparent; }
+.modules a[aria-current] { color: var(--ink); border-bottom-color: var(--signal); }
+.search { margin-left: auto; display: flex; align-items: center; gap: 8px; width: 300px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 6px; color: var(--mute); background: var(--raise); font-size: 12.5px; }
+.search kbd { margin-left: auto; font: 11px var(--font-mono); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; }
+.who { width: 26px; height: 26px; border-radius: 50%; background: var(--signal-soft); color: var(--signal); display: grid; place-items: center; font: 600 11px var(--font-body); }
+
+.body { display: grid; grid-template-columns: 220px 1fr; min-height: 0; }
+.body.with-inspector { grid-template-columns: 220px 1fr 380px; }
+
+/* Sidebar: one tree, platform is a filter not a branch */
+.sidebar { background: var(--panel); border-right: 1px solid var(--line); padding: 12px 8px; display: grid; align-content: start; gap: 14px; overflow: hidden; }
+.group { display: grid; gap: 1px; }
+.group h3 { font: 600 10.5px var(--font-body); letter-spacing: 0.08em; text-transform: uppercase; color: var(--mute); margin: 0 8px 4px; }
+.nav { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 5px; color: var(--ink); font-size: 13px; }
+.nav .ico { width: 14px; height: 14px; border: 1.5px solid currentColor; border-radius: 3px; opacity: 0.55; flex: none; }
+.nav .count { margin-left: auto; font: 11px var(--font-mono); color: var(--mute); }
+.nav.on { background: var(--signal-soft); color: var(--signal); font-weight: 500; }
+.nav.on .ico { opacity: 1; }
+.nav .dot { margin-left: auto; width: 7px; height: 7px; border-radius: 50%; background: var(--bad); }
+
+/* Main column */
+.main { display: grid; grid-template-rows: auto auto 1fr; min-width: 0; min-height: 0; }
+.pagehead { padding: 14px 20px 10px; display: grid; gap: 6px; }
+.crumbs { font-size: 12px; color: var(--mute); }
+.titlerow { display: flex; align-items: center; gap: 10px; }
+.titlerow h1 { font: 600 21px var(--font-display); margin: 0; }
+.titlerow .total { font: 12px var(--font-mono); color: var(--mute); }
+.actions { margin-left: auto; display: flex; gap: 6px; }
+.btn { font: 500 12.5px var(--font-body); padding: 5px 11px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; }
+.btn.primary { background: var(--signal); border-color: var(--signal); color: #fff; }
+.btn.ghost { border-color: transparent; background: transparent; color: var(--mute); }
+.btn.danger { color: var(--bad); }
+.btn:focus-visible, .chip:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+
+.filters { display: flex; align-items: center; gap: 6px; padding: 0 20px 10px; flex-wrap: wrap; }
+.field { padding: 5px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--mute); font-size: 12.5px; width: 240px; }
+.chip { padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); font-size: 12px; color: var(--mute); }
+.chip.on { background: var(--ink); color: var(--panel); border-color: var(--ink); }
+.chip b { font-weight: 600; }
+
+.bulk { display: flex; align-items: center; gap: 8px; margin: 0 20px 8px; padding: 6px 10px; border-radius: 6px; background: var(--signal-soft); color: var(--signal); font-size: 12.5px; }
+.bulk .btn { padding: 3px 9px; }
+
+.tablewrap { margin: 0 20px 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: auto; min-height: 0; }
+table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+th { position: sticky; top: 0; background: var(--raise); text-align: left; font: 600 10.5px var(--font-body); letter-spacing: 0.06em; text-transform: uppercase; color: var(--mute); padding: 7px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+td { padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; overflow-wrap: anywhere; max-width: 22rem; }
+tr:last-child td { border-bottom: 0; }
+tr.sel td { background: var(--signal-soft); }
+td.num, .mono { font-family: var(--font-mono); font-size: 12px; font-variant-numeric: tabular-nums; }
+.cb { width: 14px; height: 14px; border: 1.5px solid var(--mute); border-radius: 3px; display: inline-block; vertical-align: middle; }
+.cb.on { background: var(--signal); border-color: var(--signal); }
+.name { font-weight: 500; }
+.sub { color: var(--mute); font-size: 11.5px; }
+
+.state { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; white-space: nowrap; }
+.state::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.state.ok { color: var(--ok); } .state.warn { color: var(--warn); } .state.bad { color: var(--bad); } .state.off { color: var(--mute); }
+.tag { display: inline-block; padding: 1px 7px; border-radius: 4px; background: var(--raise); border: 1px solid var(--line); font-size: 11px; color: var(--mute); margin: 1px 2px 1px 0; }
+.toggle { width: 28px; height: 16px; border-radius: 999px; background: var(--line); position: relative; display: inline-block; vertical-align: middle; }
+.toggle::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--panel); }
+.toggle.on { background: var(--signal); } .toggle.on::after { left: 14px; }
+
+/* Inspector */
+.inspector { background: var(--panel); border-left: 1px solid var(--line); display: grid; grid-template-rows: auto auto 1fr; min-height: 0; }
+.ins-head { padding: 14px 16px 8px; display: grid; gap: 6px; }
+.ins-head .kind { font: 500 11px var(--font-mono); color: var(--signal); }
+.ins-head h2 { margin: 0; font: 600 17px var(--font-display); text-wrap: balance; }
+.ins-actions { display: flex; gap: 4px; flex-wrap: wrap; }
+.tabs { display: flex; gap: 2px; padding: 0 12px; border-bottom: 1px solid var(--line); }
+.tabs span { padding: 7px 10px; font-size: 12.5px; color: var(--mute); border-bottom: 2px solid transparent; }
+.tabs span.on { color: var(--ink); border-bottom-color: var(--signal); font-weight: 500; }
+.ins-body { padding: 12px 16px; overflow: auto; display: grid; gap: 12px; align-content: start; }
+.section { display: grid; gap: 6px; }
+.section h4 { margin: 0; font: 600 10.5px var(--font-body); letter-spacing: 0.08em; text-transform: uppercase; color: var(--mute); }
+dl { display: grid; grid-template-columns: 130px 1fr; gap: 5px 10px; margin: 0; font-size: 12.5px; }
+dt { color: var(--mute); }
+dd { margin: 0; overflow-wrap: anywhere; }
+pre { margin: 0; padding: 10px; background: var(--raise); border: 1px solid var(--line); border-radius: 6px; font: 11.5px/1.5 var(--font-mono); overflow: auto; color: var(--ink); }
+
+/* Dashboard */
+.dash { padding: 4px 20px 16px; display: grid; gap: 14px; overflow: auto; align-content: start; }
+.tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.tile { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; display: grid; gap: 6px; position: relative; overflow: hidden; }
+.tile::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--line); }
+.tile.ok::before { background: var(--ok); } .tile.warn::before { background: var(--warn); } .tile.bad::before { background: var(--bad); }
+.tile h5 { margin: 0; font: 600 10.5px var(--font-body); letter-spacing: 0.08em; text-transform: uppercase; color: var(--mute); }
+.tile .big { font: 600 26px/1 var(--font-display); font-variant-numeric: tabular-nums; }
+.tile .big small { font: 500 13px var(--font-mono); color: var(--mute); margin-left: 4px; }
+.tile .note { font-size: 12px; color: var(--mute); }
+.bar { height: 6px; border-radius: 999px; background: var(--raise); border: 1px solid var(--line); overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--signal); }
+.cols { display: grid; grid-template-columns: 1.4fr 1fr; gap: 12px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; display: grid; align-content: start; }
+.card-head { display: flex; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.card-head h3 { margin: 0; font: 600 14px var(--font-display); }
+.card-head a { margin-left: auto; font-size: 12px; color: var(--signal); text-decoration: none; }
+.row { display: grid; grid-template-columns: 12px 1fr auto; gap: 10px; align-items: center; padding: 8px 14px; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+.row:last-child { border-bottom: 0; }
+.sev { width: 4px; height: 26px; border-radius: 2px; background: var(--line); }
+.sev.bad { background: var(--bad); } .sev.warn { background: var(--warn); } .sev.ok { background: var(--ok); }
+.row .src { font: 11px var(--font-mono); color: var(--mute); }
+svg.spark { width: 100%; height: 46px; display: block; }
+
+/* Component sheet */
+.sheet { min-width: 1240px; background: var(--panel); padding: 20px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; }
+.swatch { display: grid; gap: 4px; font-size: 12px; }
+.swatch i { height: 40px; border-radius: 6px; border: 1px solid var(--line); display: block; }
+.stack { display: grid; gap: 10px; align-content: start; }
+.stack h4 { margin: 0; font: 600 10.5px var(--font-body); letter-spacing: 0.08em; text-transform: uppercase; color: var(--mute); }
+.hstack { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+
+/* Board 06: selection behaviour */
+.callout { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; font-size: 12.5px; color: var(--mute); }
+.callout .k { font: 600 10.5px var(--font-body); letter-spacing: 0.08em; text-transform: uppercase; color: var(--signal); }
+.callout .hid { text-decoration: line-through; text-decoration-color: var(--bad); }
+.body.overlay { position: relative; }
+.body.overlay .inspector { position: absolute; top: 0; right: 0; bottom: 0; width: 380px; box-shadow: -18px 0 36px rgba(0, 0, 0, 0.18); z-index: 2; }
+.clamp2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+@media (prefers-reduced-motion: no-preference) { .btn, .chip { transition: background 120ms ease, color 120ms ease; } }
+</style>
+</head>
+<body>
+<main class="page">
+  <header class="intro">
+    <h1>Axis redesign, round 1</h1>
+    <p>Four boards for the shell, the one page pattern every surface shares, a review page in that same pattern, and a tenant home. A component sheet closes the set. Figures Axis has actually read from contoso are real: Secure Score, MFA 7 of 25, profile names, the licence and the single device. App counts, most user rows, statuses and the activity list are illustrative.</p>
+  </header>
+
+  <section class="principles" aria-label="Principles">
+    <div class="principle"><b>One shell</b><span>Modules sit in the titlebar. A single sidebar replaces the icon rail plus context panel.</span></div>
+    <div class="principle"><b>One page pattern</b><span>Filters, then a table with bulk actions. The inspector appears only when you select something, so nothing sits empty. Intune, Entra, Purview and Defender all work the same way.</span></div>
+    <div class="principle"><b>Platform is a filter</b><span>Windows, macOS, iOS and Android are chips on the page, not branches you drill through in the nav.</span></div>
+    <div class="principle"><b>State before detail</b><span>Status dots, severity stripes and counts show what needs attention before you read a word.</span></div>
+  </section>
+
+  <!-- Board 1: shell + navigation -->
+  <section class="board">
+    <div class="board-head"><span class="num">01</span><h2>Shell and navigation</h2>
+      <p>Tenant and modules sit in the titlebar, and Ctrl+K search reaches every object. The sidebar keeps the groups you already use (Overview, Manage, Monitor, Get started, Library) and shows counts and alerts beside each entry.</p></div>
+    <div class="frame-scroll"><div class="frame">
+      <div class="titlebar">
+        <span class="mark"><i></i>Axis</span>
+        <span class="tenant">contoso <small>0000aaaa</small></span>
+        <nav class="modules" aria-label="Modules"><a aria-current="page">Intune</a><a>Entra</a><a>Purview</a><a>Defender</a></nav>
+        <span class="search">Search policies, devices, apps, settings<kbd>Ctrl K</kbd></span>
+        <span class="who">JA</span>
+      </div>
+      <div class="body">
+        <aside class="sidebar">
+          <div class="group"><div class="nav on"><span class="ico"></span>Overview</div></div>
+          <div class="group"><h3>Manage</h3>
+            <div class="nav"><span class="ico"></span>Devices<span class="count">1</span></div>
+            <div class="nav"><span class="ico"></span>Apps<span class="count">42</span></div>
+            <div class="nav"><span class="ico"></span>Configuration<span class="count">31</span></div>
+            <div class="nav"><span class="ico"></span>Compliance<span class="count">4</span></div>
+            <div class="nav"><span class="ico"></span>Endpoint security<span class="count">1</span></div>
+            <div class="nav"><span class="ico"></span>Windows Update<span class="count">7</span></div>
+            <div class="nav"><span class="ico"></span>Enrollment</div>
+          </div>
+          <div class="group"><h3>Monitor</h3>
+            <div class="nav"><span class="ico"></span>Assignment failures<span class="dot" aria-label="needs attention"></span></div>
+            <div class="nav"><span class="ico"></span>Update status</div>
+            <div class="nav"><span class="ico"></span>Activity</div>
+          </div>
+          <div class="group"><h3>Get started</h3>
+            <div class="nav"><span class="ico"></span>Readiness</div>
+            <div class="nav"><span class="ico"></span>Autopilot</div>
+            <div class="nav"><span class="ico"></span>LAPS</div>
+          </div>
+          <div class="group"><h3>Library</h3>
+            <div class="nav"><span class="ico"></span>Policy packs</div>
+            <div class="nav"><span class="ico"></span>App catalog</div>
+          </div>
+        </aside>
+        <div class="main">
+          <div class="pagehead">
+            <div class="crumbs">Intune / Overview</div>
+            <div class="titlerow"><h1>contoso</h1><span class="total">DEVELOPERPACK_E5 · 25 users · 1 device</span>
+              <div class="actions"><button class="btn ghost" type="button">Refresh</button><button class="btn" type="button">Environment report</button></div></div>
+          </div>
+          <div class="filters"><span class="chip on"><b>All platforms</b></span><span class="chip">Windows</span><span class="chip">macOS</span><span class="chip">iOS</span><span class="chip">Android</span></div>
+          <div class="dash">
+            <div class="tiles">
+              <div class="tile ok"><h5>Device compliance</h5><div class="big">1<small>/ 1</small></div><div class="note">AX-892764686142 compliant</div></div>
+              <div class="tile ok"><h5>Assignment errors</h5><div class="big">0</div><div class="note">0 conflicts across 31 profiles</div></div>
+              <div class="tile warn"><h5>Update rings reporting</h5><div class="big">0<small>/ 5</small></div><div class="note">No devices have checked in yet</div></div>
+              <div class="tile"><h5>Feature update</h5><div class="big" style="font-size:18px">26H2</div><div class="note">Windows 11 · 0 devices with errors</div></div>
+            </div>
+            <div class="card"><div class="card-head"><h3>What changed this week</h3><a href="#">Open activity</a></div>
+              <div class="row"><span class="sev ok"></span><span>AX Hybrid domain join assigned to AX-Autopilot</span><span class="src">Axis · 4 Nov</span></div>
+              <div class="row"><span class="sev warn"></span><span>Example - AntiPhish created outside Axis</span><span class="src">Exchange · 20 Oct</span></div>
+              <div class="row"><span class="sev ok"></span><span>Windows LAPS scope tags set to Default</span><span class="src">Axis · 19 Oct</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div></div>
+  </section>
+
+  <!-- Board 2a: nothing selected -->
+  <section class="board">
+    <div class="board-head"><span class="num">02a</span><h2>The object pattern: nothing selected</h2>
+      <p>With no selection there is no inspector. The table takes the full width and shows the columns that only fit here: platform, settings count, assigned groups and device status counts. Settings Catalog, template profiles, ADMX and scripts share one list, with type as a filter.</p></div>
+    <div class="frame-scroll"><div class="frame">
+      <div class="titlebar">
+        <span class="mark"><i></i>Axis</span>
+        <span class="tenant">contoso <small>0000aaaa</small></span>
+        <nav class="modules" aria-label="Modules"><a aria-current="page">Intune</a><a>Entra</a><a>Purview</a><a>Defender</a></nav>
+        <span class="search">Search policies, devices, apps, settings<kbd>Ctrl K</kbd></span>
+        <span class="who">JA</span>
+      </div>
+      <div class="body">
+        <aside class="sidebar">
+          <div class="group"><div class="nav"><span class="ico"></span>Overview</div></div>
+          <div class="group"><h3>Manage</h3>
+            <div class="nav"><span class="ico"></span>Devices<span class="count">1</span></div>
+            <div class="nav"><span class="ico"></span>Apps<span class="count">42</span></div>
+            <div class="nav on"><span class="ico"></span>Configuration<span class="count">31</span></div>
+            <div class="nav"><span class="ico"></span>Compliance<span class="count">4</span></div>
+            <div class="nav"><span class="ico"></span>Endpoint security<span class="count">1</span></div>
+            <div class="nav"><span class="ico"></span>Windows Update<span class="count">7</span></div>
+          </div>
+          <div class="group"><h3>Monitor</h3>
+            <div class="nav"><span class="ico"></span>Assignment failures</div>
+            <div class="nav"><span class="ico"></span>Update status</div>
+          </div>
+        </aside>
+        <div class="main">
+          <div class="pagehead">
+            <div class="crumbs">Intune / Manage</div>
+            <div class="titlerow"><h1>Configuration</h1><span class="total">31 profiles · 1 error · 1 pending</span>
+              <div class="actions"><button class="btn ghost" type="button">Refresh</button><button class="btn" type="button">Import</button><button class="btn primary" type="button">New profile</button></div></div>
+          </div>
+          <div class="filters">
+            <span class="field">Filter by name, setting or group</span>
+            <span class="chip on"><b>All platforms</b></span><span class="chip">Windows <b>9</b></span><span class="chip">macOS <b>17</b></span><span class="chip">iOS <b>1</b></span><span class="chip">Android <b>1</b></span>
+            <span class="chip">Type: any</span><span class="chip">Assigned: any</span><span class="chip">Status: any</span>
+          </div>
+          <div class="tablewrap"><table>
+            <thead><tr><th></th><th>Name</th><th>Platform</th><th>Type</th><th>Settings</th><th>Assigned to</th><th>Devices</th><th>Scope tags</th><th>Modified</th></tr></thead>
+            <tbody>
+              <tr><td><span class="cb"></span></td><td><div class="name">AX Hybrid domain join</div><div class="sub">OU=Autopilot,DC=contoso,DC=com</div></td><td>Windows</td><td>Domain join</td><td class="num">4</td><td>AX-Autopilot</td><td><span class="state ok">1 succeeded</span></td><td><span class="tag">Default</span></td><td class="num">2026-10-04</td></tr>
+              <tr><td><span class="cb"></span></td><td><div class="name">Windows LAPS</div><div class="sub">Endpoint security · account protection</div></td><td>Windows</td><td>Settings Catalog</td><td class="num">5</td><td>All devices</td><td><span class="state ok">1 succeeded</span></td><td><span class="tag">Default</span></td><td class="num">2026-10-19</td></tr>
+              <tr><td><span class="cb"></span></td><td><div class="name">Windows 11 - v26H2</div><div class="sub">Feature update</div></td><td>Windows</td><td>Windows Update</td><td class="num">1</td><td>All devices</td><td><span class="state warn">0 reporting</span></td><td><span class="tag">Default</span></td><td class="num">2026-10-12</td></tr>
+              <tr><td><span class="cb"></span></td><td><div class="name">macOS - MDE Configuration</div><div class="sub">com.microsoft.wdav</div></td><td>macOS</td><td>Custom (plist)</td><td class="num">1</td><td>All devices</td><td><span class="state ok">Succeeded</span></td><td><span class="tag">Default</span></td><td class="num">2023-09-26</td></tr>
+              <tr><td><span class="cb"></span></td><td><div class="name">macOS - Bitdefender Trusted Certificate</div><div class="sub">certificate.cer</div></td><td>macOS</td><td>Trusted certificate</td><td class="num">1</td><td>Mac fleet</td><td><span class="state ok">Succeeded</span></td><td><span class="tag">Default</span></td><td class="num">2023-10-24</td></tr>
+              <tr><td><span class="cb"></span></td><td><div class="name">macOS Microsoft Defender for Endpoint - Network Filter</div></td><td>macOS</td><td>Custom (plist)</td><td class="num">1</td><td>Mac fleet</td><td><span class="state bad">1 error</span></td><td><span class="tag">Default</span></td><td class="num">2024-03-05</td></tr>
+              <tr><td><span class="cb"></span></td><td><div class="name">Onedrive KFM</div></td><td>macOS</td><td>App configuration</td><td class="num">6</td><td>All users</td><td><span class="state warn">1 pending</span></td><td><span class="tag">Default</span></td><td class="num">2024-02-11</td></tr>
+              <tr><td><span class="cb"></span></td><td><div class="name">macOS - Forticlient Permissions</div></td><td>macOS</td><td>Custom (plist)</td><td class="num">1</td><td><span class="sub">Not assigned</span></td><td><span class="state off">No devices</span></td><td><span class="tag">Default</span></td><td class="num">2023-11-02</td></tr>
+              <tr><td><span class="cb"></span></td><td><div class="name">macOS - Full Permission Suite (N-Central)</div></td><td>macOS</td><td>Custom (plist)</td><td class="num">1</td><td>Mac fleet</td><td><span class="state ok">Succeeded</span></td><td><span class="tag">Default</span><span class="tag">MSP</span></td><td class="num">2024-05-19</td></tr>
+            </tbody>
+          </table></div>
+        </div>
+      </div>
+    </div></div>
+  </section>
+
+  <!-- Board 2: object pattern -->
+  <section class="board">
+    <div class="board-head"><span class="num">02b</span><h2>The object pattern: a row selected</h2>
+      <p>Selecting a row slides the inspector in from the right, and the table gives up its lower-value columns to make room. The inspector always has the same tabs, and Raw JSON, Refresh and Delete sit in the same place. Esc or the row again closes it, and the table returns to 02a.</p></div>
+    <div class="frame-scroll"><div class="frame">
+      <div class="titlebar">
+        <span class="mark"><i></i>Axis</span>
+        <span class="tenant">contoso <small>0000aaaa</small></span>
+        <nav class="modules" aria-label="Modules"><a aria-current="page">Intune</a><a>Entra</a><a>Purview</a><a>Defender</a></nav>
+        <span class="search">Search policies, devices, apps, settings<kbd>Ctrl K</kbd></span>
+        <span class="who">JA</span>
+      </div>
+      <div class="body with-inspector">
+        <aside class="sidebar">
+          <div class="group"><div class="nav"><span class="ico"></span>Overview</div></div>
+          <div class="group"><h3>Manage</h3>
+            <div class="nav"><span class="ico"></span>Devices<span class="count">1</span></div>
+            <div class="nav"><span class="ico"></span>Apps<span class="count">42</span></div>
+            <div class="nav on"><span class="ico"></span>Configuration<span class="count">31</span></div>
+            <div class="nav"><span class="ico"></span>Compliance<span class="count">4</span></div>
+            <div class="nav"><span class="ico"></span>Endpoint security<span class="count">1</span></div>
+            <div class="nav"><span class="ico"></span>Windows Update<span class="count">7</span></div>
+          </div>
+          <div class="group"><h3>Monitor</h3>
+            <div class="nav"><span class="ico"></span>Assignment failures</div>
+            <div class="nav"><span class="ico"></span>Update status</div>
+          </div>
+        </aside>
+        <div class="main">
+          <div class="pagehead">
+            <div class="crumbs">Intune / Manage</div>
+            <div class="titlerow"><h1>Configuration</h1><span class="total">31 profiles</span>
+              <div class="actions"><button class="btn ghost" type="button">Refresh</button><button class="btn" type="button">Import</button><button class="btn primary" type="button">New profile</button></div></div>
+          </div>
+          <div class="filters">
+            <span class="field">Filter by name, setting or group</span>
+            <span class="chip">Windows <b>9</b></span><span class="chip on">macOS <b>17</b></span><span class="chip">iOS <b>1</b></span><span class="chip">Android <b>1</b></span>
+            <span class="chip">Type: any</span><span class="chip">Assigned: any</span>
+          </div>
+          <div class="bulk"><span class="cb on"></span>2 selected<button class="btn" type="button">Assign</button><button class="btn" type="button">Scope tags</button><button class="btn" type="button">Export</button><button class="btn danger" type="button">Delete</button></div>
+          <div class="tablewrap"><table>
+            <thead><tr><th></th><th>Name</th><th>Type</th><th>Assigned</th><th>Status</th><th>Scope tags</th><th>Modified</th></tr></thead>
+            <tbody>
+              <tr class="sel"><td><span class="cb on"></span></td><td><div class="name">macOS - MDE Configuration</div><div class="sub">com.microsoft.wdav</div></td><td>Custom (plist)</td><td>All devices</td><td><span class="state ok">Succeeded</span></td><td><span class="tag">Default</span></td><td class="num">2023-09-26</td></tr>
+              <tr class="sel"><td><span class="cb on"></span></td><td><div class="name">macOS - Bitdefender Trusted Certificate</div><div class="sub">certificate.cer</div></td><td>Trusted certificate</td><td>Mac fleet</td><td><span class="state ok">Succeeded</span></td><td><span class="tag">Default</span></td><td class="num">2023-10-24</td></tr>
+              <tr><td><span class="cb"></span></td><td><div class="name">macOS - Bitdefender Full Disk Access</div><div class="sub">Privacy preferences</div></td><td>Custom (plist)</td><td>Mac fleet</td><td><span class="state ok">Succeeded</span></td><td><span class="tag">Default</span></td><td class="num">2023-09-26</td></tr>
+              <tr><td><span class="cb"></span></td><td><div class="name">macOS - Forticlient Permissions</div></td><td>Custom (plist)</td><td><span class="sub">Not assigned</span></td><td><span class="state off">No devices</span></td><td><span class="tag">Default</span></td><td class="num">2023-11-02</td></tr>
+              <tr><td><span class="cb"></span></td><td><div class="name">Onedrive KFM</div></td><td>App configuration</td><td>All users</td><td><span class="state warn">1 pending</span></td><td><span class="tag">Default</span></td><td class="num">2024-02-11</td></tr>
+              <tr><td><span class="cb"></span></td><td><div class="name">macOS Microsoft Defender for Endpoint - Network Filter</div></td><td>Custom (plist)</td><td>Mac fleet</td><td><span class="state bad">1 error</span></td><td><span class="tag">Default</span></td><td class="num">2024-03-05</td></tr>
+              <tr><td><span class="cb"></span></td><td><div class="name">macOS - Full Permission Suite (N-Central)</div></td><td>Custom (plist)</td><td>Mac fleet</td><td><span class="state ok">Succeeded</span></td><td><span class="tag">Default</span><span class="tag">MSP</span></td><td class="num">2024-05-19</td></tr>
+            </tbody>
+          </table></div>
+        </div>
+        <aside class="inspector" aria-label="Inspector">
+          <div class="ins-head">
+            <span class="kind">macOSCustomConfiguration</span>
+            <h2>macOS - MDE Configuration</h2>
+            <div class="ins-actions"><button class="btn ghost" type="button">Refresh</button><button class="btn ghost" type="button">Raw JSON</button><button class="btn ghost" type="button">Open in Intune</button><button class="btn ghost danger" type="button">Delete</button></div>
+          </div>
+          <div class="tabs"><span class="on">Overview</span><span>Payload</span><span>Assignments</span><span>JSON</span></div>
+          <div class="ins-body">
+            <div class="section"><h4>Profile</h4>
+              <dl><dt>Payload name</dt><dd class="mono">com.microsoft.wdav</dd><dt>File</dt><dd class="mono">com.microsoft.wdav.xml</dd><dt>Channel</dt><dd>Device channel</dd><dt>Version</dt><dd class="mono">1</dd><dt>Scope tags</dt><dd><span class="tag">Default</span></dd></dl></div>
+            <div class="section"><h4>Payload, decoded</h4>
+<pre>&lt;key&gt;antivirusEngine&lt;/key&gt;
+&lt;dict&gt;
+  &lt;key&gt;enforcementLevel&lt;/key&gt;
+  &lt;string&gt;real_time&lt;/string&gt;
+&lt;/dict&gt;
+&lt;key&gt;cloudService&lt;/key&gt;
+&lt;dict&gt;
+  &lt;key&gt;enabled&lt;/key&gt;&lt;true/&gt;
+&lt;/dict&gt;</pre></div>
+            <div class="section"><h4>Device status</h4>
+              <dl><dt>Succeeded</dt><dd class="mono">1</dd><dt>Errors</dt><dd class="mono">0</dd><dt>Conflicts</dt><dd class="mono">0</dd></dl></div>
+          </div>
+        </aside>
+      </div>
+    </div></div>
+  </section>
+
+  <!-- Board 2c: push vs overlay -->
+  <section class="board">
+    <div class="board-head"><span class="num">02c</span><h2>Selecting a row: push or overlay</h2>
+      <p>The same moment both ways: the 02a table, with "macOS Microsoft Defender for Endpoint - Network Filter" just selected. Nothing is ellipsised in either. Push removes whole columns in a fixed order; overlay keeps every column and lays the inspector over the right of the table.</p></div>
+
+    <div class="callout"><span class="k">A · Push</span><span>The table narrows by 380px.</span><span>Hidden while inspecting:</span><span class="hid">Platform</span><span class="hid">Settings</span><span class="hid">Assigned to</span><span class="hid">Modified</span><span>· Name wraps to two lines at most · Devices status always stays</span></div>
+    <div class="frame-scroll"><div class="frame">
+      <div class="titlebar">
+        <span class="mark"><i></i>Axis</span>
+        <span class="tenant">contoso <small>0000aaaa</small></span>
+        <nav class="modules" aria-label="Modules"><a aria-current="page">Intune</a><a>Entra</a><a>Purview</a><a>Defender</a></nav>
+        <span class="search">Search policies, devices, apps, settings<kbd>Ctrl K</kbd></span>
+        <span class="who">JA</span>
+      </div>
+      <div class="body with-inspector">
+        <aside class="sidebar">
+          <div class="group"><div class="nav"><span class="ico"></span>Overview</div></div>
+          <div class="group"><h3>Manage</h3>
+            <div class="nav"><span class="ico"></span>Devices<span class="count">1</span></div>
+            <div class="nav"><span class="ico"></span>Apps<span class="count">42</span></div>
+            <div class="nav on"><span class="ico"></span>Configuration<span class="count">31</span></div>
+            <div class="nav"><span class="ico"></span>Compliance<span class="count">4</span></div>
+            <div class="nav"><span class="ico"></span>Endpoint security<span class="count">1</span></div>
+            <div class="nav"><span class="ico"></span>Windows Update<span class="count">7</span></div>
+          </div>
+        </aside>
+        <div class="main">
+          <div class="pagehead">
+            <div class="crumbs">Intune / Manage</div>
+            <div class="titlerow"><h1>Configuration</h1><span class="total">31 profiles · 1 error · 1 pending</span>
+              <div class="actions"><button class="btn ghost" type="button">Refresh</button><button class="btn primary" type="button">New profile</button></div></div>
+          </div>
+          <div class="filters">
+            <span class="field">Filter by name, setting or group</span>
+            <span class="chip on"><b>All platforms</b></span><span class="chip">Windows <b>9</b></span><span class="chip">macOS <b>17</b></span><span class="chip">Type: any</span>
+          </div>
+          <div class="tablewrap"><table>
+            <thead><tr><th></th><th>Name</th><th>Type</th><th>Devices</th><th>Scope tags</th></tr></thead>
+            <tbody>
+              <tr><td><span class="cb"></span></td><td><div class="name clamp2">AX Hybrid domain join</div></td><td>Domain join</td><td><span class="state ok">1 succeeded</span></td><td><span class="tag">Default</span></td></tr>
+              <tr><td><span class="cb"></span></td><td><div class="name clamp2">Windows LAPS</div></td><td>Settings Catalog</td><td><span class="state ok">1 succeeded</span></td><td><span class="tag">Default</span></td></tr>
+              <tr><td><span class="cb"></span></td><td><div class="name clamp2">macOS - MDE Configuration</div></td><td>Custom (plist)</td><td><span class="state ok">Succeeded</span></td><td><span class="tag">Default</span></td></tr>
+              <tr class="sel"><td><span class="cb"></span></td><td><div class="name clamp2">macOS Microsoft Defender for Endpoint - Network Filter</div></td><td>Custom (plist)</td><td><span class="state bad">1 error</span></td><td><span class="tag">Default</span></td></tr>
+              <tr><td><span class="cb"></span></td><td><div class="name clamp2">Onedrive KFM</div></td><td>App configuration</td><td><span class="state warn">1 pending</span></td><td><span class="tag">Default</span></td></tr>
+              <tr><td><span class="cb"></span></td><td><div class="name clamp2">macOS - Full Permission Suite (N-Central)</div></td><td>Custom (plist)</td><td><span class="state ok">Succeeded</span></td><td><span class="tag">Default</span><span class="tag">MSP</span></td></tr>
+            </tbody>
+          </table></div>
+        </div>
+        <aside class="inspector" aria-label="Inspector">
+          <div class="ins-head">
+            <span class="kind">macOSCustomConfiguration</span>
+            <h2>macOS Microsoft Defender for Endpoint - Network Filter</h2>
+            <div class="ins-actions"><button class="btn ghost" type="button">Close (Esc)</button><button class="btn ghost" type="button">Refresh</button><button class="btn ghost" type="button">Raw JSON</button><button class="btn ghost danger" type="button">Delete</button></div>
+          </div>
+          <div class="tabs"><span class="on">Overview</span><span>Payload</span><span>Assignments</span><span>JSON</span></div>
+          <div class="ins-body">
+            <div class="section"><h4>Device status</h4>
+              <dl><dt>Errors</dt><dd><span class="state bad">1 device</span></dd><dt>Succeeded</dt><dd class="mono">0</dd><dt>Assigned to</dt><dd>Mac fleet</dd></dl></div>
+            <div class="section"><h4>Profile</h4>
+              <dl><dt>Platform</dt><dd>macOS</dd><dt>Type</dt><dd>Custom (plist)</dd><dt>Settings</dt><dd class="mono">1</dd><dt>Scope tags</dt><dd><span class="tag">Default</span></dd><dt>Modified</dt><dd class="mono">2024-03-05</dd></dl></div>
+          </div>
+        </aside>
+      </div>
+    </div></div>
+
+    <div class="callout" style="margin-top:14px"><span class="k">B · Overlay</span><span>Nothing reflows. The inspector floats over Devices, Scope tags and Modified until you close it. This is the automatic fallback below about 1100px wide.</span></div>
+    <div class="frame-scroll"><div class="frame">
+      <div class="titlebar">
+        <span class="mark"><i></i>Axis</span>
+        <span class="tenant">contoso <small>0000aaaa</small></span>
+        <nav class="modules" aria-label="Modules"><a aria-current="page">Intune</a><a>Entra</a><a>Purview</a><a>Defender</a></nav>
+        <span class="search">Search policies, devices, apps, settings<kbd>Ctrl K</kbd></span>
+        <span class="who">JA</span>
+      </div>
+      <div class="body overlay">
+        <aside class="sidebar">
+          <div class="group"><div class="nav"><span class="ico"></span>Overview</div></div>
+          <div class="group"><h3>Manage</h3>
+            <div class="nav"><span class="ico"></span>Devices<span class="count">1</span></div>
+            <div class="nav"><span class="ico"></span>Apps<span class="count">42</span></div>
+            <div class="nav on"><span class="ico"></span>Configuration<span class="count">31</span></div>
+            <div class="nav"><span class="ico"></span>Compliance<span class="count">4</span></div>
+            <div class="nav"><span class="ico"></span>Endpoint security<span class="count">1</span></div>
+            <div class="nav"><span class="ico"></span>Windows Update<span class="count">7</span></div>
+          </div>
+        </aside>
+        <div class="main">
+          <div class="pagehead">
+            <div class="crumbs">Intune / Manage</div>
+            <div class="titlerow"><h1>Configuration</h1><span class="total">31 profiles · 1 error · 1 pending</span>
+              <div class="actions"><button class="btn ghost" type="button">Refresh</button><button class="btn primary" type="button">New profile</button></div></div>
+          </div>
+          <div class="filters">
+            <span class="field">Filter by name, setting or group</span>
+            <span class="chip on"><b>All platforms</b></span><span class="chip">Windows <b>9</b></span><span class="chip">macOS <b>17</b></span><span class="chip">Type: any</span>
+          </div>
+          <div class="tablewrap"><table>
+            <thead><tr><th></th><th>Name</th><th>Platform</th><th>Type</th><th>Settings</th><th>Assigned to</th><th>Devices</th><th>Scope tags</th><th>Modified</th></tr></thead>
+            <tbody>
+              <tr><td><span class="cb"></span></td><td><div class="name">AX Hybrid domain join</div></td><td>Windows</td><td>Domain join</td><td class="num">4</td><td>AX-Autopilot</td><td><span class="state ok">1 succeeded</span></td><td><span class="tag">Default</span></td><td class="num">2026-10-04</td></tr>
+              <tr><td><span class="cb"></span></td><td><div class="name">Windows LAPS</div></td><td>Windows</td><td>Settings Catalog</td><td class="num">5</td><td>All devices</td><td><span class="state ok">1 succeeded</span></td><td><span class="tag">Default</span></td><td class="num">2026-10-19</td></tr>
+              <tr><td><span class="cb"></span></td><td><div class="name">macOS - MDE Configuration</div></td><td>macOS</td><td>Custom (plist)</td><td class="num">1</td><td>All devices</td><td><span class="state ok">Succeeded</span></td><td><span class="tag">Default</span></td><td class="num">2023-09-26</td></tr>
+              <tr class="sel"><td><span class="cb"></span></td><td><div class="name">macOS Microsoft Defender for Endpoint - Network Filter</div></td><td>macOS</td><td>Custom (plist)</td><td class="num">1</td><td>Mac fleet</td><td><span class="state bad">1 error</span></td><td><span class="tag">Default</span></td><td class="num">2024-03-05</td></tr>
+              <tr><td><span class="cb"></span></td><td><div class="name">Onedrive KFM</div></td><td>macOS</td><td>App configuration</td><td class="num">6</td><td>All users</td><td><span class="state warn">1 pending</span></td><td><span class="tag">Default</span></td><td class="num">2024-02-11</td></tr>
+              <tr><td><span class="cb"></span></td><td><div class="name">macOS - Full Permission Suite (N-Central)</div></td><td>macOS</td><td>Custom (plist)</td><td class="num">1</td><td>Mac fleet</td><td><span class="state ok">Succeeded</span></td><td><span class="tag">Default</span><span class="tag">MSP</span></td><td class="num">2024-05-19</td></tr>
+            </tbody>
+          </table></div>
+        </div>
+        <aside class="inspector" aria-label="Inspector">
+          <div class="ins-head">
+            <span class="kind">macOSCustomConfiguration</span>
+            <h2>macOS Microsoft Defender for Endpoint - Network Filter</h2>
+            <div class="ins-actions"><button class="btn ghost" type="button">Close (Esc)</button><button class="btn ghost" type="button">Refresh</button><button class="btn ghost" type="button">Raw JSON</button><button class="btn ghost danger" type="button">Delete</button></div>
+          </div>
+          <div class="tabs"><span class="on">Overview</span><span>Payload</span><span>Assignments</span><span>JSON</span></div>
+          <div class="ins-body">
+            <div class="section"><h4>Device status</h4>
+              <dl><dt>Errors</dt><dd><span class="state bad">1 device</span></dd><dt>Succeeded</dt><dd class="mono">0</dd><dt>Assigned to</dt><dd>Mac fleet</dd></dl></div>
+            <div class="section"><h4>Profile</h4>
+              <dl><dt>Platform</dt><dd>macOS</dd><dt>Type</dt><dd>Custom (plist)</dd><dt>Settings</dt><dd class="mono">1</dd><dt>Scope tags</dt><dd><span class="tag">Default</span></dd><dt>Modified</dt><dd class="mono">2024-03-05</dd></dl></div>
+          </div>
+        </aside>
+      </div>
+    </div></div>
+  </section>
+
+  <!-- Board 3: review page in the same pattern -->
+  <section class="board">
+    <div class="board-head"><span class="num">03</span><h2>Same pattern, other modules: Entra user registration</h2>
+      <p>Review pages stop being a separate design. A short summary strip sits above the shared table, and the inspector keeps the same tabs and appears only for a selected user, shown here for Adele. Filter chips answer the question you came with, such as "admins without MFA".</p></div>
+    <div class="frame-scroll"><div class="frame">
+      <div class="titlebar">
+        <span class="mark"><i></i>Axis</span>
+        <span class="tenant">contoso <small>0000aaaa</small></span>
+        <nav class="modules" aria-label="Modules"><a>Intune</a><a aria-current="page">Entra</a><a>Purview</a><a>Defender</a></nav>
+        <span class="search">Search users, policies, roles<kbd>Ctrl K</kbd></span>
+        <span class="who">JA</span>
+      </div>
+      <div class="body with-inspector">
+        <aside class="sidebar">
+          <div class="group"><h3>Conditional Access</h3>
+            <div class="nav"><span class="ico"></span>Coverage</div>
+            <div class="nav"><span class="ico"></span>Policies</div>
+            <div class="nav"><span class="ico"></span>Named locations</div>
+          </div>
+          <div class="group"><h3>Authentication methods</h3>
+            <div class="nav on"><span class="ico"></span>User registration<span class="count">25</span></div>
+            <div class="nav"><span class="ico"></span>Methods policy<span class="count">13</span></div>
+          </div>
+          <div class="group"><h3>Privileged access</h3>
+            <div class="nav"><span class="ico"></span>Role assignments<span class="count">9</span></div>
+            <div class="nav"><span class="ico"></span>PIM eligibility<span class="count">1</span></div>
+          </div>
+        </aside>
+        <div class="main">
+          <div class="pagehead">
+            <div class="crumbs">Entra / Authentication methods</div>
+            <div class="titlerow"><h1>User registration</h1><span class="total">25 users</span>
+              <div class="actions"><button class="btn ghost" type="button">Refresh</button><button class="btn" type="button">Export</button></div></div>
+          </div>
+          <div class="filters">
+            <span class="field">Filter by name or UPN</span>
+            <span class="chip on">MFA: not registered <b>18</b></span><span class="chip">Admins <b>3</b></span><span class="chip">Passwordless capable <b>2</b></span><span class="chip">Guests</span>
+          </div>
+          <div class="tablewrap" style="margin-top:0"><table>
+            <thead><tr><th></th><th>User</th><th>MFA</th><th>Methods</th><th>Default method</th><th>Admin</th></tr></thead>
+            <tbody>
+              <tr class="sel"><td><span class="cb"></span></td><td><div class="name">Adele</div><div class="sub">AdeleV@contoso.com</div></td><td><span class="state bad">Not registered</span></td><td><span class="tag">Windows Hello for Business</span></td><td class="sub">None</td><td>No</td></tr>
+              <tr><td><span class="cb"></span></td><td><div class="name">Administrator</div><div class="sub">Administrator@contoso.com</div></td><td><span class="state bad">Not registered</span></td><td class="sub">None</td><td class="sub">None</td><td>No</td></tr>
+              <tr><td><span class="cb"></span></td><td><div class="name">Alex Wilber</div><div class="sub">AlexW@contoso.com</div></td><td><span class="state bad">Not registered</span></td><td class="sub">None</td><td class="sub">None</td><td>No</td></tr>
+              <tr><td><span class="cb"></span></td><td><div class="name">Diego Siciliani</div><div class="sub">DiegoS@contoso.com</div></td><td><span class="state bad">Not registered</span></td><td><span class="tag">Mobile phone</span></td><td class="sub">None</td><td>No</td></tr>
+              <tr><td><span class="cb"></span></td><td><div class="name">Grady Archie</div><div class="sub">GradyA@contoso.com</div></td><td><span class="state bad">Not registered</span></td><td class="sub">None</td><td class="sub">None</td><td>No</td></tr>
+            </tbody>
+          </table></div>
+        </div>
+        <aside class="inspector" aria-label="Inspector">
+          <div class="ins-head">
+            <span class="kind">userRegistrationDetails</span>
+            <h2>Adele</h2>
+            <div class="ins-actions"><button class="btn ghost" type="button">Refresh</button><button class="btn ghost" type="button">Raw JSON</button><button class="btn ghost" type="button">Open in Entra</button></div>
+          </div>
+          <div class="tabs"><span class="on">Overview</span><span>Methods</span><span>JSON</span></div>
+          <div class="ins-body">
+            <div class="section"><h4>Readiness</h4>
+              <dl><dt>MFA registered</dt><dd><span class="state bad">No</span></dd><dt>MFA capable</dt><dd>No</dd><dt>Passwordless</dt><dd><span class="state ok">Capable</span></dd><dt>System-preferred</dt><dd><span class="toggle on" aria-label="on"></span></dd></dl></div>
+            <div class="section"><h4>Methods registered</h4><div><span class="tag">Windows Hello for Business</span></div></div>
+            <div class="section"><h4>Self-service password reset</h4>
+              <dl><dt>Enabled</dt><dd>No</dd><dt>Registered</dt><dd>No</dd></dl></div>
+          </div>
+        </aside>
+      </div>
+    </div></div>
+  </section>
+
+  <!-- Board 4: Defender posture home -->
+  <section class="board">
+    <div class="board-head"><span class="num">04</span><h2>Module home: Defender posture</h2>
+      <p>Each module opens on a summary that links into the lists behind it. The numbers are from your tenant: Secure Score 106.84 of 277, Defender for Office 365 policies from Exchange, and no Defender for Endpoint licence.</p></div>
+    <div class="frame-scroll"><div class="frame">
+      <div class="titlebar">
+        <span class="mark"><i></i>Axis</span>
+        <span class="tenant">contoso <small>0000aaaa</small></span>
+        <nav class="modules" aria-label="Modules"><a>Intune</a><a>Entra</a><a>Purview</a><a aria-current="page">Defender</a></nav>
+        <span class="search">Search policies, recommendations<kbd>Ctrl K</kbd></span>
+        <span class="who">JA</span>
+      </div>
+      <div class="body">
+        <aside class="sidebar">
+          <div class="group"><div class="nav on"><span class="ico"></span>Posture</div></div>
+          <div class="group"><h3>Exposure</h3><div class="nav"><span class="ico"></span>Secure Score<span class="count">43</span></div></div>
+          <div class="group"><h3>Email &amp; collaboration</h3>
+            <div class="nav"><span class="ico"></span>Preset policies</div>
+            <div class="nav"><span class="ico"></span>Anti-phishing<span class="count">2</span></div>
+            <div class="nav"><span class="ico"></span>Anti-spam</div>
+            <div class="nav"><span class="ico"></span>Safe Links</div>
+            <div class="nav"><span class="ico"></span>Safe Attachments</div>
+          </div>
+          <div class="group"><h3>Endpoints</h3>
+            <div class="nav"><span class="ico"></span>Security policies<span class="count">1</span></div>
+            <div class="nav" style="color:var(--mute)"><span class="ico"></span>Device inventory<span class="count">n/a</span></div>
+          </div>
+        </aside>
+        <div class="main">
+          <div class="pagehead">
+            <div class="crumbs">Defender</div>
+            <div class="titlerow"><h1>Posture</h1><span class="total">Scores refresh daily</span>
+              <div class="actions"><button class="btn ghost" type="button">Refresh</button></div></div>
+          </div>
+          <div></div>
+          <div class="dash">
+            <div class="tiles">
+              <div class="tile warn"><h5>Secure Score</h5><div class="big">38.6%<small>106.84 / 277</small></div>
+                <svg class="spark" viewBox="0 0 200 46" preserveAspectRatio="none" aria-label="Score trend, flat near 38 percent">
+                  <path d="M0 22 L25 21 L50 22 L75 21 L100 22 L125 21 L150 21 L175 22 L200 23 L200 46 L0 46 Z" fill="var(--signal-soft)"/>
+                  <path d="M0 22 L25 21 L50 22 L75 21 L100 22 L125 21 L150 21 L175 22 L200 23" fill="none" stroke="var(--signal)" stroke-width="1.5"/>
+                  <circle cx="198" cy="23" r="2.5" fill="var(--signal)"/></svg></div>
+              <div class="tile bad"><h5>MFA registered</h5><div class="big">28%<small>7 / 25</small></div><div class="bar"><i style="width:28%"></i></div><div class="note">All 3 admins registered</div></div>
+              <div class="tile ok"><h5>Email protection</h5><div class="big">2<small>anti-phish policies</small></div><div class="note">Default plus "Example - AntiPhish"</div></div>
+              <div class="tile"><h5>Defender for Endpoint</h5><div class="big" style="font-size:18px">Not licensed</div><div class="note">No WINDEFATP or MDE plan in DEVELOPERPACK_E5</div></div>
+            </div>
+            <div class="cols">
+              <div class="card"><div class="card-head"><h3>Top recommendations</h3><a href="#">All 43</a></div>
+                <div class="row"><span class="sev bad"></span><span>Ensure multifactor authentication is enabled for all users</span><span class="src">+3.25% · Identity</span></div>
+                <div class="row"><span class="sev warn"></span><span>Enable impersonated user protection</span><span class="src">+2.89% · Apps</span></div>
+                <div class="row"><span class="sev warn"></span><span>Set the phishing email level threshold at 2 or higher</span><span class="src">+2.89% · Apps</span></div>
+                <div class="row"><span class="sev warn"></span><span>Enable Conditional Access policies to block legacy authentication</span><span class="src">+2.89% · Identity</span></div>
+              </div>
+              <div class="card"><div class="card-head"><h3>Score by category</h3></div>
+                <div class="row" style="grid-template-columns: 80px 1fr 56px"><span>Identity</span><div class="bar"><i style="width:27.94%"></i></div><span class="mono">27.94%</span></div>
+                <div class="row" style="grid-template-columns: 80px 1fr 56px"><span>Data</span><div class="bar"><i style="width:77.78%"></i></div><span class="mono">77.78%</span></div>
+                <div class="row" style="grid-template-columns: 80px 1fr 56px"><span>Apps</span><div class="bar"><i style="width:40.61%"></i></div><span class="mono">40.61%</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div></div>
+  </section>
+
+  <!-- Board 5: components -->
+  <section class="board">
+    <div class="board-head"><span class="num">05</span><h2>Component sheet</h2>
+      <p>The tokens and controls every board uses. The palette replaces Catppuccin with neutral greys and one cyan accent, and keeps status colours apart from it. True/false stays a pill toggle and row selection stays a checkbox, per AGENTS.md.</p></div>
+    <div class="frame-scroll"><div class="sheet">
+      <div class="stack"><h4>Colour</h4>
+        <div class="hstack">
+          <div class="swatch"><i style="background:var(--signal)"></i>Signal</div>
+          <div class="swatch"><i style="background:var(--ok)"></i>Healthy</div>
+          <div class="swatch"><i style="background:var(--warn)"></i>Attention</div>
+          <div class="swatch"><i style="background:var(--bad)"></i>Failing</div>
+          <div class="swatch"><i style="background:var(--panel)"></i>Surface</div>
+          <div class="swatch"><i style="background:var(--bg)"></i>Canvas</div>
+        </div></div>
+      <div class="stack"><h4>Type</h4>
+        <div style="font:600 21px var(--font-display)">Page title, condensed</div>
+        <div>Body text for tables, forms and inspector fields.</div>
+        <div class="mono">0000aaaa · 2026-11-06 · 106.84</div></div>
+      <div class="stack"><h4>Controls</h4>
+        <div class="hstack"><button class="btn primary" type="button">New profile</button><button class="btn" type="button">Export</button><button class="btn ghost" type="button">Refresh</button><button class="btn danger" type="button">Delete</button></div>
+        <div class="hstack"><span class="chip on"><b>macOS</b></span><span class="chip">Windows <b>9</b></span><span class="toggle on" aria-label="on"></span><span class="toggle" aria-label="off"></span><span class="cb on"></span><span class="cb"></span></div></div>
+      <div class="stack"><h4>State</h4>
+        <div class="hstack"><span class="state ok">Succeeded</span><span class="state warn">1 pending</span><span class="state bad">1 error</span><span class="state off">No devices</span></div>
+        <div class="hstack"><span class="tag">Default</span><span class="tag">MSP</span><span class="tag">Windows Hello for Business</span></div></div>
+    </div></div>
+  </section>
+</main>
+</body>
+</html>
