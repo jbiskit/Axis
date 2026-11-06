@@ -33,7 +33,7 @@ Place a surface by what it is, then by platform.
 - **Get Started** is for wizards and starter kits. Those runs create tenant objects, and the objects they create stay under Manage.
 - Anything that exists beyond one tenant goes under **Library**. That includes local packs, catalogs, template files, and other generalized libraries.
 - Creating a client container adds a subfolder named for that client under the folder you pick. The open container is that subfolder. The local app catalog shows that tenant catalog and the Global Folder side by side. Packages live at `Applications/{Vendor}/{App}/{Version}` in the catalog they belong to. Closing a container does not keep writing into that folder.
-- A platform-specific entry nests under that platform. Windows Store apps live under Apps → Windows, not in a cross-platform Tools list.
+- Platform is a filter, not a nav branch. Policy families and app types are listed once; the platform chips in the page header (`?platform=`, see `platformsForPath`) narrow the list. An entry that exists on one platform only (Windows Store apps, MSI, ADMX Studio) carries that platform as a `tag` in the nav. Enrollment keeps its per-platform branches, because those are platform setup flows.
 
 ## Lists and controls
 

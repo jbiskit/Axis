@@ -132,6 +132,7 @@ export function WorkspaceSplit({
   const showInspector = inspector != null;
   const splitRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState<number | null>(readInspectorWidth);
+  const [expanded, setExpanded] = useState(false);
   const clamp = (px: number) => {
     const total = splitRef.current?.clientWidth ?? 1600;
     return Math.round(Math.min(Math.max(px, INSPECTOR_MIN_WIDTH), total * INSPECTOR_MAX_SHARE));
@@ -147,7 +148,7 @@ export function WorkspaceSplit({
   };
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
     const split = splitRef.current;
-    if (!split || event.button !== 0) return;
+    if (!split || event.button !== 0 || expanded) return;
     event.preventDefault();
     const handle = event.currentTarget;
     handle.setPointerCapture(event.pointerId);
@@ -175,13 +176,13 @@ export function WorkspaceSplit({
     event.preventDefault();
   };
   // A chosen width applies to the push layout; inspector-primary surfaces keep their own sizing.
-  const sized = showInspector && !inspectorPrimary && width != null;
+  const sized = showInspector && !inspectorPrimary && width != null && !expanded;
   return (
     <div
       ref={splitRef}
       className={`workspace-split${inspectorPrimary && showInspector ? " inspector-primary" : ""}${
         showInspector ? "" : " inspector-hidden"
-      }`}
+      }${showInspector && expanded ? " inspector-expanded" : ""}`}
     >
       <div className="workspace-master">{master}</div>
       {showInspector ? (
@@ -194,7 +195,27 @@ export function WorkspaceSplit({
           onPointerDown={onPointerDown}
           onKeyDown={onKeyDown}
           onDoubleClick={() => save(null)}
-        />
+        >
+          <button
+            type="button"
+            className="workspace-expand"
+            aria-pressed={expanded}
+            aria-label={expanded ? "Restore list and inspector" : "Expand inspector to full width"}
+            title={expanded ? "Restore list" : "Expand inspector"}
+            // Keep the click from starting a resize drag or a reset on the handle underneath.
+            onPointerDown={(event) => event.stopPropagation()}
+            onDoubleClick={(event) => event.stopPropagation()}
+            onClick={() => setExpanded((value) => !value)}
+          >
+            <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              {expanded ? (
+                <path d="M4 14h6v6M3 21l7-7M20 10h-6V4M21 3l-7 7" />
+              ) : (
+                <path d="M15 3h6v6M21 3l-7 7M9 21H3v-6M3 21l7-7" />
+              )}
+            </svg>
+          </button>
+        </div>
       ) : null}
       {showInspector ? (
         <aside

@@ -1,19 +1,6 @@
 import type { NavItem } from "../types/inventory";
-import {
-  INTUNE_PLATFORM_LABELS,
-  INTUNE_PLATFORM_SLUGS,
-  platformHref,
-  type IntunePlatform,
-} from "./platforms";
-import { appsPlatformNavChildren } from "./appKinds";
-
-function platformNav(pathname: string): NavItem[] {
-  return INTUNE_PLATFORM_SLUGS.map((platform) => ({
-    href: platformHref(pathname, platform),
-    label: INTUNE_PLATFORM_LABELS[platform],
-    section: "Platform",
-  }));
-}
+import { INTUNE_PLATFORM_LABELS, INTUNE_PLATFORM_SLUGS, type IntunePlatform } from "./platforms";
+import { appsInventoryHref } from "./appKinds";
 
 const POLICY_FAMILIES: Array<{
   label: string;
@@ -72,24 +59,18 @@ const POLICY_FAMILIES: Array<{
   },
 ];
 
-function policiesPlatformNavChildren(): NavItem[] {
-  const platforms = INTUNE_PLATFORM_SLUGS.map((platform) => {
-    const families = POLICY_FAMILIES.filter((family) => family.platforms.includes(platform));
-    return {
-      href: platformHref("/intune/policies", platform),
-      label: INTUNE_PLATFORM_LABELS[platform],
-      section: "Platform",
-      children: families.map((family) => ({
-        href: `${family.href}?platform=${platform}`,
-        label: family.label,
-        icon: family.icon,
-        section: family.navSection ?? "Configure",
-        status: family.status,
-      })),
-    };
-  });
+/** Policy families listed directly. Platform is a filter chip on the page (`?platform=`);
+    a family that exists on one platform only carries that platform as a tag. */
+function policiesNavChildren(): NavItem[] {
   return [
-    ...platforms,
+    ...POLICY_FAMILIES.map((family) => ({
+      href: family.href,
+      label: family.label,
+      icon: family.icon,
+      section: family.navSection ?? "Configure",
+      status: family.status,
+      tag: family.platforms.length === 1 ? INTUNE_PLATFORM_LABELS[family.platforms[0]] : undefined,
+    })),
     {
       href: "/intune/settings",
       label: "Settings search",
@@ -241,7 +222,6 @@ export const INTUNE_NAV: NavItem[] = [
     icon: "devices",
     section: "Manage",
     children: [
-      ...platformNav("/intune/devices/all"),
       { href: "/intune/devices/all", label: "All devices", icon: "devices", section: "Inventory" },
       { href: "/intune/devices/scripts", label: "Scripts", icon: "devices", section: "Tools" },
       { href: "/intune/devices/compliance", label: "Compliance scripts", icon: "devices", section: "Tools" },
@@ -266,7 +246,7 @@ export const INTUNE_NAV: NavItem[] = [
     label: "Policies",
     icon: "policies",
     section: "Manage",
-    children: policiesPlatformNavChildren(),
+    children: policiesNavChildren(),
   },
   {
     href: "/intune/policy-sets",
@@ -280,7 +260,6 @@ export const INTUNE_NAV: NavItem[] = [
     icon: "policies",
     section: "Manage",
     children: [
-      ...platformNav("/intune/policies/compliance"),
       { href: "/intune/policies/compliance", label: "All policies", icon: "policies", section: "Inventory" },
     ],
   },
@@ -304,7 +283,11 @@ export const INTUNE_NAV: NavItem[] = [
     icon: "apps",
     section: "Manage",
     children: [
-      ...appsPlatformNavChildren(),
+      // App types across platforms; the platform chips on the page narrow them.
+      { href: appsInventoryHref({ type: "lob" }), label: "Line-of-business", icon: "apps", section: "Types" },
+      { href: appsInventoryHref({ type: "msi" }), label: "MSI", icon: "apps", section: "Types", tag: "Windows" },
+      { href: appsInventoryHref({ type: "store" }), label: "Store apps", icon: "apps", section: "Types" },
+      { href: "/intune/apps/store", label: "Microsoft Store", icon: "apps", section: "Types", tag: "Windows" },
       { href: "/intune/apps/tenant", label: "All tenant apps", icon: "apps", section: "Inventory" },
       { href: "/intune/apps/setup", label: "Apps setup", icon: "apps-setup", section: "Tools" },
       { href: "/intune/apps/protection", label: "App protection", icon: "apps", section: "Tools" },
@@ -423,4 +406,15 @@ export function matchingNavItems(pathname: string, search: URLSearchParams, nav:
 
 export function breadcrumbLabel(pathname: string, search: URLSearchParams): string {
   return matchingNavItems(pathname, search, ALL_NAV)[0]?.label ?? "Overview";
+}
+
+/** Platforms a page's list can be narrowed to with `?platform=`, or null when it has no platform
+    filter. A policy family offers its own platforms; one that exists on a single platform offers none. */
+export function platformsForPath(pathname: string): readonly IntunePlatform[] | null {
+  const family = POLICY_FAMILIES.find((candidate) => pathname.startsWith(candidate.href));
+  if (family) return family.platforms.length > 1 ? family.platforms : null;
+  const filtered = ["/intune/policies/compliance", "/intune/apps/tenant", "/intune/devices/all", "/intune/devices"];
+  return filtered.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`)) || pathname === "/intune/policies"
+    ? INTUNE_PLATFORM_SLUGS
+    : null;
 }

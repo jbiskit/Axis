@@ -1060,4 +1060,6 @@ export type NavItem = {
   children?: NavItem[];
   status?: "ready" | "planned";
   section?: string;
+  /** Platform this entry only exists on (e.g. "Windows"); shown as a tag beside the label. */
+  tag?: string;
 };

@@ -1,8 +1,4 @@
-import {
-  INTUNE_PLATFORM_LABELS,
-  INTUNE_PLATFORM_SLUGS,
-  type IntunePlatform,
-} from "./platforms";
+import type { IntunePlatform } from "./platforms";
 
 export const APP_KIND_SLUGS = ["lob", "msi", "store"] as const;
 export type AppKind = (typeof APP_KIND_SLUGS)[number];
@@ -112,18 +108,3 @@ export function appsInventoryHref(opts: {
   return query ? `/intune/apps/${tab}?${query}` : `/intune/apps/${tab}`;
 }
 
-export function appsPlatformNavChildren() {
-  return INTUNE_PLATFORM_SLUGS.map((platform) => ({
-    href: appsInventoryHref({ platform }),
-    label: INTUNE_PLATFORM_LABELS[platform],
-    section: "Platform",
-    children: appTypeNavForPlatform(platform).map((entry) => ({
-      href:
-        platform === "windows" && entry.kind === "store"
-          ? "/intune/apps/store"
-          : appsInventoryHref({ platform, type: entry.kind }),
-      label: entry.label,
-      icon: "apps" as const,
-    })),
-  }));
-}

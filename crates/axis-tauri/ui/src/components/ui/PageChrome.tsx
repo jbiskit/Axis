@@ -1,5 +1,34 @@
 import type { MouseEvent, ReactNode } from "react";
 import { useHeaderRefreshMenu } from "./ContextMenu";
+import { useHashRoute } from "../../hooks/useHashRoute";
+import { platformsForPath } from "../../lib/nav";
+import { INTUNE_PLATFORM_LABELS, platformFromSearchParam } from "../../lib/platforms";
+import { hrefWithParam, navigate } from "../../lib/route";
+
+/** All · Windows · macOS · iOS · Android, on pages whose list honours `?platform=`. */
+function PlatformChips() {
+  const { pathname, search } = useHashRoute();
+  const platforms = platformsForPath(pathname);
+  if (!platforms) return null;
+  const current = platformFromSearchParam(search.get("platform"));
+  const chip = (value: string | null, label: string) => (
+    <button
+      key={value ?? "all"}
+      type="button"
+      className={`platform-chip${current === value ? " is-active" : ""}`}
+      aria-pressed={current === value}
+      onClick={() => navigate(hrefWithParam(pathname, search, "platform", value))}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <div className="platform-chips" role="group" aria-label="Platform">
+      {chip(null, "All platforms")}
+      {platforms.map((platform) => chip(platform, INTUNE_PLATFORM_LABELS[platform]))}
+    </div>
+  );
+}
 
 export type SignalCardTone = "default" | "good" | "warn" | "bad";
 
@@ -51,6 +80,7 @@ export function PageHeader({
         {eyebrow ? <div className="axis-kicker">{eyebrow}</div> : null}
         <h1>{title}</h1>
         {description ? <div className="page-header-desc">{description}</div> : null}
+        <PlatformChips />
       </div>
       {actions ? <div className="page-header-actions">{actions}</div> : null}
       {refreshMenu.menuNode}

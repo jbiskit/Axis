@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { NavIconId, NavItem } from "../types/inventory";
 import type { SessionMode } from "../types/glance";
 import type { ClientContainerStatus } from "../types/clientContainer";
-import { ALL_NAV, NAV_MODULES, matchingNavItems } from "../lib/nav";
+import { ALL_NAV, NAV_MODULES, matchingNavItems, moduleForPath } from "../lib/nav";
 import { navigate, type AppRoute } from "../lib/route";
 import { SHELL_BANNER_DISMISS_KEYS } from "../lib/readOnly";
 import { useDensity, useTheme } from "../lib/theme";
@@ -262,6 +262,7 @@ function NavChild({
         }}
       >
         <span className="shell-nav-label">{item.label}</span>
+        {item.tag ? <span className="shell-nav-tag">{item.tag}</span> : null}
       </button>
       {active && children.length ? (
         <div className="shell-nav-nested">
@@ -336,107 +337,27 @@ function NavTopItem({
   );
 }
 
-/* ---- Icon rail ----
-   Manage areas each get a rail slot; every other nav section (Workspace,
-   Get Started, Library, Tools) collapses into one slot whose items fill the
-   context panel. */
+/* ---- Sidebar ----
+   One sidebar for the active module (chosen in the titlebar). A module with a single
+   hub item lists that hub's children; Intune groups its items by section. */
 
-type RailEntry = {
-  id: string;
-  kind: "section" | "item";
-  group: string;
-  label: string;
-  heading: string;
-  icon: string;
-  items: NavItem[];
-  hasPanel: boolean;
-};
+const SECTION_ORDER = ["Workspace", "Get Started", "Manage", "Library", "Tools"];
 
-const RAIL_ICON_PATHS: Record<string, string> = {
-  Workspace: "M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z",
-  "Get Started": "M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6",
-  Library: "M4 19V5M9 19V5M14 19V5l6 1.5-2.5 13",
-  Tools: "M14.7 6.3a4 4 0 0 0-5.4 5.4L4 17l3 3 5.3-5.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.5-2.5z",
-  "/intune/devices": "M5 3h14v18H5zM10 17h4",
-  "/intune/enrollment": "M12 3v12M8 7l4-4 4 4M5 14v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5",
-  "/intune/groups":
-    "M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM3 20c0-3 3-5 6-5s6 2 6 5M16 5a3 3 0 0 1 0 6M18 15c2 .5 3 2 3 5",
-  "/intune/policies": "M7 4h10v16H7zM10 8h4M10 12h4M10 16h2",
-  "/intune/policy-sets": "M8 3h11v14H8zM5 6v15h11M11 8h5M11 12h5",
-  "/intune/policies/compliance": "M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6zM9 12l2 2 4-4",
-  "/intune/endpoint-security": "M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7l8-4z",
-  "/intune/windows-update": "M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7",
-  "/intune/apps": "M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3zM12 12l8-4.5M12 12v9M12 12L4 7.5",
-  "/entra": "M15 7a3 3 0 1 1-6 0 3 3 0 0 1 6 0zM12 10v11M12 15h3M12 18h2",
-  "/purview": "M3 12V4h8l10 10-8 8L3 12zM7.5 8.5h.01",
-  "/defender": "M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3zM4 9l8 5 8-5",
-};
-
-const RAIL_SETTINGS_ICON =
-  "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z";
-
-const RAIL_SECTION_LABELS: Record<string, string> = {
-  Workspace: "Home",
-  "Get Started": "Start",
-  Library: "Library",
-  Tools: "Tools",
-};
-
-const RAIL_ITEM_LABELS: Record<string, string> = {
-  "/intune/endpoint-security": "Security",
-  "/intune/windows-update": "Updates",
-  "/intune/policies/compliance": "Compliance",
-  "/intune/policy-sets": "Policy sets",
-};
-
-/** Non-Intune modules: each top-level item gets its own rail slot and separator group. */
-const MODULE_SECTIONS = NAV_MODULES.filter((module) => module.id !== "intune").map((module) => module.label);
-
-const RAIL_SECTION_ORDER = ["Workspace", "Get Started", "Manage", ...MODULE_SECTIONS, "Library", "Tools"];
-
-function buildRail(): RailEntry[] {
+function moduleSections(nav: NavItem[]): Array<[string, NavItem[]]> {
   const sections = new Map<string, NavItem[]>();
-  for (const item of ALL_NAV) {
+  for (const item of nav) {
     const key = item.section ?? "Workspace";
     sections.set(key, [...(sections.get(key) ?? []), item]);
   }
-  const ordered = [
-    ...RAIL_SECTION_ORDER.filter((name) => sections.has(name)),
-    ...[...sections.keys()].filter((name) => !RAIL_SECTION_ORDER.includes(name)),
+  const names = [
+    ...SECTION_ORDER.filter((name) => sections.has(name)),
+    ...[...sections.keys()].filter((name) => !SECTION_ORDER.includes(name)),
   ];
-  const entries: RailEntry[] = [];
-  for (const name of ordered) {
-    const items = sections.get(name)!;
-    if (name === "Manage" || MODULE_SECTIONS.includes(name)) {
-      for (const item of items) {
-        entries.push({
-          id: item.href,
-          kind: "item",
-          group: name === "Manage" ? "manage" : name,
-          label: RAIL_ITEM_LABELS[item.href] ?? item.label,
-          heading: item.label,
-          icon: RAIL_ICON_PATHS[item.href] ?? RAIL_ICON_PATHS["/intune/policies"],
-          items: [item],
-          hasPanel: Boolean(item.children?.length),
-        });
-      }
-      continue;
-    }
-    entries.push({
-      id: name,
-      kind: "section",
-      group: name === "Workspace" || name === "Get Started" ? "top" : "library",
-      label: RAIL_SECTION_LABELS[name] ?? name,
-      heading: name,
-      icon: RAIL_ICON_PATHS[name] ?? RAIL_ICON_PATHS.Library,
-      items,
-      hasPanel: items.length > 1 || Boolean(items[0]?.children?.length),
-    });
-  }
-  return entries;
+  return names.map((name) => [name, sections.get(name)!]);
 }
 
-const RAIL = buildRail();
+const RAIL_SETTINGS_ICON =
+  "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z";
 
 function RailIcon({ path }: { path: string }) {
   return (
@@ -539,12 +460,9 @@ export function AppShell({
   searchSources?: SearchSource[];
 }) {
   const { pathname, search } = route;
-  const current = matchingNavItems(pathname, search, ALL_NAV)[0];
   const onAppSettings = pathname === APP_SETTINGS_PATH;
-  const sectionLabel = onAppSettings ? "Axis" : current?.section ?? "Workspace";
-  const activeEntry = onAppSettings
-    ? undefined
-    : RAIL.find((entry) => entry.items.some((item) => isActive(pathname, search, item)));
+  const activeModule = NAV_MODULES.find((module) => module.id === moduleForPath(pathname)) ?? NAV_MODULES[0];
+  const hub = activeModule.nav.length === 1 && activeModule.nav[0].children?.length ? activeModule.nav[0] : null;
 
   const [panelCollapsed, setPanelCollapsedState] = useState(() => loadPanelCollapsed());
   const setPanelCollapsed = (next: boolean | ((current: boolean) => boolean)) => {
@@ -587,14 +505,37 @@ export function AppShell({
     <div className="shell">
       <header className="shell-titlebar">
         <div className="shell-titlebar-brand">
+          <button
+            type="button"
+            className="axis-btn axis-btn-ghost axis-btn-icon shell-sidebar-toggle"
+            aria-label={panelCollapsed ? "Show sidebar" : "Hide sidebar"}
+            aria-pressed={!panelCollapsed}
+            title={panelCollapsed ? "Show sidebar" : "Hide sidebar"}
+            onClick={() => setPanelCollapsed((collapsed) => !collapsed)}
+          >
+            <svg width={16} height={16} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
+              <path d="M2.5 4h11M2.5 8h11M2.5 12h11" />
+            </svg>
+          </button>
           <span className="shell-mark" aria-hidden="true">
             AX
           </span>
-          <div className="shell-crumbs">
-            <span>{onAppSettings ? "Axis" : activeEntry?.heading ?? sectionLabel}</span>
-            <span className="sep">/</span>
-            <b>{onAppSettings ? "Settings" : current?.label ?? "Overview"}</b>
-          </div>
+          <nav className="shell-modules" aria-label="Modules">
+            {NAV_MODULES.map((module) => {
+              const isCurrent = !onAppSettings && module.id === activeModule.id;
+              return (
+                <button
+                  key={module.id}
+                  type="button"
+                  className={`shell-module${isCurrent ? " is-active" : ""}`}
+                  aria-current={isCurrent ? "page" : undefined}
+                  onClick={() => navigate(module.nav[0].href)}
+                >
+                  {module.label}
+                </button>
+              );
+            })}
+          </nav>
         </div>
         <GlobalSearch sources={searchSources} />
         <div className="shell-titlebar-actions">
@@ -806,82 +747,44 @@ export function AppShell({
       </header>
 
       <div className="shell-body">
-        <nav className="shell-iconrail" aria-label="Areas">
-          {RAIL.map((entry, index) => {
-            const isCurrent = entry === activeEntry;
-            const newGroup = index > 0 && RAIL[index - 1].group !== entry.group;
-            return (
-              <div key={entry.id} className="shell-iconrail-slot">
-                {newGroup ? <span className="shell-iconrail-sep" aria-hidden="true" /> : null}
-                <button
-                  type="button"
-                  className={`shell-iconrail-item${isCurrent ? " is-active" : ""}`}
-                  aria-current={isCurrent ? "page" : undefined}
-                  title={entry.heading}
-                  onClick={() => {
-                    if (isCurrent && entry.hasPanel) {
-                      setPanelCollapsed((collapsed) => !collapsed);
-                      return;
-                    }
-                    navigate(entry.items[0].href);
-                  }}
-                >
-                  <RailIcon path={entry.icon} />
-                  <span className="shell-iconrail-label">{entry.label}</span>
-                </button>
-              </div>
-            );
-          })}
-          <button
-            type="button"
-            className={`shell-iconrail-item shell-iconrail-settings${onAppSettings ? " is-active" : ""}`}
-            aria-current={onAppSettings ? "page" : undefined}
-            title="Settings"
-            onClick={() => navigate(APP_SETTINGS_PATH)}
-          >
-            <RailIcon path={RAIL_SETTINGS_ICON} />
-            <span className="shell-iconrail-label">Settings</span>
-          </button>
-        </nav>
-
-        {activeEntry?.hasPanel && !panelCollapsed ? (
-          <aside className="shell-context" aria-label={`${activeEntry.heading} navigation`}>
-            <div className="shell-context-head">
-              <span className="shell-context-title">{activeEntry.heading}</span>
-              <button
-                type="button"
-                className="axis-btn axis-btn-ghost axis-btn-icon"
-                aria-label="Collapse panel"
-                title="Collapse panel"
-                onClick={() => setPanelCollapsed(true)}
-              >
-                <svg width={14} height={14} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" aria-hidden="true">
-                  <path d="M10 3.5 5.5 8 10 12.5" />
-                </svg>
-              </button>
-            </div>
+        {panelCollapsed ? null : (
+          <aside className="shell-context" aria-label={`${activeModule.label} navigation`}>
             <nav className="shell-rail-nav">
-              {activeEntry.kind === "section"
-                ? activeEntry.items.map((item) => (
-                    <NavTopItem key={item.href} item={item} pathname={pathname} search={search} />
-                  ))
-                : (
-                    <>
-                      <NavTopItem item={activeEntry.items[0]} pathname={pathname} search={search} hubOnly />
-                      {(activeEntry.items[0].children ?? []).map((child, index, siblings) => (
-                        <NavChild
-                          key={child.href}
-                          item={child}
-                          pathname={pathname}
-                          search={search}
-                          prevSection={index > 0 ? siblings[index - 1]?.section : undefined}
-                        />
-                      ))}
-                    </>
-                  )}
+              {hub ? (
+                <>
+                  <NavTopItem item={hub} pathname={pathname} search={search} hubOnly />
+                  {(hub.children ?? []).map((child, index, siblings) => (
+                    <NavChild
+                      key={child.href}
+                      item={child}
+                      pathname={pathname}
+                      search={search}
+                      prevSection={index > 0 ? siblings[index - 1]?.section : undefined}
+                    />
+                  ))}
+                </>
+              ) : (
+                moduleSections(activeModule.nav).map(([section, items]) => (
+                  <div key={section} className="shell-nav-group">
+                    {section !== "Workspace" ? <p className="shell-nav-section">{section}</p> : null}
+                    {items.map((item) => (
+                      <NavTopItem key={item.href} item={item} pathname={pathname} search={search} />
+                    ))}
+                  </div>
+                ))
+              )}
             </nav>
+            <button
+              type="button"
+              className={`shell-nav-item shell-nav-settings${onAppSettings ? " active" : ""}`}
+              aria-current={onAppSettings ? "page" : undefined}
+              onClick={() => navigate(APP_SETTINGS_PATH)}
+            >
+              <RailIcon path={RAIL_SETTINGS_ICON} />
+              <span className="shell-nav-label">Settings</span>
+            </button>
           </aside>
-        ) : null}
+        )}
 
       <div className="shell-workspace">
         {mode === "read" && readOnlyScopeExceedsRequest ? (
