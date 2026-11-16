@@ -12,6 +12,7 @@ Options:
   --version-only   Update versions and lockfiles without testing or building
   --allow-dirty    Allow an intentionally dirty working tree
   --publish        Commit and push; GitHub Actions creates the tag and release
+  --publish-local  Commit, push with [skip ci], and publish this machine's build with gh
   -h, --help       Show this help
 EOF
 }
@@ -20,6 +21,7 @@ version=""
 version_only=false
 allow_dirty=false
 publish=false
+publish_local=false
 
 while (($#)); do
   case "$1" in
@@ -31,6 +33,10 @@ while (($#)); do
       ;;
     --publish)
       publish=true
+      ;;
+    --publish-local)
+      publish=true
+      publish_local=true
       ;;
     -h|--help)
       usage
@@ -75,6 +81,11 @@ for command in git node npm npx cargo; do
     exit 1
   fi
 done
+
+if [[ "$publish_local" == true ]] && ! gh auth status >/dev/null 2>&1; then
+  printf '%s\n' '--publish-local needs the GitHub CLI signed in (gh auth login).' >&2
+  exit 1
+fi
 
 node_major="$(node -p 'Number(process.versions.node.split(".")[0])')"
 if ((node_major < 24)); then
@@ -251,8 +262,35 @@ if [[ "$version_only" == false ]]; then
   printf '\nRelease artifact: %s\nSHA-256: %s\n' "$executable" "$checksum"
 fi
 
+if [[ "$publish_local" == true ]]; then
+  # Same checks and asset format as .github/workflows/release.yml.
+  node scripts/verify-release-version.mjs "$version"
+  notes_file="$backup_directory/release-notes.md"
+  node scripts/extract-release-notes.mjs "$version" "$notes_file"
+  (cd target/release && sha256sum axis.exe > axis.exe.sha256)
+fi
+
 git diff --check
 trap - ERR
+
+if [[ "$publish_local" == true ]]; then
+  printf '\nCommitting release %s...\n' "$version"
+  git add -- "${version_files[@]}"
+  # [skip ci] stops the release workflow from rebuilding and replacing these assets.
+  git commit -m "release: $version" -m "[skip ci] Built and published locally."
+  git push origin "$branch"
+  commit="$(git rev-parse HEAD)"
+  if ! gh release create "v$version" target/release/axis.exe target/release/axis.exe.sha256 \
+    --title "Axis $version" --notes-file "$notes_file" --target "$commit"; then
+    printf '\nThe release commit is pushed but the GitHub release failed. Retry with:\n  gh release create v%s target/release/axis.exe target/release/axis.exe.sha256 --title "Axis %s" --target %s --notes-file <notes>\n' \
+      "$version" "$version" "$commit" >&2
+    rm -rf "$backup_directory"
+    exit 1
+  fi
+  rm -rf "$backup_directory"
+  printf '\nPublished v%s from this machine.\n' "$version"
+  exit 0
+fi
 rm -rf "$backup_directory"
 
 if [[ "$publish" == true ]]; then
