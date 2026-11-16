@@ -1994,9 +1994,9 @@ fn review_row_detail(
             detail: Some(axis_sdk::GraphObjectDetail {
                 id: id.to_string(),
                 kind: kind.to_string(),
-                title: ["Name", "DeviceName"]
+                title: ["/Name", "/name", "/DeviceName", "/PolicyName", "/appName", "/roleName", "/settingName", "/principal/displayName", "/displayName"]
                     .iter()
-                    .find_map(|key| object[*key].as_str())
+                    .find_map(|key| object.pointer(key).and_then(|value| value.as_str()))
                     .unwrap_or(id)
                     .to_string(),
                 object,

@@ -22,6 +22,7 @@ import {
   type ReviewRow,
   type ReviewSection,
 } from "./ReviewWorkbench";
+import { AppCredentialsView, AuthStrengthsView, CaTemplatesView, CustomRolesView, PimRoleSettingsView, RoleAssignmentsView, TenantSettingsView } from "./EntraDirectoryPages";
 
 const OVERVIEW_PATH = "/entra/conditional-access/overview";
 const POLICIES_PATH = "/entra/conditional-access/policies";
@@ -778,6 +779,14 @@ export function EntraWorkspace({ route, signedIn }: { route: { pathname: string;
   if (pathname === "/entra" || pathname === OVERVIEW_PATH) {
     return <ConditionalAccessOverview signedIn={signedIn} />;
   }
+  if (pathname === "/entra/applications/credentials") return <AppCredentialsView route={route} signedIn={signedIn} />;
+  if (pathname === "/entra/roles/assignments") return <RoleAssignmentsView route={route} signedIn={signedIn} />;
+  if (pathname === "/entra/tenant/settings") return <TenantSettingsView route={route} signedIn={signedIn} />;
+  if (pathname === "/entra/roles/pim-settings") return <PimRoleSettingsView route={route} signedIn={signedIn} />;
+  if (pathname === "/entra/roles/custom") return <CustomRolesView route={route} signedIn={signedIn} />;
+  if (pathname === "/entra/conditional-access/authentication-strengths") return <AuthStrengthsView route={route} signedIn={signedIn} />;
+  if (pathname === "/entra/conditional-access/templates") return <CaTemplatesView route={route} signedIn={signedIn} />;
+
   if (pathname === AUTH_REGISTRATION_PATH) {
     return (
       <ReviewWorkbench

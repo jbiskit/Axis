@@ -92,7 +92,7 @@ const ENDPOINT_SECURITY_BLADES: NavItem[] = [
   { href: "/intune/endpoint-security/account-protection", label: "Account protection", section: "Manage" },
   { href: "/intune/policies/compliance", label: "Device compliance", section: "Manage" },
   { href: "/intune/endpoint-security/conditional-access", label: "Conditional access", section: "Manage", status: "planned" },
-  { href: "/intune/endpoint-security/assignment-failures", label: "Assignment failures", section: "Monitor", status: "planned" },
+  { href: "/intune/endpoint-security/assignment-failures", label: "Assignment failures", section: "Monitor" },
   { href: "/intune/endpoint-security/microsoft-defender-for-endpoint", label: "Microsoft Defender for Endpoint", section: "Setup", status: "planned" },
 ];
 
@@ -101,7 +101,7 @@ const WINDOWS_UPDATE_BLADES: NavItem[] = [
   { href: "/intune/windows-update/feature-updates", label: "Feature updates", section: "Manage" },
   { href: "/intune/windows-update/quality-updates", label: "Quality updates", section: "Manage" },
   { href: "/intune/windows-update/driver-updates", label: "Driver updates", section: "Manage" },
-  { href: "/intune/windows-update/deployment-status", label: "Deployment status", section: "Monitor", status: "planned" },
+  { href: "/intune/windows-update/deployment-status", label: "Deployment status", section: "Monitor" },
 ];
 
 function enrollmentNavChildren(): NavItem[] {
@@ -161,13 +161,11 @@ function enrollmentNavChildren(): NavItem[] {
       href: "/intune/enrollment/ios",
       label: "iOS / iPadOS",
       section: "Platform",
-      status: "planned",
     },
     {
       href: "/intune/enrollment/android",
       label: "Android",
       section: "Platform",
-      status: "planned",
     },
     {
       href: "/intune/enrollment/restrictions",
@@ -291,6 +289,22 @@ export const INTUNE_NAV: NavItem[] = [
       { href: "/intune/apps/tenant", label: "All tenant apps", icon: "apps", section: "Inventory" },
       { href: "/intune/apps/setup", label: "Apps setup", icon: "apps-setup", section: "Tools" },
       { href: "/intune/apps/protection", label: "App protection", icon: "apps", section: "Tools" },
+      { href: "/intune/apps/configuration", label: "App configuration", icon: "apps", section: "Tools" },
+    ],
+  },
+  {
+    href: "/intune/tenant-admin/roles",
+    label: "Tenant admin",
+    icon: "policies",
+    section: "Manage",
+    children: [
+      { href: "/intune/tenant-admin/roles", label: "Roles", icon: "policies", section: "Access" },
+      { href: "/intune/tenant-admin/connectors", label: "Connectors", icon: "policies", section: "Access" },
+      { href: "/intune/tenant-admin/filters", label: "Assignment filters", icon: "policies", section: "Targeting" },
+      { href: "/intune/tenant-admin/device-categories", label: "Device categories", icon: "policies", section: "Targeting" },
+      { href: "/intune/tenant-admin/notifications", label: "Notification templates", icon: "policies", section: "End users" },
+      { href: "/intune/tenant-admin/branding", label: "Company Portal branding", icon: "policies", section: "End users" },
+      { href: "/intune/tenant-admin/terms", label: "Terms and conditions", icon: "policies", section: "End users" },
     ],
   },
   { href: "/intune/packs", label: "Policy Packs", icon: "templates", section: "Library" },
@@ -307,8 +321,15 @@ const ENTRA_NAV: NavItem[] = [
       { href: "/entra/conditional-access/overview", label: "Overview", icon: "overview", section: "Conditional Access" },
       { href: "/entra/conditional-access/policies", label: "Policies", icon: "policies", section: "Conditional Access" },
       { href: "/entra/conditional-access/named-locations", label: "Named locations", icon: "policies", section: "Conditional Access" },
+      { href: "/entra/conditional-access/authentication-strengths", label: "Authentication strengths", icon: "policies", section: "Conditional Access" },
+      { href: "/entra/conditional-access/templates", label: "Templates", icon: "policies", section: "Conditional Access" },
       { href: "/entra/authentication-methods/registration", label: "User registration", icon: "overview", section: "Authentication methods" },
       { href: "/entra/authentication-methods/policy", label: "Methods policy", icon: "policies", section: "Authentication methods" },
+      { href: "/entra/tenant/settings", label: "Tenant settings", icon: "policies", section: "Tenant" },
+      { href: "/entra/roles/assignments", label: "Role assignments", icon: "overview", section: "Roles" },
+      { href: "/entra/roles/pim-settings", label: "PIM role settings", icon: "policies", section: "Roles" },
+      { href: "/entra/roles/custom", label: "Custom roles", icon: "policies", section: "Roles" },
+      { href: "/entra/applications/credentials", label: "App credentials", icon: "apps", section: "Applications" },
     ],
   },
 ];

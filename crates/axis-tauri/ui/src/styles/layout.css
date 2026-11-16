@@ -8418,3 +8418,18 @@ button.packs-kits-mode-option:disabled {
   font-size: var(--axis-text-2xs);
   white-space: nowrap;
 }
+
+/* Review list group headers (ReviewWorkbench `groupings`). */
+.review-group-row td {
+  background: var(--axis-mantle);
+  cursor: pointer;
+  font-weight: 600;
+}
+.review-group-toggle {
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  padding: 0;
+  cursor: pointer;
+}

@@ -4,7 +4,31 @@ Notable user-facing changes to Axis are recorded here.
 
 ## [Unreleased]
 
-Add release notes here before preparing the next version.
+### Added
+
+- **Defender** sits in the sidebar as its own module. It shows Secure Score, Defender for Endpoint device inventory, and endpoint security policies. Secure Score lists only scored controls, so its totals match the portal. Endpoint security policies show whether Intune or Defender security settings management delivers them.
+- Defender reviews Exchange Online Protection and Defender for Office 365 policies: anti-phishing, anti-spam, anti-malware, Safe Links, Safe Attachments, preset policies, quarantine, the tenant allow/block list, and DKIM. Axis only reads them. This needs your own app registration with the Office 365 Exchange Online delegated permission `Exchange.Manage` and admin consent.
+- Scope tags can be added to or removed from one or many Intune objects from the bulk bar, the row menu, and the inspector header. Each object keeps its other tags, and Default stays when no tag is left.
+- Entra reviews **User registration** (MFA registration) and the **Authentication methods** policy.
+- Entra lists **Role assignments** (active and eligible), **PIM role settings**, **Custom roles**, **Authentication strengths**, **Conditional Access templates** with the policies made from each, **Tenant settings**, and **App credentials**. App credentials lists every client secret and certificate on app registrations and the SAML signing certificates on enterprise apps, with their expiry. Without Entra ID P2, eligible role assignments are not shown.
+- Intune has a **Tenant admin** area: Roles with their assignments, Connectors, Assignment filters, Device categories, Notification templates, Company Portal branding, and Terms and conditions.
+- **App configuration** lists app configuration policies for managed devices and managed apps.
+- Endpoint security **Assignment failures** shows device error, conflict, and success counts for each policy, failures first.
+- Windows Update **Deployment status** shows the feature, quality, and driver update alerts, with the number of devices reporting errors.
+
+### Changed
+
+- Sign-in requests two more read permissions: `SecurityEvents.Read.All` and `ThreatHunting.Read.All`. Each tenant is asked to consent again, and the app registration manifest Axis generates includes them.
+- Purview sensitivity labels come from Security & Compliance, so every label and label group is listed, not only those published to the signed-in account. Parent and child labels show as a tree.
+- The interface has a new look: graphite neutrals with one accent colour in both themes, and IBM Plex type.
+- Module tabs (Intune, Entra, Purview, Defender) sit in the title bar. One sidebar shows the active module, with Settings at its foot. The sidebar can be hidden.
+- Policies and Apps list each family or app type once. Platform chips in the page header narrow the list. Entries for one platform only carry a platform tag. Enrollment keeps its per-platform sections.
+- The inspector appears only when an item is selected. Drag its edge to resize it, double-click the edge to reset, or expand it to full width.
+- Review tables wrap long values, scroll with the header fixed, and open the inspector only for a selected row.
+
+### Fixed
+
+- Defender device inventory checks for a Defender for Endpoint licence before it runs the hunting query.
 
 ## [0.1.8] - 2026-10-15
 

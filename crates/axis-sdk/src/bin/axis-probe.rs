@@ -55,8 +55,11 @@ async fn main() {
                 .post::<Value>(&token, "/security/runHuntingQuery", "v1.0", &json!({ "Query": query }))
                 .await
         }
-        // Intune report reads are POSTs; only `get*` report actions, never export jobs or writes.
-        ("REPORT", Some(name)) if name.starts_with("get") && name.chars().all(|c| c.is_ascii_alphanumeric()) => {
+        // Intune report reads are POSTs; only `get*` report actions (and the report cache they read from), never export jobs or writes.
+        ("REPORT", Some(name))
+            if (name.starts_with("get") || name.as_str() == "cachedReportConfigurations")
+                && name.chars().all(|c| c.is_ascii_alphanumeric()) =>
+        {
             let body: Value = match args.get(2).map(|raw| serde_json::from_str(raw)) {
                 Some(Ok(body)) => body,
                 Some(Err(error)) => return fail(&format!("Report body is not JSON: {error}")),

@@ -148,6 +148,32 @@ import { GetStartedAutopilotView } from "./GetStartedAutopilotView";
 import { GetStartedReadinessView } from "./GetStartedReadinessView";
 import { GetStartedLapsView } from "./GetStartedLapsView";
 import { LocalCatalogView } from "./LocalCatalogView";
+import { AssignmentFailuresView, UpdateDeploymentStatusView } from "./modules/IntuneReports";
+import {
+  AndroidEnrollmentProfilesView,
+  AppConfigurationsView,
+  AppleEnrollmentProfilesView,
+  AssignmentFiltersView,
+  BrandingProfilesView,
+  DeviceCategoriesView,
+  IntuneConnectorsView,
+  IntuneRolesView,
+  NotificationTemplatesView,
+  TermsAndConditionsView,
+} from "./modules/IntuneAdminPages";
+
+const ADMIN_PAGES: Record<string, typeof IntuneRolesView> = {
+  "/intune/tenant-admin/roles": IntuneRolesView,
+  "/intune/tenant-admin/connectors": IntuneConnectorsView,
+  "/intune/tenant-admin/filters": AssignmentFiltersView,
+  "/intune/tenant-admin/device-categories": DeviceCategoriesView,
+  "/intune/tenant-admin/notifications": NotificationTemplatesView,
+  "/intune/tenant-admin/branding": BrandingProfilesView,
+  "/intune/tenant-admin/terms": TermsAndConditionsView,
+  "/intune/apps/configuration": AppConfigurationsView,
+  "/intune/enrollment/android": AndroidEnrollmentProfilesView,
+  "/intune/enrollment/ios": AppleEnrollmentProfilesView,
+};
 import { PacksKitsView } from "./PacksKitsView";
 import { PacksLibrary } from "./packs/PacksLibrary";
 import { PackDriftView } from "./packs/PackDriftView";
@@ -439,6 +465,9 @@ export function IntuneWorkspace({
       </div>
     );
   }
+
+  const AdminPage = ADMIN_PAGES[pathname];
+  if (AdminPage) return <AdminPage route={route} signedIn={signedIn} />;
 
   if (pathname === "/intune/groups") {
     return (
@@ -893,7 +922,10 @@ export function IntuneWorkspace({
         </div>
       );
     }
-    if (blade === "security-tasks" || blade === "conditional-access" || blade === "assignment-failures" || blade === "microsoft-defender-for-endpoint") {
+    if (blade === "assignment-failures") {
+      return <AssignmentFailuresView route={route} signedIn={signedIn} />;
+    }
+    if (blade === "security-tasks" || blade === "conditional-access" || blade === "microsoft-defender-for-endpoint") {
       return (
         <CapabilityStub
           title="Planned Endpoint Security blade"
@@ -925,13 +957,7 @@ export function IntuneWorkspace({
     const family =
       pathname.includes("feature") ? "feature" : pathname.includes("quality") ? "quality" : pathname.includes("driver") ? "drivers" : pathname.includes("rings") ? "rings" : null;
     if (pathname.endsWith("deployment-status")) {
-      return (
-        <CapabilityStub
-          title="Deployment status"
-          description="Monitor blade."
-          reason="Update deployment reports are not fetched in this desktop pass."
-        />
-      );
+      return <UpdateDeploymentStatusView route={route} signedIn={signedIn} />;
     }
     return (
       <WindowsUpdateWorkbench

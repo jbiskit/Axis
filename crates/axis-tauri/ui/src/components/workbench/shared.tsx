@@ -22,7 +22,7 @@ export function useListSearchState() {
   return { query, setQuery, assignedFilter, setAssignedFilter, platformFilter, setPlatformFilter };
 }
 
-const DESC_FIRST_SORT_KEYS = new Set(["modified", "lastCheckIn", "created", "lastContact"]);
+const DESC_FIRST_SORT_KEYS = new Set(["modified", "lastCheckIn", "created", "lastContact", "failed", "errors", "privileged"]);
 
 export function useColumnSort<K extends string>(initialKey: K) {
   const [sort, setSort] = useState<ColumnSort<K>>(() => ({

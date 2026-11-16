@@ -121,6 +121,7 @@ export function ReviewWorkbench({
   headline,
   parentOf,
   defaultSort = "name",
+  groupings,
 }: {
   kind: ReviewKind;
   eyebrow: string;
@@ -143,6 +144,8 @@ export function ReviewWorkbench({
   parentOf?: (row: ReviewRow) => string | null;
   /** Column key the list starts sorted by. */
   defaultSort?: string;
+  /** Ways to group the list (`?group=<key>`); rows sit under a collapsible header per group value. */
+  groupings?: Array<{ key: string; label: string; value: (row: ReviewRow) => string }>;
 }) {
   const inventory = useInventory(loaderFor(kind), signedIn, signedIn);
   const rows = useMemo(() => inventory.items.filter((row) => typeof row.id === "string"), [inventory.items]);
@@ -188,6 +191,23 @@ export function ReviewWorkbench({
     return { sorted: ordered, depth };
   }, [columns, names, parentOf, rows, sort, titleOf]);
   const indent = (row: ReviewRow) => depth.get(String(row.id)) ?? 0;
+  const grouping = groupings?.find((candidate) => candidate.key === search.get("group"));
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const groups = useMemo(() => {
+    if (!grouping) return [{ label: "", rows: sorted }];
+    const byLabel = new Map<string, ReviewRow[]>();
+    for (const row of sorted) {
+      const label = grouping.value(row) || "—";
+      byLabel.set(label, [...(byLabel.get(label) ?? []), row]);
+    }
+    return [...byLabel].sort(([a], [b]) => compareText(a, b)).map(([label, rows]) => ({ label, rows }));
+  }, [grouping, sorted]);
+  const toggleGroup = (label: string) =>
+    setCollapsed((current) => {
+      const next = new Set(current);
+      if (!next.delete(label)) next.add(label);
+      return next;
+    });
   const ids = useMemo(() => sorted.map((row) => String(row.id)), [sorted]);
   const selection = useCheckedIds(ids);
   const checked = sorted.filter((row) => selection.checkedIds.has(String(row.id)));
@@ -242,6 +262,23 @@ export function ReviewWorkbench({
       {inventory.error ? <div className="axis-alert axis-alert-danger">{inventory.error}</div> : null}
       {inventory.truncated ? <div className="axis-alert">Showing the first {rows.length} items.</div> : null}
       {bulkBar}
+      {groupings?.length ? (
+        <div className="platform-chips" role="group" aria-label="Group by">
+          {[{ key: "", label: "No grouping" }, ...groupings.map(({ key, label }) => ({ key, label: `Group by ${label.toLowerCase()}` }))].map(
+            ({ key, label }) => (
+              <button
+                key={key || "none"}
+                type="button"
+                className={`platform-chip${(grouping?.key ?? "") === key ? " is-active" : ""}`}
+                aria-pressed={(grouping?.key ?? "") === key}
+                onClick={() => navigate(hrefWithParam(pathname, search, "group", key || null))}
+              >
+                {label}
+              </button>
+            ),
+          )}
+        </div>
+      ) : null}
       <section className="axis-panel axis-table-wrap workspace-scroll">
         <table className={`axis-table review-table${selected ? " is-inspecting" : ""}`}>
           <thead>
@@ -262,7 +299,20 @@ export function ReviewWorkbench({
             </tr>
           </thead>
           <tbody>
-            {sorted.map((row) => {
+            {groups.flatMap(({ label, rows: groupRows }) => [
+              ...(grouping
+                ? [
+                    <tr key={`group:${label}`} className="review-group-row" onClick={() => toggleGroup(label)}>
+                      <td colSpan={shown.length + 2}>
+                        <button type="button" className="review-group-toggle" aria-expanded={!collapsed.has(label)}>
+                          {collapsed.has(label) ? "▸" : "▾"} {label}
+                        </button>
+                        <span className="muted"> · {groupRows.length}</span>
+                      </td>
+                    </tr>,
+                  ]
+                : []),
+              ...(grouping && collapsed.has(label) ? [] : groupRows).map((row) => {
               const id = String(row.id);
               const name = titleOf(row);
               return (
@@ -289,7 +339,8 @@ export function ReviewWorkbench({
                   ))}
                 </tr>
               );
-            })}
+            }),
+            ])}
             {!inventory.loading && !inventory.error && sorted.length === 0 ? (
               <tr>
                 <td colSpan={shown.length + 2} className="muted">

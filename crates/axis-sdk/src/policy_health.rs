@@ -219,6 +219,12 @@ fn map_app_install(row: Value) -> Option<AppInstallHealth> {
     })
 }
 
+/// Every row of an Intune `get*` report as an object keyed by column (all columns, `_loc` labels included).
+pub(crate) async fn fetch_report_rows(access_token: &str, path: &str) -> Result<Vec<Value>, GraphError> {
+    let payload = fetch_report_pages(&GraphClient::new(), access_token, path, &[]).await?;
+    Ok(rows_from_report(&payload))
+}
+
 async fn fetch_report_pages(
     client: &GraphClient,
     access_token: &str,
