@@ -40,3 +40,6 @@ yarn-error.log*
 
 # private maintainer notes
 /RELEASE_GUIDE.local.md
+
+# machine-specific MCP registration (absolute path to axis-mcp.exe)
+/.mcp.json

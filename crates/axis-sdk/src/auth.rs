@@ -365,6 +365,8 @@ pub struct AuthManager {
     /// Admin API tokens (Exchange, Security & Compliance), keyed by scope.
     exchange: Mutex<HashMap<&'static str, ExchangeToken>>,
     client: reqwest::Client,
+    /// Detached managers (axis-mcp) pick their own sign-in and never change which one the app has active.
+    detached: bool,
 }
 
 impl Default for AuthManager {
@@ -381,6 +383,19 @@ impl AuthManager {
             session: Mutex::new(load_persisted_session()),
             exchange: Mutex::new(HashMap::new()),
             client: reqwest::Client::new(),
+            detached: false,
+        }
+    }
+
+    /// Starts with no sign-in; `use_stored_sign_in` selects one for this manager only.
+    /// Rotated refresh tokens are still saved, without touching the app's active sign-in.
+    pub fn detached() -> Self {
+        Self {
+            pending: Mutex::new(HashMap::new()),
+            session: Mutex::new(None),
+            exchange: Mutex::new(HashMap::new()),
+            client: reqwest::Client::new(),
+            detached: true,
         }
     }
 
@@ -908,7 +923,9 @@ impl AuthManager {
                 let still_stored = session_store::load_client(client_id).is_some();
                 *self.session.lock().await = None;
                 if still_stored {
-                    session_store::mark_signed_out();
+                    if !self.detached {
+                        session_store::mark_signed_out();
+                    }
                     Err(error)
                 } else {
                     Ok(needs_browser())
@@ -930,7 +947,12 @@ impl AuthManager {
     }
 
     async fn commit_session(&self, session: DeviceSession) {
-        persist_session(&session);
+        if self.detached {
+            session_store::replace_client_token(&persisted_session(&session));
+        } else {
+            session_store::save_preferred_mode(session.mode);
+            session_store::save(&persisted_session(&session));
+        }
         if let Some(tenant_id) = session.tenant_id.clone() {
             if let Some(access_token) = session.access_token.as_deref() {
                 self.remember_readable_tenant(&tenant_id, access_token)
@@ -1037,7 +1059,9 @@ impl AuthManager {
             .await
             .as_ref()
             .map(|session| session.client_id.clone());
-        if let Some(client_id) = client_id {
+        // Dropping a token also signs the app out; a detached manager leaves that to the app.
+        if self.detached {
+        } else if let Some(client_id) = client_id {
             session_store::drop_refresh_token(&client_id);
         } else {
             session_store::mark_signed_out();
@@ -1072,9 +1096,8 @@ fn load_persisted_session() -> Option<DeviceSession> {
     })
 }
 
-fn persist_session(session: &DeviceSession) {
-    session_store::save_preferred_mode(session.mode);
-    session_store::save(&PersistedSession::new(
+fn persisted_session(session: &DeviceSession) -> PersistedSession {
+    PersistedSession::new(
         session.refresh_token.clone(),
         session.client_id.clone(),
         device_code_tenant(),
@@ -1083,7 +1106,7 @@ fn persist_session(session: &DeviceSession) {
         session.access_token_expires_on,
         session.mode,
         session.extra_scopes.clone(),
-    ));
+    )
 }
 
 pub fn decode_access_token_claims(access_token: &str) -> TokenClaims {
