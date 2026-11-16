@@ -4,6 +4,10 @@ Notable user-facing changes to Axis are recorded here.
 
 ## [Unreleased]
 
+Add release notes here before preparing the next version.
+
+## [0.1.9] - 2026-11-16
+
 ### Added
 
 - **Defender** sits in the sidebar as its own module. It shows Secure Score, Defender for Endpoint device inventory, and endpoint security policies. Secure Score lists only scored controls, so its totals match the portal. Endpoint security policies show whether Intune or Defender security settings management delivers them.
@@ -29,7 +33,6 @@ Notable user-facing changes to Axis are recorded here.
 ### Fixed
 
 - Defender device inventory checks for a Defender for Endpoint licence before it runs the hunting query.
-
 ## [0.1.8] - 2026-10-15
 
 ### Added
