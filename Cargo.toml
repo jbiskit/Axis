@@ -7,7 +7,7 @@ members = [
 
 [workspace.package]
 edition = "2021"
-version = "0.1.9"
+version = "0.1.10"
 
 [profile.release]
 panic = "abort"

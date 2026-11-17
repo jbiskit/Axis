@@ -4,6 +4,10 @@ Notable user-facing changes to Axis are recorded here.
 
 ## [Unreleased]
 
+Add release notes here before preparing the next version.
+
+## [0.1.10] - 2026-11-17
+
 ### Added
 
 - **Users** sits beside Groups in Intune, and Entra has a **Directory** section with Users and Groups. Search across every column, filter by type, account state, source, and department, and pick one or more licences in the licence filter.
@@ -17,7 +21,6 @@ Notable user-facing changes to Axis are recorded here.
 - The Intune, Entra, Purview, and Defender overviews have a new layout: headline numbers, a list of items that need attention, and share bars.
 - Switching modules returns to the page you last had open in that module.
 - The inspector no longer shows platform chips, the duplicate banner, or the metadata grid at the top. Empty Settings tabs are hidden.
-
 ## [0.1.9] - 2026-11-16
 
 ### Added
