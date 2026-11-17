@@ -8,6 +8,7 @@ import {
   type ReviewRow,
   type ReviewSection,
 } from "./ReviewWorkbench";
+import { PurviewOverview } from "./PurviewOverview";
 
 const RETENTION_LABELS_PATH = "/purview/data-lifecycle/retention-labels";
 
@@ -137,6 +138,7 @@ const RETENTION_COLUMNS: ReviewColumn[] = [
 
 export function PurviewWorkspace({ route, signedIn }: { route: { pathname: string; search: URLSearchParams }; signedIn: boolean }) {
   const { pathname, search } = route;
+  if (pathname === "/purview" || pathname === "/purview/overview") return <PurviewOverview signedIn={signedIn} />;
   if (pathname === RETENTION_LABELS_PATH) {
     return (
       <ReviewWorkbench
@@ -166,7 +168,7 @@ export function PurviewWorkspace({ route, signedIn }: { route: { pathname: strin
       titleOf={labelTitle}
       parentOf={labelParent}
       defaultSort="priority"
-      pathname={pathname === "/purview" ? "/purview/information-protection/sensitivity-labels" : pathname}
+      pathname={pathname}
       search={search}
       signedIn={signedIn}
     />

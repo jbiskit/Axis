@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { ReviewKind } from "../../lib/tauri";
+import { DefenderOverview } from "./DefenderOverview";
 import {
   asList,
   asRecord,
@@ -370,6 +371,7 @@ const PAGES: DefenderPage[] = [
 
 export function DefenderWorkspace({ route, signedIn }: { route: { pathname: string; search: URLSearchParams }; signedIn: boolean }) {
   const { pathname, search } = route;
+  if (pathname === "/defender" || pathname === "/defender/overview") return <DefenderOverview signedIn={signedIn} />;
   const page = PAGES.find((candidate) => candidate.path === pathname) ?? PAGES[0];
   return (
     <ReviewWorkbench

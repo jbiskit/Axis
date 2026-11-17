@@ -318,7 +318,7 @@ const ENTRA_NAV: NavItem[] = [
     icon: "endpoint-security",
     section: "Entra",
     children: [
-      { href: "/entra/conditional-access/overview", label: "Overview", icon: "overview", section: "Conditional Access" },
+      { href: "/entra/conditional-access/overview", label: "Overview", icon: "overview", section: "Overview" },
       { href: "/entra/conditional-access/policies", label: "Policies", icon: "policies", section: "Conditional Access" },
       { href: "/entra/conditional-access/named-locations", label: "Named locations", icon: "policies", section: "Conditional Access" },
       { href: "/entra/conditional-access/authentication-strengths", label: "Authentication strengths", icon: "policies", section: "Conditional Access" },
@@ -341,6 +341,7 @@ const PURVIEW_NAV: NavItem[] = [
     icon: "policies",
     section: "Purview",
     children: [
+      { href: "/purview/overview", label: "Overview", icon: "overview", section: "Overview" },
       { href: "/purview/information-protection/sensitivity-labels", label: "Sensitivity labels", icon: "policies", section: "Information Protection" },
       { href: "/purview/data-lifecycle/retention-labels", label: "Retention labels", icon: "policies", section: "Data lifecycle" },
     ],
@@ -355,6 +356,7 @@ const DEFENDER_NAV: NavItem[] = [
     icon: "endpoint-security",
     section: "Defender",
     children: [
+      { href: "/defender/overview", label: "Overview", icon: "overview", section: "Overview" },
       { href: "/defender/email/preset-policies", label: "Preset security policies", icon: "policies", section: DEFENDER_EMAIL },
       { href: "/defender/email/anti-phishing", label: "Anti-phishing", icon: "policies", section: DEFENDER_EMAIL },
       { href: "/defender/email/anti-spam", label: "Anti-spam (inbound)", icon: "policies", section: DEFENDER_EMAIL },

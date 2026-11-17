@@ -7,7 +7,8 @@ import {
   type ConditionalAccessCoverage,
   type CoverageGap,
 } from "../../lib/tauri";
-import { PageHeader, Panel, PanelHead, SignalCard } from "../ui/PageChrome";
+import { Panel, PanelHead } from "../ui/PageChrome";
+import { AttentionTable, count, KpiTiles, OverviewHeader, pct, plural, ShareCard, type Issue, type Kpi } from "../overview/OverviewParts";
 import {
   asList,
   asRecord,
@@ -29,6 +30,12 @@ const POLICIES_PATH = "/entra/conditional-access/policies";
 const NAMED_LOCATIONS_PATH = "/entra/conditional-access/named-locations";
 const AUTH_REGISTRATION_PATH = "/entra/authentication-methods/registration";
 const AUTH_POLICY_PATH = "/entra/authentication-methods/policy";
+
+// Entra overview targets; fixed until Settings has them.
+const MFA_TARGET = 95;
+const GLOBAL_ADMIN_LIMIT = 4;
+const GLOBAL_ADMIN_TEMPLATE = "62e90394-69f5-4237-9190-012177145e10";
+const CREDENTIAL_WARN_DAYS = 30;
 
 // Authentication methods. Method tokens have no Graph display names, so labels are humanized.
 
@@ -679,7 +686,7 @@ function CoveragePanel({ rows }: { rows: ReviewRow[] }) {
   );
 }
 
-function ConditionalAccessOverview({ signedIn }: { signedIn: boolean }) {
+function EntraOverview({ signedIn }: { signedIn: boolean }) {
   const policies = useInventory(loaderFor("conditionalAccessPolicy"), signedIn, signedIn);
   const locations = useInventory(loaderFor("namedLocation"), signedIn, signedIn);
   const rows = useMemo(() => policies.items.filter((row) => typeof row.id === "string"), [policies.items]);
@@ -696,79 +703,209 @@ function ConditionalAccessOverview({ signedIn }: { signedIn: boolean }) {
       cancelled = true;
     };
   }, [rows]);
+  const registration = useInventory(loaderFor("authRegistration"), signedIn, signedIn);
+  const credentials = useInventory(loaderFor("appCredential"), signedIn, signedIn);
+  const assignments = useInventory(loaderFor("roleAssignment"), signedIn, signedIn);
   const findings = useMemo(() => policyFindings(rows, locations.items, names), [locations.items, names, rows]);
-  const count = (state: string) => rows.filter((row) => row.state === state).length;
-  const problems = findings.filter((finding) => finding.status === "error" || finding.status === "warning").length;
-  const loading = policies.loading || locations.loading;
-  const refresh = () => {
-    void policies.reload();
-    void locations.reload();
+  const sources = [policies, locations, registration, credentials, assignments];
+  const loading = sources.some((source) => source.loading);
+  const refresh = () => sources.forEach((source) => void source.reload());
+
+  const stateCount = (state: string) => rows.filter((row) => row.state === state).length;
+  const on = stateCount("enabled");
+  const reportOnly = stateCount("enabledForReportingButNotEnforced");
+  const off = stateCount("disabled");
+
+  const users = registration.items;
+  const mfaRegistered = users.filter((row) => row.isMfaRegistered).length;
+  const mfaPct = users.length ? pct(mfaRegistered, users.length) : null;
+  const adminsWithout = users.filter((row) => row.isAdmin && !row.isMfaRegistered).length;
+
+  const credentialDays = (row: ReviewRow) => {
+    const end = Date.parse(String(row.endDateTime ?? ""));
+    return Number.isNaN(end) ? null : Math.floor((end - Date.now()) / 86_400_000);
   };
+  const expired = credentials.items.filter((row) => (credentialDays(row) ?? 1) < 0).length;
+  const expiring = credentials.items.filter((row) => {
+    const days = credentialDays(row);
+    return days !== null && days >= 0 && days <= CREDENTIAL_WARN_DAYS;
+  }).length;
+
+  const roleOf = (row: ReviewRow) => asRecord(row.roleDefinition);
+  const permanent = (row: ReviewRow) => asRecord(asRecord(row.scheduleInfo).expiration).type === "noExpiration" || !row.scheduleInfo;
+  const active = assignments.items.filter((row) => row.state !== "Eligible");
+  const globalAdmins = active.filter((row) => roleOf(row).templateId === GLOBAL_ADMIN_TEMPLATE || roleOf(row).displayName === "Global Administrator").length;
+  const standing = active.filter((row) => roleOf(row).isPrivileged && permanent(row) && row.assignmentType !== "Activated").length;
+  const eligible = assignments.items.length - active.length;
+
+  const kpis: Kpi[] = [
+    {
+      label: "Enforced",
+      base: "Conditional Access",
+      value: count(on),
+      unit: `of ${plural(rows.length, "policy", "policies")}`,
+      fill: pct(on, rows.length),
+      tone: "quiet",
+      foot: `${count(reportOnly)} report-only · ${count(off)} off`,
+      state: "",
+      tip: "Enabled policies are enforced; report-only policies are logged, not enforced",
+      href: POLICIES_PATH,
+    },
+    {
+      label: "MFA registered",
+      base: `Target ${MFA_TARGET}%`,
+      value: mfaPct == null ? "—" : `${Math.round(mfaPct)}%`,
+      unit: `of ${plural(users.length, "user")}`,
+      fill: mfaPct ?? 0,
+      tick: MFA_TARGET,
+      tone: adminsWithout > 0 ? "bad" : mfaPct != null && mfaPct < MFA_TARGET ? "warn" : "quiet",
+      foot: `${plural(adminsWithout, "admin")} without`,
+      state: adminsWithout > 0 ? "Act" : mfaPct == null ? "" : mfaPct < MFA_TARGET ? "Below target" : "Healthy",
+      tip: registration.error || `${count(mfaRegistered)} of ${count(users.length)} users have registered an MFA method`,
+      href: AUTH_REGISTRATION_PATH,
+    },
+    {
+      label: "Global admins",
+      base: `Under ${GLOBAL_ADMIN_LIMIT + 1}`,
+      value: assignments.error ? "—" : count(globalAdmins),
+      unit: "active",
+      fill: pct(globalAdmins, GLOBAL_ADMIN_LIMIT + 1),
+      tick: pct(GLOBAL_ADMIN_LIMIT, GLOBAL_ADMIN_LIMIT + 1),
+      tone: globalAdmins > GLOBAL_ADMIN_LIMIT ? "warn" : "quiet",
+      foot: `${count(eligible)} eligible via PIM`,
+      state: globalAdmins > GLOBAL_ADMIN_LIMIT ? "Too many" : globalAdmins > 0 ? "Healthy" : "",
+      tip: assignments.error || "Microsoft recommends fewer than five Global Administrators",
+      href: "/entra/roles/assignments",
+    },
+    {
+      label: "Standing access",
+      base: "Privileged roles",
+      value: assignments.error ? "—" : count(standing),
+      unit: "permanent",
+      fill: standing > 0 ? 100 : 0,
+      tone: standing > 0 ? "warn" : "quiet",
+      foot: `${plural(active.length, "active assignment")}`,
+      state: standing > 0 ? "Review" : "Clear",
+      tip: "Permanent active assignments to privileged roles, outside PIM activation",
+      href: "/entra/roles/assignments",
+    },
+    {
+      label: "App credentials",
+      base: `Expiry ${CREDENTIAL_WARN_DAYS} d`,
+      value: credentials.error ? "—" : count(expired + expiring),
+      unit: "need renewal",
+      fill: expired + expiring > 0 ? 100 : 0,
+      tone: expired > 0 ? "bad" : expiring > 0 ? "warn" : "quiet",
+      foot: `${count(expired)} expired · ${count(expiring)} soon`,
+      state: expired > 0 ? "Act" : expiring > 0 ? "Renew" : "Clear",
+      tip: credentials.error || `${count(credentials.items.length)} secrets and certificates across app registrations and SAML apps`,
+      href: "/entra/applications/credentials",
+    },
+  ];
+
+  const issues: Issue[] = [
+    ...findings
+      .filter((finding) => (finding.status === "error" || finding.status === "warning") && finding.items.length > 0)
+      .map<Issue>((finding) => ({
+        key: `ca-${finding.key}`,
+        tone: finding.status === "error" ? "bad" : "warn",
+        item: finding.title,
+        area: finding.noun === "location" ? "Named locations" : "Conditional Access",
+        count: finding.items.length,
+        tip: `${finding.detail}\n${finding.items.map((item) => item.label).join(" · ")}`,
+        action: "Open",
+        href: finding.items.length === 1 ? finding.items[0].href : finding.noun === "location" ? NAMED_LOCATIONS_PATH : POLICIES_PATH,
+      })),
+    ...findings
+      .filter((finding) => finding.key === "legacy-auth" && finding.status === "warning")
+      .map<Issue>((finding) => ({
+        key: "ca-legacy",
+        tone: "warn",
+        item: "Legacy authentication not blocked",
+        area: "Conditional Access",
+        count: null,
+        tip: finding.detail,
+        action: "Open policies",
+        href: POLICIES_PATH,
+      })),
+    ...(adminsWithout > 0 ? [{
+      key: "admins-mfa", tone: "bad" as const, item: "Admins without MFA", area: "Authentication", count: adminsWithout,
+      action: "Open", href: AUTH_REGISTRATION_PATH,
+    }] : []),
+    ...(mfaPct != null && mfaPct < MFA_TARGET ? [{
+      key: "users-mfa", tone: "warn" as const, item: "Users not MFA registered", area: "Authentication", count: users.length - mfaRegistered,
+      action: "Open", href: AUTH_REGISTRATION_PATH,
+    }] : []),
+    ...(expired > 0 ? [{
+      key: "creds-expired", tone: "bad" as const, item: "App credentials", detail: "expired", area: "Applications", count: expired,
+      action: "Open", href: "/entra/applications/credentials",
+    }] : []),
+    ...(expiring > 0 ? [{
+      key: "creds-soon", tone: "warn" as const, item: "App credentials", detail: `expire within ${CREDENTIAL_WARN_DAYS} d`, area: "Applications", count: expiring,
+      action: "Open", href: "/entra/applications/credentials",
+    }] : []),
+    ...(globalAdmins > GLOBAL_ADMIN_LIMIT ? [{
+      key: "global-admins", tone: "warn" as const, item: "Global Administrators", detail: `recommended ${GLOBAL_ADMIN_LIMIT} or fewer`, area: "Roles", count: globalAdmins,
+      action: "Open", href: "/entra/roles/assignments",
+    }] : []),
+    ...(standing > 0 ? [{
+      key: "standing", tone: "warn" as const, item: "Permanent privileged assignments", area: "Roles", count: standing,
+      tip: "Make these eligible through PIM", action: "Open", href: "/entra/roles/assignments",
+    }] : []),
+  ];
+
+  const controls = findings.filter((finding) => ["mfa", "block", "locations", "device-filters"].includes(finding.key));
+  const gaps = sources.map((source) => source.error).filter((error): error is string => Boolean(error));
 
   return (
-    <div className="stack">
-      <PageHeader
-        eyebrow="Entra · Conditional Access"
-        title="Overview"
-        description="Policy states at a glance, and checks worth reviewing across every Conditional Access policy."
+    <div className="stack ov-page">
+      <OverviewHeader
+        eyebrow="Entra"
+        description="Conditional Access, authentication, roles and app credentials"
+        fetchedAt={policies.fetchedAt}
+        gaps={gaps}
+        loading={loading}
         onRefresh={refresh}
-        refreshing={loading}
-        actions={
-          <button type="button" className="axis-btn" onClick={refresh} disabled={loading}>
-            {loading ? "Refreshing…" : "Refresh"}
-          </button>
-        }
       />
-      {policies.error ? <div className="axis-alert axis-alert-danger">{policies.error}</div> : null}
-      {locations.error ? <div className="axis-alert axis-alert-danger">{locations.error}</div> : null}
-      <div className="overview-grid-6">
-        <SignalCard label="Policies" value={rows.length} hint="Conditional Access" />
-        <SignalCard label="On" value={count("enabled")} hint="Enforced" tone="good" />
-        <SignalCard label="Report-only" value={count("enabledForReportingButNotEnforced")} hint="Logged, not enforced" />
-        <SignalCard label="Off" value={count("disabled")} hint="Disabled" />
-        <SignalCard label="Named locations" value={locations.items.length} hint="IP ranges and countries" />
-        <SignalCard
-          label="Trusted"
-          value={locations.items.filter((location) => location.isTrusted === true).length}
-          hint="Trusted IP locations"
+      <KpiTiles kpis={kpis} />
+      <div className="ov-split">
+        <AttentionTable issues={issues} countLabel="Count" loading={loading && rows.length === 0} />
+        <ShareCard
+          className="ov-health"
+          title="Policy states"
+          base={plural(rows.length, "policy", "policies")}
+          rows={[
+            { label: "On", count: on },
+            { label: "Report-only", count: reportOnly },
+            { label: "Off", count: off },
+          ].filter((row) => row.count > 0)}
         />
       </div>
-      <Panel padded>
-        <PanelHead
-          title="Review"
-          hint={
-            loading && rows.length === 0
-              ? "Loading policies…"
-              : problems > 0
-                ? `${problems} check${problems === 1 ? "" : "s"} need${problems === 1 ? "s" : ""} attention.`
-                : "Checks run against every policy listed under Policies."
-          }
+      <div className="ov-shares">
+        <ShareCard
+          title="Policy controls"
+          base="Share of policies"
+          of={rows.length}
+          rows={controls.map((finding) => ({ label: finding.title.replace(/^Require /, "").replace(/^Use /, ""), count: finding.items.length }))}
         />
-        <ul className="health-list">
-          {findings.map((finding) => (
-            <li key={finding.key} className={`health-item is-${finding.status}`}>
-              <span className="health-dot" aria-hidden="true" />
-              <div className="health-copy">
-                <span className="health-title">{finding.title}</span>
-                <span className="health-detail">{finding.detail}</span>
-                {finding.items.length ? (
-                  <span className="review-finding-links">
-                    {finding.items.map((item) => (
-                      <button key={item.id} type="button" className="axis-link" onClick={() => navigate(item.href)}>
-                        {item.label}
-                      </button>
-                    ))}
-                  </span>
-                ) : null}
-              </div>
-              <span className="health-status">
-                {finding.items.length}{" "}
-                {finding.items.length === 1 ? (finding.noun ?? "policy") : finding.noun ? `${finding.noun}s` : "policies"}
-              </span>
-            </li>
-          ))}
-        </ul>
-      </Panel>
+        <ShareCard
+          title="Role assignments"
+          base={plural(assignments.items.length, "assignment")}
+          rows={[
+            { label: "Permanent privileged", count: standing, flag: true },
+            { label: "Other active", count: active.length - standing },
+            { label: "Eligible", count: eligible },
+          ].filter((row) => row.count > 0)}
+        />
+        <ShareCard
+          title="Named locations"
+          base={plural(locations.items.length, "location")}
+          rows={[
+            { label: "Trusted", count: locations.items.filter((location) => location.isTrusted === true).length },
+            { label: "Other", count: locations.items.filter((location) => location.isTrusted !== true).length },
+          ].filter((row) => row.count > 0)}
+        />
+      </div>
       <CoveragePanel rows={rows} />
     </div>
   );
@@ -777,7 +914,7 @@ function ConditionalAccessOverview({ signedIn }: { signedIn: boolean }) {
 export function EntraWorkspace({ route, signedIn }: { route: { pathname: string; search: URLSearchParams }; signedIn: boolean }) {
   const { pathname, search } = route;
   if (pathname === "/entra" || pathname === OVERVIEW_PATH) {
-    return <ConditionalAccessOverview signedIn={signedIn} />;
+    return <EntraOverview signedIn={signedIn} />;
   }
   if (pathname === "/entra/applications/credentials") return <AppCredentialsView route={route} signedIn={signedIn} />;
   if (pathname === "/entra/roles/assignments") return <RoleAssignmentsView route={route} signedIn={signedIn} />;

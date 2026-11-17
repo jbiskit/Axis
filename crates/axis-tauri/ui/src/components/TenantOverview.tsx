@@ -1,15 +1,24 @@
 import type { TenantGlance } from "../types/glance";
 import { STALE_DEVICE_DAYS } from "../types/glance";
 import { navigate } from "../lib/route";
-import { TenantHealthPanel } from "./TenantHealthPanel";
-import { ConfiguredObjectsPanel } from "./ConfiguredObjectsPanel";
+import { healthTitle, healthValue, TenantHealthColumn, useTenantHealth } from "./TenantHealthPanel";
 import {
-  DistributionBar,
-  PageHeader,
-  Panel,
-  PanelHead,
-  SignalCard,
-} from "./ui/PageChrome";
+  AttentionTable,
+  count,
+  KpiTiles,
+  OverviewHeader,
+  pct,
+  ShareCard,
+  since,
+  type Issue,
+  type Kpi,
+  type ShareRow,
+} from "./overview/OverviewParts";
+
+// Targets are fixed until Settings has them.
+const COMPLIANCE_TARGET = 95;
+const ENCRYPTION_TARGET = 95;
+const STALE_LIMIT = 3;
 
 /** `managedDeviceOwnerType` values, worded as the Intune portal shows them. */
 const OWNERSHIP_LABELS: Record<string, string> = {
@@ -27,20 +36,6 @@ function actorLabel(event: TenantGlance["recentActivity"][number]): string {
   );
 }
 
-function activityWhen(value: string): string {
-  const parsed = Date.parse(value);
-  if (!value || Number.isNaN(parsed)) return "Unknown time";
-  const delta = Date.now() - parsed;
-  const minutes = Math.floor(delta / 60000);
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 48) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 14) return `${days}d ago`;
-  return new Date(parsed).toLocaleString();
-}
-
 export function TenantOverview({
   glance,
   loading,
@@ -54,6 +49,8 @@ export function TenantOverview({
   accountName: string | null;
   onRefresh: () => void;
 }) {
+  const health = useTenantHealth(glance?.fetchedAt ?? "");
+
   if (!glance && loading) {
     return <p className="muted">Loading tenant overview…</p>;
   }
@@ -62,399 +59,289 @@ export function TenantOverview({
     return <p className="muted">No tenant data available yet.</p>;
   }
 
-  const organizationLabel = glance.organizationName;
-  const failureTotal =
-    (glance.failures.appFailedDeviceCount ?? 0) +
-    glance.failures.configNoncompliantDevices +
-    glance.failures.configErrorDevices;
-  const appFailureDisplay =
-    glance.failures.appFailedDeviceCount == null
-      ? "—"
-      : glance.failures.appFailedDeviceCount;
+  const { devices, compliance, failures, conflicts, drift } = glance;
+  const total = devices.total;
+  const appFailed = failures.appFailedDeviceCount;
+  const configFailed = failures.configNoncompliantDevices + failures.configErrorDevices;
+  const failureTotal = (appFailed ?? 0) + configFailed;
+  const failuresKnown = appFailed != null || configFailed > 0;
+  const stalePct = pct(devices.stale, total);
+  const encryptionReported = devices.encryptionReported ?? 0;
+  const encryptedPct = encryptionReported > 0 ? pct(devices.encrypted ?? 0, encryptionReported) : null;
+  const rate = compliance.ratePercent;
 
-  const complianceBars = [
-    { label: "Compliant", count: glance.compliance.compliant },
-    { label: "Noncompliant", count: glance.compliance.noncompliant },
-    { label: "Grace period", count: glance.compliance.inGracePeriod },
-    { label: "Unknown", count: glance.compliance.unknown },
+  const kpis: Kpi[] = [
+    {
+      label: "Compliant",
+      base: `Target ${COMPLIANCE_TARGET}%`,
+      value: rate == null ? "—" : `${rate}%`,
+      unit: `of ${count(total)}`,
+      fill: rate ?? 0,
+      tick: COMPLIANCE_TARGET,
+      tone: rate == null || rate >= COMPLIANCE_TARGET ? "quiet" : "warn",
+      foot: `${count(compliance.noncompliant)} noncompliant`,
+      state: rate == null ? "" : rate >= COMPLIANCE_TARGET ? "Healthy" : "Below target",
+      tip: `${count(compliance.compliant)} compliant · ${count(compliance.noncompliant)} noncompliant · ${count(compliance.inGracePeriod)} in grace period · ${count(compliance.unknown)} unknown`,
+      href: "/intune/devices/compliance",
+    },
+    {
+      label: "Stale",
+      base: `No sync ${STALE_DEVICE_DAYS} d`,
+      value: count(devices.stale),
+      unit: "devices",
+      fill: stalePct,
+      tick: STALE_LIMIT,
+      tone: stalePct > STALE_LIMIT ? "warn" : "quiet",
+      foot: `${stalePct.toFixed(1)}% of fleet`,
+      state: stalePct > STALE_LIMIT ? `Over ${STALE_LIMIT}%` : "Healthy",
+      tip: `Managed devices with no check-in for ${STALE_DEVICE_DAYS} days`,
+      href: "/intune/devices/all",
+    },
+    {
+      label: "Failures",
+      base: "Apps · Config",
+      value: failuresKnown ? count(failureTotal) : "—",
+      unit: "devices",
+      fill: failureTotal > 0 ? 100 : 0,
+      tone: failureTotal > 0 ? "bad" : "quiet",
+      foot: `${appFailed == null ? "—" : count(appFailed)} apps · ${count(configFailed)} config`,
+      state: failureTotal > 0 ? "Act" : failuresKnown ? "Clear" : "",
+      tip: failures.warning || "Devices with a failed app install, or a configuration error or noncompliant state",
+      href: "/intune/apps",
+    },
+    {
+      label: "Conflicts",
+      base: "Settings",
+      value: count(conflicts.summaryCount),
+      unit: "settings",
+      fill: conflicts.summaryCount > 0 ? 100 : 0,
+      tone: conflicts.summaryCount > 0 ? "bad" : "quiet",
+      foot: `${count(conflicts.devicesImpacted)} devices`,
+      state: conflicts.summaryCount > 0 ? "Act" : "Clear",
+      tip: conflicts.warning || "Settings set to different values by two or more policies",
+      href: "/intune/policies/device-configuration",
+    },
+    {
+      label: "Encrypted",
+      base: `Target ${ENCRYPTION_TARGET}%`,
+      value: encryptedPct == null ? "—" : `${Math.round(encryptedPct)}%`,
+      unit: `of ${count(encryptionReported)}`,
+      fill: encryptedPct ?? 0,
+      tick: ENCRYPTION_TARGET,
+      tone: encryptedPct == null || encryptedPct >= ENCRYPTION_TARGET ? "quiet" : "warn",
+      foot: `${count(devices.encrypted ?? 0)} encrypted`,
+      state: encryptedPct == null ? "" : encryptedPct >= ENCRYPTION_TARGET ? "Healthy" : "Below target",
+      tip: "Devices reporting BitLocker or FileVault encryption",
+      href: "/intune/devices/all",
+    },
+  ];
+
+  const issues: Issue[] = [
+    ...health.inUse
+      .filter((item) => item.status === "error" || item.status === "warning")
+      .map<Issue>((item, index) => ({
+        key: `health-${item.key}-${index}`,
+        tone: item.status === "error" ? "bad" : "warn",
+        item: healthTitle(item),
+        area: "Tenant",
+        count: null,
+        since: healthValue(item),
+        tip: item.detail,
+        action: "Open connectors",
+        href: "/intune/tenant-admin/connectors",
+      })),
+    ...conflicts.items.map<Issue>((item) => ({
+      key: `conflict-${item.id}`,
+      tone: "bad",
+      item: item.label,
+      detail: `${item.settingCount} setting${item.settingCount === 1 ? "" : "s"} conflict`,
+      area: "Conflict",
+      count: item.deviceCheckinsImpacted,
+      tip: `${item.policyCount} policies`,
+      action: "Open policies",
+      href: "/intune/policies/device-configuration",
+    })),
+    ...(appFailed ? [{
+      key: "app-failures",
+      tone: "bad" as const,
+      item: "App installs",
+      detail: "failed",
+      area: "App",
+      count: appFailed,
+      tip: failures.appFailureSampleSize ? `Sampled from ${failures.appFailureSampleSize} apps` : undefined,
+      action: "Open apps",
+      href: "/intune/apps",
+    }] : []),
+    ...(failures.configErrorDevices > 0 ? [{
+      key: "config-errors",
+      tone: "bad" as const,
+      item: "Configuration profiles",
+      detail: "error state",
+      area: "Config",
+      count: failures.configErrorDevices,
+      action: "Open profiles",
+      href: "/intune/policies/device-configuration",
+    }] : []),
+    ...(compliance.noncompliant > 0 ? [{
+      key: "noncompliant",
+      tone: "warn" as const,
+      item: "Noncompliant devices",
+      detail: compliance.inGracePeriod > 0 ? `${count(compliance.inGracePeriod)} in grace` : undefined,
+      area: "Compliance",
+      count: compliance.noncompliant,
+      action: "Open list",
+      href: "/intune/devices/compliance",
+    }] : []),
+    ...(stalePct > STALE_LIMIT ? [{
+      key: "stale",
+      tone: "warn" as const,
+      item: "Stale devices",
+      detail: `no check-in ${STALE_DEVICE_DAYS} d`,
+      area: "Devices",
+      count: devices.stale,
+      action: "Review",
+      href: "/intune/devices/all",
+    }] : []),
+    ...(encryptedPct != null && encryptedPct < ENCRYPTION_TARGET ? [{
+      key: "encryption",
+      tone: "warn" as const,
+      item: "Unencrypted devices",
+      area: "Devices",
+      count: encryptionReported - (devices.encrypted ?? 0),
+      action: "Review",
+      href: "/intune/devices/all",
+    }] : []),
+    ...(drift && drift.fail > 0 ? [{
+      key: "drift",
+      tone: "warn" as const,
+      item: drift.baselineName,
+      detail: `${drift.fail} setting${drift.fail === 1 ? "" : "s"} drifted`,
+      area: "Drift",
+      count: null,
+      tip: drift.failingChecks.map((check) => check.title).join(" · ") || undefined,
+      action: "Open packs",
+      href: "/intune/packs",
+    }] : []),
+  ];
+
+  const releases = devices.windowsReleases ?? [];
+  const releaseRows: ShareRow[] = [
+    ...releases.slice(0, 3),
+    ...(releases.length > 3 ? [{ label: "Other", count: releases.slice(3).reduce((sum, row) => sum + row.count, 0) }] : []),
+  ];
+  const windowsTotal = releases.reduce((sum, row) => sum + row.count, 0);
+  const complianceRows: ShareRow[] = [
+    { label: "Compliant", count: compliance.compliant },
+    { label: "Noncompliant", count: compliance.noncompliant, flag: true },
+    { label: "Grace period", count: compliance.inGracePeriod },
+    { label: "Unknown", count: compliance.unknown },
   ].filter((row) => row.count > 0);
-
-  const checkInBars = [
-    { label: "Active", count: glance.devices.active },
-    { label: `Stale (>${STALE_DEVICE_DAYS}d)`, count: glance.devices.stale },
-  ];
-
-  // Fleet shape: Windows releases (top six, rest grouped), ownership, encryption, enrollments.
-  const releases = glance.devices.windowsReleases ?? [];
-  const releaseBars = [
-    ...releases.slice(0, 6),
-    ...(releases.length > 6
-      ? [{ label: "Other builds", count: releases.slice(6).reduce((sum, row) => sum + row.count, 0) }]
-      : []),
-  ];
-  const ownershipBars = Object.entries(glance.devices.byOwnership ?? {})
-    .map(([key, count]) => ({ label: OWNERSHIP_LABELS[key] ?? key, count }))
+  const ownershipRows: ShareRow[] = Object.entries(devices.byOwnership ?? {})
+    .map(([key, value]) => ({ label: OWNERSHIP_LABELS[key] ?? key, count: value }))
     .sort((a, b) => b.count - a.count);
-  const encryptionReported = glance.devices.encryptionReported ?? 0;
-  const encryptedPct =
-    encryptionReported > 0 ? Math.round(((glance.devices.encrypted ?? 0) / encryptionReported) * 100) : null;
-  const enrolled = glance.devices.enrolledLast30Days ?? [];
-  const enrolledTotal = enrolled.reduce((sum, count) => sum + count, 0);
-  const enrolledWeek = enrolled.slice(-7).reduce((sum, count) => sum + count, 0);
+
+  const enrolled = devices.enrolledLast30Days ?? [];
+  const enrolledTotal = enrolled.reduce((sum, value) => sum + value, 0);
+  const enrolledWeek = enrolled.slice(-7).reduce((sum, value) => sum + value, 0);
   const enrolledPeak = Math.max(1, ...enrolled);
+  const dayLabel = (offset: number) =>
+    new Date(Date.now() - offset * 86_400_000).toLocaleDateString([], { day: "numeric", month: "short" });
 
   return (
-    <div className="stack">
-      <PageHeader
-        title={organizationLabel || "Intune overview"}
-        description={
-          <>
-            {accountName ? `${accountName} · ` : null}
-            Live Graph · Updated {new Date(glance.fetchedAt).toLocaleString()}
-          </>
-        }
-        actions={
-          <button
-            type="button"
-            className="axis-btn"
-            onClick={onRefresh}
-            disabled={loading}
-          >
-            {loading ? "Refreshing…" : "Refresh"}
-          </button>
-        }
+    <div className="stack ov-page">
+      <OverviewHeader
+        description={[glance.organizationName, accountName].filter(Boolean).join(" · ") || "Intune"}
+        fetchedAt={glance.fetchedAt}
+        gaps={[...glance.permissionWarnings, ...glance.otherWarnings]}
+        gapNoun={glance.permissionWarnings.length > 0 ? "permission gap" : "query issue"}
+        loading={loading}
+        onRefresh={onRefresh}
       />
 
-      {error ? (
-        <div className="axis-alert axis-alert-warning">
-          Graph request failed. {error}
-        </div>
-      ) : null}
+      {error ? <div className="axis-alert axis-alert-warning">Graph request failed. {error}</div> : null}
 
-      {glance.permissionWarnings.length > 0 ? (
-        <div className="axis-alert axis-alert-danger">
-          <p style={{ margin: 0, fontWeight: 500 }}>Permission / consent failures</p>
-          <ul style={{ margin: "0.5rem 0 0", paddingLeft: "1rem" }}>
-            {glance.permissionWarnings.map((warning) => (
-              <li key={warning} style={{ wordBreak: "break-all" }}>
-                {warning}
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
+      <KpiTiles kpis={kpis} />
 
-      {glance.otherWarnings.length > 0 ? (
-        <div className="axis-alert axis-alert-warning">
-          <p style={{ margin: 0, fontWeight: 500 }}>Other Graph query issues</p>
-          <ul style={{ margin: "0.5rem 0 0", paddingLeft: "1rem" }}>
-            {glance.otherWarnings.slice(0, 8).map((warning) => (
-              <li key={warning} style={{ wordBreak: "break-all" }}>
-                {warning}
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-
-      <TenantHealthPanel refreshKey={glance.fetchedAt} />
-
-      <div className="overview-grid-6">
-        <SignalCard
-          label="Conflicts"
-          value={glance.conflicts.summaryCount}
-          hint={
-            glance.conflicts.devicesImpacted > 0
-              ? `${glance.conflicts.devicesImpacted} check-ins impacted`
-              : "Config conflict sets"
-          }
-          tone={glance.conflicts.summaryCount > 0 ? "bad" : "good"}
-        />
-        <SignalCard
-          label="Active"
-          value={glance.devices.active}
-          hint={`Synced within ${STALE_DEVICE_DAYS}d`}
-          tone="good"
-        />
-        <SignalCard
-          label="Stale"
-          value={glance.devices.stale}
-          hint={`No sync in ${STALE_DEVICE_DAYS}+ days`}
-          tone={glance.devices.stale > 0 ? "warn" : "good"}
-        />
-        <SignalCard
-          label="Noncompliant"
-          value={glance.compliance.noncompliant}
-          hint={
-            glance.compliance.ratePercent != null
-              ? `${glance.compliance.ratePercent}% compliant`
-              : "Device compliance"
-          }
-          tone={glance.compliance.noncompliant > 0 ? "bad" : "good"}
-        />
-        <SignalCard
-          label="Failures"
-          value={
-            glance.failures.appFailedDeviceCount == null && failureTotal === 0
-              ? "—"
-              : glance.failures.appFailedDeviceCount == null
-                ? glance.failures.configNoncompliantDevices +
-                  glance.failures.configErrorDevices
-                : failureTotal
-          }
-          hint={`Apps ${appFailureDisplay} · Config ${
-            glance.failures.configNoncompliantDevices +
-            glance.failures.configErrorDevices
-          }`}
-          tone={
-            glance.failures.appFailedDeviceCount == null &&
-            glance.failures.configNoncompliantDevices +
-              glance.failures.configErrorDevices ===
-              0
-              ? "default"
-              : failureTotal > 0
-                ? "bad"
-                : "good"
-          }
-        />
-        {glance.drift ? (
-          <SignalCard
-            label="Drift fails"
-            value={glance.drift.fail}
-            hint={
-              glance.drift.incomplete
-                ? "Partial check"
-                : `${glance.drift.pass} pass · ${glance.drift.unknown} unknown`
-            }
-            tone={
-              glance.drift.fail > 0
-                ? "bad"
-                : glance.drift.incomplete
-                  ? "warn"
-                  : "good"
-            }
-          />
-        ) : null}
+      <div className="ov-split">
+        <AttentionTable issues={issues} />
+        <TenantHealthColumn {...health} />
       </div>
 
-      <div className="overview-grid-2">
-        <DistributionBar title="Compliance mix" data={complianceBars} />
-        <DistributionBar
-          title="Check-in freshness"
-          data={checkInBars}
-          emptyLabel="No managed devices"
-        />
+      <div className="ov-shares">
+        <ShareCard title="Windows releases" base={`${count(windowsTotal)} devices`} rows={releaseRows} />
+        <ShareCard title="Compliance" base={`${count(total)} devices`} rows={complianceRows} />
+        <ShareCard title="Ownership" base={`${count(total)} devices`} rows={ownershipRows} />
       </div>
 
-      <div className="overview-grid-2">
-        <DistributionBar title="Windows releases" data={releaseBars} emptyLabel="No Windows devices" />
-        <DistributionBar title="Ownership" data={ownershipBars} emptyLabel="No managed devices" />
-      </div>
-
-      <div className="overview-grid-2">
-        <Panel padded>
-          <PanelHead
-            title="Enrollments, last 30 days"
-            hint={`${enrolledTotal} enrolled · ${enrolledWeek} in the last 7 days`}
-          />
-          <div
-            className="enroll-spark"
-            role="img"
-            aria-label={`Enrollments per day for the last 30 days, ${enrolledTotal} in total`}
-          >
-            {enrolled.map((count, index) => {
-              const day = new Date(Date.now() - (enrolled.length - 1 - index) * 86_400_000);
+      <div className="ov-split ov-split-even">
+        <section className="ov-card" aria-label="Enrollments">
+          <div className="ov-card-head">
+            <h2>Enrollments</h2>
+            <span>30 days</span>
+            <span className="ov-card-head-end">
+              <span className="ov-strong">{count(enrolledTotal)}</span> · {count(enrolledWeek)} this week
+            </span>
+          </div>
+          <div className="ov-enroll" role="img" aria-label={`Enrollments per day for the last 30 days, ${enrolledTotal} in total`}>
+            {enrolled.map((value, index) => {
+              const offset = enrolled.length - 1 - index;
               return (
                 <span
                   key={index}
-                  className={count === 0 ? "is-zero" : undefined}
-                  style={{ height: `${Math.max(4, (count / enrolledPeak) * 100)}%` }}
-                  title={`${day.toLocaleDateString()}: ${count} enrolled`}
+                  className={offset === 0 ? "is-today" : undefined}
+                  style={{ height: `${Math.max(2, (value / enrolledPeak) * 100)}%` }}
+                  title={`${dayLabel(offset)}: ${value} enrolled`}
                 />
               );
             })}
           </div>
-        </Panel>
-        <SignalCard
-          label="Encrypted"
-          value={encryptedPct == null ? "—" : `${encryptedPct}%`}
-          hint={
-            encryptedPct == null
-              ? "No devices report encryption"
-              : `${glance.devices.encrypted ?? 0} of ${encryptionReported} reporting devices`
-          }
-          tone={encryptedPct == null ? "default" : encryptedPct >= 95 ? "good" : encryptedPct >= 80 ? "warn" : "bad"}
-        />
-      </div>
-
-      <ConfiguredObjectsPanel inventory={glance.inventory} />
-
-      <div className="overview-grid-2">
-        <Panel padded>
-          <PanelHead title="Conflicts" />
-          {glance.conflicts.items.length === 0 ? (
-            <p className="muted" style={{ margin: 0, fontSize: "var(--axis-text-xs)" }}>
-              {glance.conflicts.warning || "No configuration conflict summaries."}
-            </p>
-          ) : (
-            <ul className="overview-list">
-              {glance.conflicts.items.map((item) => (
-                <li key={item.id}>
-                  <p>{item.label}</p>
-                  <p className="muted" style={{ margin: "0.15rem 0 0", fontSize: "var(--axis-text-2xs)" }}>
-                    {item.deviceCheckinsImpacted != null
-                      ? `${item.deviceCheckinsImpacted} device${item.deviceCheckinsImpacted === 1 ? "" : "s"} in conflict`
-                      : `${item.policyCount} policies${item.settingCount > 0 ? ` · ${item.settingCount} settings` : ""}`}
-                  </p>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Panel>
-
-        <Panel padded>
-          <PanelHead title="Failures" />
-          <dl className="stat-rows">
-            <div>
-              <dt className="muted">App install failures</dt>
-              <dd className="tabular" style={{ margin: 0 }}>
-                {appFailureDisplay}
-              </dd>
-            </div>
-            <div>
-              <dt className="muted">Noncompliant devices (config/compliance)</dt>
-              <dd className="tabular" style={{ margin: 0 }}>
-                {glance.failures.configNoncompliantDevices}
-              </dd>
-            </div>
-            <div>
-              <dt className="muted">Error / failed state</dt>
-              <dd className="tabular" style={{ margin: 0 }}>
-                {glance.failures.configErrorDevices}
-              </dd>
-            </div>
-          </dl>
-          {glance.failures.warning ? (
-            <p className="muted" style={{ margin: "0.55rem 0 0", fontSize: "var(--axis-text-2xs)" }}>
-              {glance.failures.warning}
-            </p>
-          ) : null}
-        </Panel>
-      </div>
-
-      <Panel padded>
-        <PanelHead
-          title="Recent activity"
-          hint={
-            glance.recentActivity.length > 0
-              ? `Intune audit log · ${glance.recentActivity.length} latest`
-              : "Intune audit log"
-          }
-        />
-        {glance.recentActivity.length === 0 ? (
-          <p className="muted" style={{ margin: 0, fontSize: "var(--axis-text-xs)" }}>
-            {glance.recentActivityWarning || "No Intune audit events in this tenant yet."}
-          </p>
-        ) : (
-          <ul className="overview-list">
-            {glance.recentActivity.map((event) => {
-              const target = event.targetResources.filter(Boolean)[0];
-              const result = event.result && event.result !== "Success" ? event.result : null;
-              return (
-                <li key={event.id}>
-                  <p>{event.activityDisplayName}</p>
-                  <p className="muted" style={{ margin: "0.15rem 0 0", fontSize: "var(--axis-text-2xs)" }}>
-                    {activityWhen(event.activityDateTime)}
-                    {target ? ` · ${target}` : ""}
-                    {` · ${actorLabel(event)}`}
-                    {event.category ? ` · ${event.category}` : ""}
-                    {result ? ` · ${result}` : ""}
-                  </p>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-        <button
-          type="button"
-          className="axis-btn"
-          style={{ marginTop: "0.75rem" }}
-          onClick={() => navigate("/intune/activity")}
-        >
-          Open write activity
-        </button>
-      </Panel>
-
-      {glance.drift ? (
-        <Panel padded>
-          <PanelHead
-            title="Potential policy drift"
-            hint={`vs ${glance.drift.baselineName}${glance.drift.incomplete ? " · incomplete settings scan" : ""}`}
-          />
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem", marginTop: "0.5rem", fontSize: "0.75rem" }}>
-            <p style={{ margin: 0 }}>
-              <span className="muted">Pass </span>
-              <span style={{ color: "var(--axis-success)" }}>{glance.drift.pass}</span>
-            </p>
-            <p style={{ margin: 0 }}>
-              <span className="muted">Fail </span>
-              <span style={{ color: "var(--axis-danger)" }}>{glance.drift.fail}</span>
-            </p>
-            <p style={{ margin: 0 }}>
-              <span className="muted">Unknown </span>
-              <span className="muted">{glance.drift.unknown}</span>
-            </p>
+          <div className="ov-row-line ov-axis">
+            <span>{dayLabel(enrolled.length - 1)}</span>
+            <span>{dayLabel(Math.floor(enrolled.length / 2))}</span>
+            <span>Today</span>
           </div>
-          {glance.drift.failingChecks.length > 0 ? (
-            <ul className="overview-list">
-              {glance.drift.failingChecks.map((check) => (
-                <li key={check.id}>
-                  <p>{check.title}</p>
-                  <p className="muted" style={{ margin: "0.15rem 0 0", fontSize: "var(--axis-text-2xs)" }}>
-                    {check.message}
-                  </p>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="muted" style={{ margin: "0.35rem 0 0", fontSize: "var(--axis-text-xs)" }}>
-              {glance.drift.warning ||
-                (glance.drift.fail === 0
-                  ? "No failing baseline checks in this pass."
-                  : null)}
-            </p>
-          )}
-        </Panel>
-      ) : null}
+        </section>
 
-      {glance.tokenScopes.length > 0 ? (
-        <details className="axis-panel" style={{ padding: "0.5rem 0.75rem", fontSize: "0.75rem" }}>
-          <summary style={{ cursor: "pointer", fontWeight: 500 }}>
-            Token scopes ({glance.tokenScopes.length})
-          </summary>
-          <p className="mono-code muted" style={{ margin: "0.375rem 0 0", wordBreak: "break-all" }}>
+        <section className="ov-card" aria-label="Recent activity">
+          <div className="ov-card-head">
+            <h2>Recent activity</h2>
+            <button type="button" className="ov-link" onClick={() => navigate("/intune/activity")}>
+              All activity
+            </button>
+          </div>
+          {glance.recentActivity.length === 0 ? (
+            <p className="ov-empty">{glance.recentActivityWarning || "No Intune audit events yet"}</p>
+          ) : (
+            <ul className="ov-activity">
+              {glance.recentActivity.map((event) => {
+                const target = event.targetResources.filter(Boolean)[0];
+                const actor = actorLabel(event);
+                const failed = event.result && event.result !== "Success";
+                return (
+                  <li key={event.id} title={[event.category, event.result].filter(Boolean).join(" · ")}>
+                    <span className="ov-muted">{since(event.activityDateTime)}</span>
+                    <span className="ov-activity-what">
+                      {event.activityDisplayName}
+                      {target ? <span className="ov-muted"> {target}</span> : null}
+                    </span>
+                    <span className={failed ? "is-bad" : actor.startsWith("Axis") ? "is-axis" : "ov-muted"}>
+                      {failed ? event.result : actor}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </section>
+      </div>
+
+      <details className="axis-panel ov-diagnostics">
+        <summary>Graph inventory and token scopes</summary>
+        {glance.tokenScopes.length > 0 ? (
+          <p className="mono-code muted" style={{ margin: "0.5rem 0.75rem", wordBreak: "break-all" }}>
             {glance.tokenScopes.join(" · ")}
           </p>
-        </details>
-      ) : null}
-
-      <details className="axis-panel" style={{ overflow: "hidden" }}>
-        <summary
-          style={{
-            cursor: "pointer",
-            padding: "0.5rem 0.75rem",
-            borderBottom: "1px solid var(--axis-border)",
-            fontSize: "0.75rem",
-            fontWeight: 600,
-          }}
-        >
-          Full Graph inventory
-        </summary>
-        <div style={{ padding: "0.5rem 0.75rem" }}>
-          <p className="muted" style={{ margin: 0, fontSize: "0.6875rem" }}>
-            Endpoint map aligned with IntuneManagement (one API family per row, Graph beta).
-          </p>
-        </div>
+        ) : null}
         <table className="axis-table">
           <thead style={{ background: "var(--axis-surface-2)" }}>
             <tr>
@@ -470,15 +357,7 @@ export function TenantOverview({
                 <td style={{ fontWeight: 500 }}>
                   {item.title}
                   {item.error ? (
-                    <span
-                      style={{
-                        display: "block",
-                        marginTop: "0.125rem",
-                        fontSize: "0.6875rem",
-                        fontWeight: 400,
-                        color: "var(--axis-warning)",
-                      }}
-                    >
+                    <span style={{ display: "block", marginTop: "0.125rem", fontSize: "0.6875rem", fontWeight: 400, color: "var(--axis-warning)" }}>
                       {item.permissionRelated ? "Permission denied" : "Query failed"}
                       {item.status ? ` · HTTP ${item.status}` : ""}
                       {item.code ? ` · ${item.code}` : ""}
