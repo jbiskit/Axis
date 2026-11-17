@@ -4,7 +4,19 @@ Notable user-facing changes to Axis are recorded here.
 
 ## [Unreleased]
 
-Add release notes here before preparing the next version.
+### Added
+
+- **Users** sits beside Groups in Intune, and Entra has a **Directory** section with Users and Groups. Search across every column, filter by type, account state, source, and department, and pick one or more licences in the licence filter.
+- **Dynamic rules** under Tools builds a dynamic group from a user or a device. Pick one, tick the attributes, licences, and features to match, and choose whether all or any must match. The rule can be edited before the group is created.
+- Licences and features show the names Microsoft uses in the admin portals, such as "Microsoft Intune", instead of their codes. Axis downloads Microsoft's licensing name list once per session and shows the codes if the download fails.
+- Update rings have a **Device status** tab with the devices each ring reaches and their state.
+- A **Debug tools** setting under Settings › Troubleshooting shows raw settings, template references, and raw template payloads. They are hidden by default.
+
+### Changed
+
+- The Intune, Entra, Purview, and Defender overviews have a new layout: headline numbers, a list of items that need attention, and share bars.
+- Switching modules returns to the page you last had open in that module.
+- The inspector no longer shows platform chips, the duplicate banner, or the metadata grid at the top. Empty Settings tabs are hidden.
 
 ## [0.1.9] - 2026-11-16
 
