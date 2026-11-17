@@ -24,6 +24,7 @@ import {
   type ReviewRow,
   type ReviewSection,
 } from "./ReviewWorkbench";
+import { CaViewer } from "./CaViewer";
 import { AppCredentialsView, AuthStrengthsView, CaTemplatesView, CustomRolesView, PimRoleSettingsView, RoleAssignmentsView, TenantSettingsView, UsersView } from "./EntraDirectoryPages";
 
 const OVERVIEW_PATH = "/entra/conditional-access/overview";
@@ -145,6 +146,9 @@ const LOCATION_SPECIAL: Record<string, string> = {
 };
 
 type Lines = Array<[string, string]>;
+
+// Shared with the Conditional Access viewer (CaViewer.tsx).
+export { grantText, LOCATION_SPECIAL, named, policyLink, resolvePolicyNames, resourceTargets, sessionItems, userTargets, withExcluded };
 
 const named = (ids: unknown, names: ReviewNames, special: Record<string, string> = {}) =>
   asList(ids).map((id) => special[id] ?? names[id] ?? id);
@@ -917,6 +921,7 @@ export function EntraWorkspace({ route, signedIn }: { route: { pathname: string;
   if (pathname === "/entra" || pathname === OVERVIEW_PATH) {
     return <EntraOverview signedIn={signedIn} />;
   }
+  if (pathname === "/entra/conditional-access/viewer") return <CaViewer signedIn={signedIn} />;
   if (pathname === "/entra/applications/credentials") return <AppCredentialsView route={route} signedIn={signedIn} />;
   if (pathname === "/entra/directory/users") return <UsersView route={route} signedIn={signedIn} />;
   if (pathname === "/entra/directory/groups") {

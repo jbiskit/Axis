@@ -652,6 +652,16 @@ export async function fetchConditionalAccessCoverage(): Promise<ConditionalAcces
   return invoke("fetch_conditional_access_coverage_cmd");
 }
 
+/** Recent sign-ins (raw Graph rows) with `appliedConditionalAccessPolicies`. */
+export async function fetchConditionalAccessSignIns(search: string): Promise<Array<Record<string, unknown>>> {
+  return invoke("fetch_conditional_access_sign_ins_cmd", { search });
+}
+
+/** POST /beta/identity/conditionalAccess/evaluate; returns whatIfAnalysisResult rows. */
+export async function evaluateConditionalAccess(request: Record<string, unknown>): Promise<Array<Record<string, unknown>>> {
+  return invoke("evaluate_conditional_access_cmd", { request });
+}
+
 export async function fetchPolicySets(): Promise<InventoryResponse<PolicySetSummary>> {
   return invoke("fetch_policy_sets_cmd");
 }

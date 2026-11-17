@@ -1,0 +1,71 @@
+/* Conditional Access viewer: waterfall policy map (components/modules/CaViewer.tsx). */
+.ca-viewer { display: grid; gap: var(--axis-space-4); }
+.ca-form { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: var(--axis-space-3); margin-top: var(--axis-space-3); }
+.ca-form label { display: grid; gap: var(--axis-space-1); font-size: var(--axis-text-xs); color: var(--axis-muted); }
+.ca-form-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--axis-space-2); margin: var(--axis-space-3) 0; }
+.ca-form-actions .axis-input { flex: 1; min-width: 200px; }
+.ca-toggle { display: inline-flex; align-items: center; gap: var(--axis-space-2); font-size: var(--axis-text-sm); color: var(--axis-muted-strong); }
+.ca-spacer { flex: 1; }
+.ca-signins { max-height: 320px; overflow: auto; }
+.ca-signins tr.selected td { background: var(--axis-accent-soft); }
+
+.ca-map { --ca-line: var(--axis-border-strong); display: grid; overflow-x: auto; }
+.ca-lane {
+  display: grid;
+  grid-template-columns: 28px minmax(180px, 1.4fr) repeat(5, minmax(96px, 1fr)) minmax(150px, 1.2fr);
+  align-items: start;
+  min-width: 960px;
+  border-bottom: 1px solid var(--axis-border);
+  padding: var(--axis-space-2) 0;
+}
+.ca-head { font-size: var(--axis-text-2xs); color: var(--axis-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.ca-gate-head { text-align: center; }
+.ca-check { padding-top: 2px; }
+.ca-name { display: grid; gap: 2px; text-align: left; background: none; border: 0; padding: 0 var(--axis-space-2) 0 0; color: var(--axis-fg); cursor: pointer; font: inherit; }
+.ca-name strong { font-weight: 500; font-size: var(--axis-text-sm); }
+.ca-name:hover strong { color: var(--axis-accent); }
+.ca-state { font-size: var(--axis-text-2xs); }
+.ca-state-on { color: var(--axis-success); }
+.ca-state-report { color: var(--axis-warning); }
+.ca-state-off { color: var(--axis-muted); }
+
+/* Lane line runs through every gate; colour by policy state, dashed for report-only. */
+.ca-on { --ca-line: var(--axis-success); }
+.ca-report { --ca-line: var(--axis-warning); }
+.ca-off { --ca-line: var(--axis-overlay); opacity: 0.7; }
+.ca-gate { position: relative; display: grid; justify-items: center; gap: 4px; text-align: center; min-width: 0; }
+.ca-gate::before { content: ""; position: absolute; top: 10px; left: 0; right: 0; border-top: 2px solid var(--ca-line); }
+.ca-report .ca-gate::before { border-top-style: dashed; }
+.ca-gate-skip::before, .ca-gate-fail::before, .ca-gate-unknown::before { border-top: 1px dashed var(--axis-overlay); }
+.ca-node {
+  position: relative;
+  width: 20px; height: 20px; border-radius: 50%;
+  display: grid; place-items: center; font-size: 11px;
+  background: var(--axis-surface-2); border: 1px solid var(--ca-line); color: var(--ca-line);
+}
+.ca-gate-pass .ca-node { background: color-mix(in srgb, var(--ca-line) 18%, var(--axis-base)); }
+.ca-gate-fail .ca-node { border-color: var(--axis-danger); color: var(--axis-danger); background: var(--axis-danger-soft); }
+.ca-gate-skip .ca-node, .ca-gate-unknown .ca-node { border-color: var(--axis-overlay); background: var(--axis-surface); }
+.ca-gate-label {
+  font-size: var(--axis-text-2xs); color: var(--axis-muted); padding: 0 4px;
+  max-width: 100%; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+.ca-gate-fail .ca-gate-label { color: var(--axis-danger); }
+
+.ca-outcome {
+  display: grid; gap: 2px; font-size: var(--axis-text-xs);
+  border: 1px solid var(--axis-border-strong); border-radius: 6px; padding: 4px 8px; background: var(--axis-surface);
+}
+.ca-outcome-block { border-color: color-mix(in srgb, var(--axis-danger) 50%, transparent); }
+.ca-applied.ca-on .ca-outcome { border-color: var(--axis-accent); background: var(--axis-accent-soft); }
+.ca-applied.ca-report .ca-outcome { border-color: var(--axis-warning); background: var(--axis-warning-soft); }
+.ca-stopped .ca-outcome, .ca-lane.ca-off .ca-outcome { color: var(--axis-muted); }
+.ca-reason { font-size: var(--axis-text-2xs); color: var(--axis-muted); }
+.ca-empty { padding: var(--axis-space-4) 0; }
+
+.ca-combine { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: var(--axis-space-3); margin-top: var(--axis-space-4); }
+.ca-step { display: grid; gap: 4px; align-content: start; border: 1px solid var(--axis-border-strong); border-radius: 8px; padding: var(--axis-space-3); font-size: var(--axis-text-sm); background: var(--axis-surface); }
+.ca-step strong { font-weight: 500; }
+.ca-warn { color: var(--axis-warning); font-size: var(--axis-text-xs); }
+.ca-result { border-color: var(--axis-accent); background: var(--axis-accent-soft); }
+.ca-result-block { border-color: var(--axis-danger); background: var(--axis-danger-soft); }

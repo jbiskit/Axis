@@ -268,3 +268,26 @@ pub async fn fetch_conditional_access_coverage(access_token: &str) -> Result<Con
         fetched_at: Utc::now().to_rfc3339(),
     })
 }
+
+/// Recent sign-ins with each policy's evaluation (`appliedConditionalAccessPolicies`).
+/// `search` narrows to UPNs starting with it.
+pub async fn fetch_conditional_access_sign_ins(access_token: &str, search: &str) -> Result<Vec<Value>, GraphError> {
+    let search = search.trim().replace('\'', "''");
+    let filter = if search.is_empty() { String::new() } else { format!("&$filter=startswith(userPrincipalName,'{search}')") };
+    let path = format!("/auditLogs/signIns?$top=50{filter}");
+    let page: Value = GraphClient::new().fetch_plain(access_token, &path, "beta").await?;
+    Ok(page["value"].as_array().cloned().unwrap_or_default())
+}
+
+/// Microsoft's what-if evaluator. `request` is the `evaluate` body; a UPN in
+/// `signInIdentity.userId` is resolved to the object id first.
+pub async fn evaluate_conditional_access(access_token: &str, mut request: Value) -> Result<Vec<Value>, GraphError> {
+    let client = GraphClient::new();
+    if let Some(user) = request["signInIdentity"]["userId"].as_str().filter(|id| id.contains('@')).map(str::to_string) {
+        let user = user.replace('#', "%23");
+        let found: Value = client.fetch_plain(access_token, &format!("/users/{user}?$select=id"), "beta").await?;
+        request["signInIdentity"]["userId"] = found["id"].clone();
+    }
+    let result: Value = client.post(access_token, "/identity/conditionalAccess/evaluate", "beta", &request).await?;
+    Ok(result["value"].as_array().cloned().unwrap_or_default())
+}
