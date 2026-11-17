@@ -194,6 +194,8 @@ export const INTUNE_NAV: NavItem[] = [
   { href: "/intune/activity", label: "Write activity", icon: "overview", section: "Workspace" },
   { href: "/intune/what-if", label: "What if", icon: "overview", section: "Workspace" },
   { href: "/intune/tools/autopilot-script", label: "Autopilot script", icon: "enrollment", section: "Tools" },
+  // Builds a dynamic user group from one user's attributes; Users links here with ?user=.
+  { href: "/intune/tools/dynamic-rules", label: "Dynamic rules", icon: "devices", section: "Tools" },
   { href: "/intune/reports", label: "Environment report", icon: "reports", section: "Workspace" },
   { href: "/intune/client", label: "Compare & restore", icon: "baselines", section: "Workspace" },
   {
@@ -236,6 +238,12 @@ export const INTUNE_NAV: NavItem[] = [
   {
     href: "/intune/groups",
     label: "Groups",
+    icon: "devices",
+    section: "Manage",
+  },
+  {
+    href: "/intune/users",
+    label: "Users",
     icon: "devices",
     section: "Manage",
   },
@@ -319,7 +327,8 @@ const ENTRA_NAV: NavItem[] = [
     section: "Entra",
     children: [
       { href: "/entra/conditional-access/overview", label: "Overview", icon: "overview", section: "Overview" },
-      { href: "/entra/conditional-access/policies", label: "Policies", icon: "policies", section: "Conditional Access" },
+      { href: "/entra/directory/users", label: "Users", icon: "devices", section: "Directory" },
+      { href: "/entra/directory/groups", label: "Groups", icon: "devices", section: "Directory" },      { href: "/entra/conditional-access/policies", label: "Policies", icon: "policies", section: "Conditional Access" },
       { href: "/entra/conditional-access/named-locations", label: "Named locations", icon: "policies", section: "Conditional Access" },
       { href: "/entra/conditional-access/authentication-strengths", label: "Authentication strengths", icon: "policies", section: "Conditional Access" },
       { href: "/entra/conditional-access/templates", label: "Templates", icon: "policies", section: "Conditional Access" },

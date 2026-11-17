@@ -1,4 +1,5 @@
 import { asList, asRecord, humanize, isoDate, ReviewSections, ReviewWorkbench, type ReviewRow } from "./ReviewWorkbench";
+import { navigate } from "../../lib/route";
 
 type Route = { pathname: string; search: URLSearchParams };
 
@@ -536,6 +537,102 @@ export function CaTemplatesView({ route, signedIn }: { route: Route; signedIn: b
             },
           ]}
         />
+      )}
+      pathname={route.pathname}
+      search={route.search}
+      signedIn={signedIn}
+    />
+  );
+}
+
+// Users (read-only; the same page sits under Intune › Manage and Entra › Directory)
+
+const userSource = (row: ReviewRow) => (row.onPremisesSyncEnabled ? "Synced" : "Cloud");
+const licenceCount = (row: ReviewRow) => (Array.isArray(row.assignedLicenses) ? row.assignedLicenses.length : 0);
+/** `skuPartNumber` per assigned licence (added by the backend); "None" when the user has none. */
+const licenceNames = (row: ReviewRow) => {
+  const names = asList(row.licenceNames).sort();
+  return names.length ? names : ["None"];
+};
+
+function userHeadline(rows: ReviewRow[]) {
+  const disabled = rows.filter((row) => row.accountEnabled === false).length;
+  const guests = rows.filter((row) => row.userType === "Guest").length;
+  const unlicensed = rows.filter((row) => row.userType !== "Guest" && licenceCount(row) === 0).length;
+  return (
+    <div className="axis-panel axis-panel-padded">
+      <p className="axis-kicker">Directory</p>
+      <h2 style={{ margin: 0 }}>
+        {rows.length} user{rows.length === 1 ? "" : "s"} · {guests} guest{guests === 1 ? "" : "s"}
+      </h2>
+      <p className="muted" style={{ margin: "0.35rem 0 0" }}>
+        {disabled} disabled · {unlicensed} member{unlicensed === 1 ? "" : "s"} without a licence
+      </p>
+    </div>
+  );
+}
+
+export function UsersView({ route, signedIn }: { route: Route; signedIn: boolean }) {
+  return (
+    <ReviewWorkbench
+      key="user"
+      kind="user"
+      eyebrow={route.pathname.startsWith("/entra") ? "Entra · Directory" : "Manage"}
+      title="Users"
+      description="Every user in this tenant: type, account state, where the account comes from and how many licences it holds."
+      headline={userHeadline}
+      columns={[
+        { key: "upn", label: "User principal name", value: (row) => text(row.userPrincipalName) },
+        { key: "type", label: "Type", filter: true, value: (row) => text(row.userType) },
+        { key: "status", label: "Account", filter: true, value: (row) => (row.accountEnabled === false ? "Disabled" : "Enabled") },
+        { key: "source", secondary: true, label: "Source", filter: true, value: userSource },
+        { key: "licences", secondary: true, label: "Licences", filter: true, filterMulti: true, filterValues: licenceNames, value: (row) => licenceNames(row).join(", ") },
+        { key: "department", secondary: true, label: "Department", filter: true, value: (row) => text(row.department) },
+      ]}
+      summary={(row) => (
+        <>
+          <ReviewSections
+          sections={[
+            {
+              title: "Identity",
+              fields: [
+                { label: "User principal name", value: text(row.userPrincipalName) },
+                { label: "Mail", value: text(row.mail) },
+                { label: "Type", value: text(row.userType) },
+                { label: "Invitation", value: humanize(row.externalUserState) },
+              ],
+            },
+            {
+              title: "Account",
+              fields: [
+                { label: "Account", value: row.accountEnabled === false ? "Disabled" : "Enabled" },
+                { label: "Source", value: userSource(row) },
+                { label: "Licences", value: licenceNames(row) },
+                { label: "Usage location", value: text(row.usageLocation) },
+                { label: "Created", value: isoDate(row.createdDateTime) },
+                { label: "Object ID", value: text(row.id) },
+              ],
+            },
+            {
+              title: "Organisation",
+              fields: [
+                { label: "Job title", value: text(row.jobTitle) },
+                { label: "Department", value: text(row.department) },
+                { label: "Company", value: text(row.companyName) },
+                { label: "Office", value: text(row.officeLocation) },
+              ],
+            },
+          ]}
+          />
+          <button
+            type="button"
+            className="axis-btn"
+            style={{ marginTop: "0.75rem" }}
+            onClick={() => navigate(`/intune/tools/dynamic-rules?user=${encodeURIComponent(String(row.id))}`)}
+          >
+            Build a dynamic group from this user
+          </button>
+        </>
       )}
       pathname={route.pathname}
       search={route.search}

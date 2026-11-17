@@ -81,6 +81,8 @@ pub(crate) fn collection_path(kind: &str) -> Option<&'static str> {
     Some(match kind {
         "conditionalAccessPolicy" => "/identity/conditionalAccess/policies",
         "namedLocation" => "/identity/conditionalAccess/namedLocations",
+        "user" => "/users",
+        "entraDevice" => "/devices",
         // Delegated calls only see labels published to the signed-in user; the
         // org-wide /security/... list needs application permission.
         "sensitivityLabel" => "/me/security/informationProtection/sensitivityLabels",
@@ -139,6 +141,18 @@ pub async fn fetch_review_objects(
         "customRole" => GraphClient::new()
             .fetch_all_pages(access_token, "/roleManagement/directory/roleDefinitions?$filter=isBuiltIn eq false", "beta", INVENTORY_LIST_MAX + 1)
             .await?,
+        // signInActivity is left out: it needs Entra ID P1 and fails the whole request without it.
+        "user" => users_with_licence_names(access_token).await?,
+        "servicePlan" => service_plans(access_token).await?,
+        // Entra device objects (not Intune managedDevices): the properties dynamic device rules read.
+        "entraDevice" => GraphClient::new()
+            .fetch_all_pages(
+                access_token,
+                "/devices?$select=id,displayName,operatingSystem,operatingSystemVersion,model,manufacturer,deviceOwnership,enrollmentProfileName,managementType,profileType,trustType,accountEnabled,physicalIds,extensionAttributes,deviceCategory,isRooted,systemLabels",
+                "beta",
+                INVENTORY_LIST_MAX + 1,
+            )
+            .await?,
         // The configurations collection can't be listed (400), only read by id; the policy embeds them.
         "authMethodConfig" => GraphClient::new()
             .fetch_plain::<Value>(access_token, "/policies/authenticationMethodsPolicy", "beta")
@@ -154,6 +168,87 @@ pub async fn fetch_review_objects(
         }
     };
     Ok(InventoryList::from_items(items))
+}
+
+/// Users with `licenceNames`: each assigned licence's product name from Microsoft's licensing CSV
+/// (e.g. "Microsoft 365 E5"), else its `skuPartNumber` from `/subscribedSkus`, else the raw skuId.
+async fn users_with_licence_names(access_token: &str) -> Result<Vec<Value>, GraphError> {
+    let client = GraphClient::new();
+    let mut users = client
+        .fetch_all_pages::<Value>(
+            access_token,
+            "/users?$select=id,displayName,userPrincipalName,mail,accountEnabled,userType,jobTitle,department,companyName,officeLocation,usageLocation,createdDateTime,onPremisesSyncEnabled,assignedLicenses,externalUserState",
+            "beta",
+            INVENTORY_LIST_MAX + 1,
+        )
+        .await?;
+    let skus: HashMap<String, String> = client
+        .fetch_all_pages::<Value>(access_token, "/subscribedSkus?$select=skuId,skuPartNumber", "beta", 500)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|sku| Some((sku["skuId"].as_str()?.to_lowercase(), sku["skuPartNumber"].as_str()?.to_string())))
+        .collect();
+    let friendly = crate::licence_names::licence_names().await;
+    let skus: HashMap<String, String> = skus
+        .into_iter()
+        .map(|(id, code)| {
+            let name = friendly.as_ref().and_then(|names| names.products.get(&id).cloned()).unwrap_or(code);
+            (id, name)
+        })
+        .collect();
+    for user in &mut users {
+        let names: Vec<Value> = user["assignedLicenses"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|licence| licence["skuId"].as_str())
+            .map(|id| Value::String(skus.get(&id.to_lowercase()).cloned().unwrap_or_else(|| id.to_string())))
+            .collect();
+        if let Some(object) = user.as_object_mut() {
+            object.insert("licenceNames".into(), Value::Array(names));
+        }
+    }
+    Ok(users)
+}
+
+/// One row per service plan in the tenant's subscriptions: `id` is the servicePlanId (what
+/// `user.assignedPlans` rules match), with its code name, its friendly name from Microsoft's
+/// licensing CSV when available (`friendlyName`), and the licences (`skus`) that include it.
+async fn service_plans(access_token: &str) -> Result<Vec<Value>, GraphError> {
+    let skus = GraphClient::new()
+        .fetch_all_pages::<Value>(access_token, "/subscribedSkus?$select=skuId,skuPartNumber,servicePlans", "beta", 500)
+        .await?;
+    let friendly = crate::licence_names::licence_names().await;
+    let mut plans: Vec<Value> = Vec::new();
+    let mut index: HashMap<String, usize> = HashMap::new();
+    for sku in &skus {
+        let code = sku["skuPartNumber"].as_str().unwrap_or_default();
+        let product = sku["skuId"]
+            .as_str()
+            .and_then(|id| friendly.as_ref()?.products.get(&id.to_lowercase()).cloned());
+        let sku_name = product.as_deref().unwrap_or(code);
+        for plan in sku["servicePlans"].as_array().into_iter().flatten() {
+            let Some(id) = plan["servicePlanId"].as_str() else { continue };
+            let at = *index.entry(id.to_lowercase()).or_insert_with(|| {
+                let friendly_name = friendly.as_ref().and_then(|names| names.plans.get(&id.to_lowercase()).cloned());
+                plans.push(serde_json::json!({
+                    "id": id,
+                    "servicePlanName": plan["servicePlanName"],
+                    "friendlyName": friendly_name,
+                    "servicePlanType": plan["servicePlanType"],
+                    "skus": [],
+                }));
+                plans.len() - 1
+            });
+            if let Some(list) = plans[at]["skus"].as_array_mut() {
+                if !list.iter().any(|existing| existing == sku_name) {
+                    list.push(Value::String(sku_name.to_string()));
+                }
+            }
+        }
+    }
+    Ok(plans)
 }
 
 fn unknown_kind(kind: &str) -> GraphError {

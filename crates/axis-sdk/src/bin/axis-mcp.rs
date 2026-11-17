@@ -14,6 +14,7 @@ const REVIEW_KINDS: &[&str] = &[
     "conditionalAccessPolicy", "customRole", "defenderDevice", "deviceCategory", "endpointSecurityPolicy",
     "intuneConnector", "intuneRole", "namedLocation", "notificationTemplate", "pimRoleSetting", "retentionLabel",
     "roleAssignment", "secureScoreControl", "sensitivityLabel", "tenantSetting", "termsAndConditions", "updateAlert",
+    "user", "entraDevice", "servicePlan",
 ];
 // shortcut: large lists are cut at this many characters; add paging/filters if models need whole tenants.
 const MAX_TEXT: usize = 200_000;

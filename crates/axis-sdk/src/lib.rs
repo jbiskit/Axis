@@ -3,6 +3,7 @@ mod app_icon;
 mod assignments;
 mod auth;
 mod autopilot_profiles;
+mod licence_names;
 mod ca_coverage;
 mod catalog_index;
 mod client_container;

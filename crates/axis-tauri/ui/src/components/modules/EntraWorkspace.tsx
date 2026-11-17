@@ -7,7 +7,8 @@ import {
   type ConditionalAccessCoverage,
   type CoverageGap,
 } from "../../lib/tauri";
-import { Panel, PanelHead } from "../ui/PageChrome";
+import { PageHeader, Panel, PanelHead } from "../ui/PageChrome";
+import { GroupBuilderView } from "../workbench/GroupBuilderView";
 import { AttentionTable, count, KpiTiles, OverviewHeader, pct, plural, ShareCard, type Issue, type Kpi } from "../overview/OverviewParts";
 import {
   asList,
@@ -23,7 +24,7 @@ import {
   type ReviewRow,
   type ReviewSection,
 } from "./ReviewWorkbench";
-import { AppCredentialsView, AuthStrengthsView, CaTemplatesView, CustomRolesView, PimRoleSettingsView, RoleAssignmentsView, TenantSettingsView } from "./EntraDirectoryPages";
+import { AppCredentialsView, AuthStrengthsView, CaTemplatesView, CustomRolesView, PimRoleSettingsView, RoleAssignmentsView, TenantSettingsView, UsersView } from "./EntraDirectoryPages";
 
 const OVERVIEW_PATH = "/entra/conditional-access/overview";
 const POLICIES_PATH = "/entra/conditional-access/policies";
@@ -917,6 +918,19 @@ export function EntraWorkspace({ route, signedIn }: { route: { pathname: string;
     return <EntraOverview signedIn={signedIn} />;
   }
   if (pathname === "/entra/applications/credentials") return <AppCredentialsView route={route} signedIn={signedIn} />;
+  if (pathname === "/entra/directory/users") return <UsersView route={route} signedIn={signedIn} />;
+  if (pathname === "/entra/directory/groups") {
+    return (
+      <div className="stack">
+        <PageHeader
+          eyebrow="Entra · Directory"
+          title="Groups"
+          description="Every Entra group in this tenant, how each one gets its members, and who is currently in it."
+        />
+        <GroupBuilderView />
+      </div>
+    );
+  }
   if (pathname === "/entra/roles/assignments") return <RoleAssignmentsView route={route} signedIn={signedIn} />;
   if (pathname === "/entra/tenant/settings") return <TenantSettingsView route={route} signedIn={signedIn} />;
   if (pathname === "/entra/roles/pim-settings") return <PimRoleSettingsView route={route} signedIn={signedIn} />;

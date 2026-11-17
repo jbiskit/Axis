@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useInventory } from "../../hooks/useInventory";
 import { compareText, sortRows } from "../../lib/listSelection";
 import { hrefWithParam, navigate } from "../../lib/route";
@@ -8,7 +8,7 @@ import { PageHeader } from "../ui/PageChrome";
 import { InspectorWithDocumentTabs } from "../workbench/DocumentTabs";
 import { GraphObjectInspector } from "../workbench/GraphObjectInspector";
 import { BulkAssignBar, SelectCheckbox, useCheckedIds } from "../workbench/PolicyBulkAssign";
-import { SortableTh, useColumnSort, WorkspaceSplit } from "../workbench/shared";
+import { ListSearchToolbar, SortableTh, useColumnSort, WorkspaceSplit } from "../workbench/shared";
 
 export type ReviewRow = Record<string, unknown>;
 /** Object id → display name, from `resolveReviewNames`. */
@@ -19,7 +19,69 @@ export type ReviewColumn = {
   value: (row: ReviewRow, names: ReviewNames) => string;
   /** Hidden while the inspector is open, so the table narrows by dropping whole columns. */
   secondary?: boolean;
+  /** Adds a dropdown above the list that keeps only rows with the chosen value. */
+  filter?: boolean;
+  /** For a multi-valued column: the row matches when any of these equals the chosen value. */
+  filterValues?: (row: ReviewRow) => string[];
+  /** Tick several values; a row matches when it has any of them. */
+  filterMulti?: boolean;
 };
+
+function MultiFilter({
+  label,
+  options,
+  selected,
+  onChange,
+}: {
+  label: string;
+  options: string[];
+  selected: string[];
+  onChange: (values: string[]) => void;
+}) {
+  const toggle = (value: string) =>
+    onChange(selected.includes(value) ? selected.filter((item) => item !== value) : [...selected, value]);
+  const ref = useRef<HTMLDetailsElement>(null);
+  // Close like a native select: a click outside the menu, or Escape.
+  useEffect(() => {
+    const close = (event: Event) => {
+      const details = ref.current;
+      if (!details?.open) return;
+      if (event instanceof KeyboardEvent ? event.key === "Escape" : !details.contains(event.target as Node)) details.open = false;
+    };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", close);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", close);
+    };
+  }, []);
+  return (
+    <div className="device-field device-field-filter">
+      {label}
+      <details className="multi-filter" ref={ref}>
+        <summary className="axis-input">
+          {selected.length === 0 ? "All" : selected.length === 1 ? selected[0] : `${selected.length} selected`}
+        </summary>
+        <div className="multi-filter-menu" role="group" aria-label={label}>
+          {options.map((option) => (
+            <label key={option}>
+              <input type="checkbox" checked={selected.includes(option)} onChange={() => toggle(option)} />
+              {option}
+            </label>
+          ))}
+          {selected.length ? (
+            <button type="button" className="ov-link" onClick={() => onChange([])}>
+              Clear
+            </button>
+          ) : null}
+        </div>
+      </details>
+    </div>
+  );
+}
+
+const columnFilterValues = (column: ReviewColumn, row: ReviewRow, names: ReviewNames) =>
+  column.filterValues ? column.filterValues(row) : [column.value(row, names)];
 
 export const asRecord = (value: unknown): ReviewRow =>
   value && typeof value === "object" && !Array.isArray(value) ? (value as ReviewRow) : {};
@@ -162,10 +224,37 @@ export function ReviewWorkbench({
       cancelled = true;
     };
   }, [resolveNames, rows]);
+  const [query, setQuery] = useState("");
+  const [filterValues, setFilterValues] = useState<Record<string, string>>({});
+  const [multiValues, setMultiValues] = useState<Record<string, string[]>>({});
+  const filterColumns = columns.filter((column) => column.filter && !column.filterMulti);
+  const multiColumns = columns.filter((column) => column.filter && column.filterMulti);
+  const optionsFor = (column: ReviewColumn) =>
+    [...new Set(rows.flatMap((row) => columnFilterValues(column, row, names)).filter(Boolean))].sort(compareText);
+  const visibleRows = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    const active = Object.entries(filterValues).filter(([, value]) => value !== "all");
+    const activeMulti = Object.entries(multiValues).filter(([, values]) => values.length > 0);
+    if (!needle && active.length === 0 && activeMulti.length === 0) return rows;
+    return rows.filter((row) => {
+      for (const [key, value] of active) {
+        const column = columns.find((candidate) => candidate.key === key);
+        if (column && !columnFilterValues(column, row, names).includes(value)) return false;
+      }
+      for (const [key, values] of activeMulti) {
+        const column = columns.find((candidate) => candidate.key === key);
+        if (column && !columnFilterValues(column, row, names).some((value) => values.includes(value))) return false;
+      }
+      if (!needle) return true;
+      return [titleOf(row), ...columns.map((column) => column.value(row, names))].some((text) =>
+        text.toLowerCase().includes(needle),
+      );
+    });
+  }, [columns, filterValues, multiValues, names, query, rows, titleOf]);
   const { sort, toggle } = useColumnSort<string>(defaultSort);
   const { sorted, depth } = useMemo(() => {
     const column = columns.find((candidate) => candidate.key === sort.key);
-    const flat = sortRows(rows, sort.dir, (a, b) =>
+    const flat = sortRows(visibleRows, sort.dir, (a, b) =>
       (column ? compareText(column.value(a, names), column.value(b, names)) : 0) || compareText(titleOf(a), titleOf(b)),
     );
     const depth = new Map<string, number>();
@@ -189,7 +278,7 @@ export function ReviewWorkbench({
     };
     roots.forEach((row) => visit(row, 0));
     return { sorted: ordered, depth };
-  }, [columns, names, parentOf, rows, sort, titleOf]);
+  }, [columns, names, parentOf, visibleRows, sort, titleOf]);
   const indent = (row: ReviewRow) => depth.get(String(row.id)) ?? 0;
   const grouping = groupings?.find((candidate) => candidate.key === search.get("group"));
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -279,6 +368,26 @@ export function ReviewWorkbench({
           )}
         </div>
       ) : null}
+      <ListSearchToolbar
+        query={query}
+        onQueryChange={setQuery}
+        countLabel={`${sorted.length} of ${rows.length}`}
+        filters={filterColumns.map((column) => ({
+          label: column.label,
+          value: filterValues[column.key] ?? "all",
+          onChange: (value: string) => setFilterValues((current) => ({ ...current, [column.key]: value })),
+          options: [{ value: "all", label: "All" }, ...optionsFor(column).map((value) => ({ value, label: value }))],
+        }))}
+        extra={multiColumns.map((column) => (
+          <MultiFilter
+            key={column.key}
+            label={column.label}
+            options={optionsFor(column)}
+            selected={multiValues[column.key] ?? []}
+            onChange={(values) => setMultiValues((current) => ({ ...current, [column.key]: values }))}
+          />
+        ))}
+      />
       <section className="axis-panel axis-table-wrap workspace-scroll">
         <table className={`axis-table review-table${selected ? " is-inspecting" : ""}`}>
           <thead>

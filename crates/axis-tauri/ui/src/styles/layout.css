@@ -8542,3 +8542,47 @@ button.packs-kits-mode-option:disabled {
 .ov-activity .is-bad { color: var(--axis-danger); }
 
 .ov-diagnostics > summary { cursor: pointer; padding: 0.5rem 0.75rem; font-size: var(--axis-text-xs); color: var(--axis-muted); }
+
+/* Multi-select filter: a select-looking summary that opens a checkbox list. */
+.multi-filter { position: relative; }
+.multi-filter > summary { list-style: none; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.multi-filter > summary::-webkit-details-marker { display: none; }
+.multi-filter-menu {
+  position: absolute; left: 0; top: calc(100% + 0.25rem); z-index: 20;
+  min-width: 100%; max-height: 18rem; overflow: auto;
+  display: flex; flex-direction: column; gap: 0.35rem;
+  padding: 0.5rem 0.65rem;
+  background: var(--axis-base); border: 1px solid var(--axis-border-strong); border-radius: var(--axis-radius);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.25);
+  font-size: var(--axis-text-sm); text-transform: none; letter-spacing: normal; color: var(--axis-fg);
+}
+.multi-filter-menu label { display: flex; align-items: center; gap: 0.45rem; white-space: nowrap; cursor: pointer; }
+.multi-filter-menu .ov-link { align-self: flex-start; margin-top: 0.15rem; }
+
+/* Dynamic rule builder */
+.rule-hits {
+  list-style: none; margin: 0.35rem 0 0; padding: 0.25rem;
+  border: 1px solid var(--axis-border); border-radius: var(--axis-radius);
+  background: var(--axis-base); max-height: 16rem; overflow: auto;
+}
+.rule-hit {
+  display: flex; align-items: baseline; gap: 0.6rem; width: 100%;
+  padding: 0.4rem 0.55rem; border: 0; border-radius: var(--axis-radius-sm);
+  background: none; color: var(--axis-fg); font: inherit; font-size: var(--axis-text-sm); text-align: left; cursor: pointer;
+}
+.rule-hit:hover, .rule-hit:focus-visible { background: var(--axis-accent-soft); outline: none; }
+.rule-hit-name { font-weight: 500; white-space: nowrap; }
+.rule-hit-meta { color: var(--axis-muted); font-size: var(--axis-text-xs); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Rows wrap into as many columns as fit and the list scrolls vertically (CSS columns would scroll sideways). */
+.rule-plans {
+  list-style: none; margin: 0.5rem 0 0; padding: 0;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr)); column-gap: 1.25rem;
+  max-height: 18rem; overflow-x: hidden; overflow-y: auto;
+}
+.rule-plans li { min-width: 0; }
+.rule-plans .rule-hit-name { overflow: hidden; text-overflow: ellipsis; }
+.rule-plans label { display: flex; align-items: baseline; gap: 0.5rem; padding: 0.25rem 0; font-size: var(--axis-text-sm); cursor: pointer; }
+.rule-table td { vertical-align: middle; }
+.rule-table td:first-child { width: 1.5rem; }
+.rule-table td:nth-child(3) { width: 9rem; }
+.rule-table td:nth-child(4) { width: 40%; }

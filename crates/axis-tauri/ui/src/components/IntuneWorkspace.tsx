@@ -163,6 +163,8 @@ import {
   NotificationTemplatesView,
   TermsAndConditionsView,
 } from "./modules/IntuneAdminPages";
+import { UsersView } from "./modules/EntraDirectoryPages";
+import { DynamicRuleBuilder } from "./workbench/DynamicRuleBuilder";
 
 const ADMIN_PAGES: Record<string, typeof IntuneRolesView> = {
   "/intune/tenant-admin/roles": IntuneRolesView,
@@ -175,6 +177,7 @@ const ADMIN_PAGES: Record<string, typeof IntuneRolesView> = {
   "/intune/apps/configuration": AppConfigurationsView,
   "/intune/enrollment/android": AndroidEnrollmentProfilesView,
   "/intune/enrollment/ios": AppleEnrollmentProfilesView,
+  "/intune/users": UsersView,
 };
 import { PacksKitsView } from "./PacksKitsView";
 import { PacksLibrary } from "./packs/PacksLibrary";
@@ -470,6 +473,19 @@ export function IntuneWorkspace({
 
   const AdminPage = ADMIN_PAGES[pathname];
   if (AdminPage) return <AdminPage route={route} signedIn={signedIn} />;
+
+  if (pathname === "/intune/tools/dynamic-rules") {
+    return (
+      <div className="stack">
+        <PageHeader
+          eyebrow="Tools"
+          title="Dynamic rules"
+          description="Pick a user or a device, tick the attributes the group should match, and create a dynamic group from the rule."
+        />
+        <DynamicRuleBuilder route={route} />
+      </div>
+    );
+  }
 
   if (pathname === "/intune/groups") {
     return (

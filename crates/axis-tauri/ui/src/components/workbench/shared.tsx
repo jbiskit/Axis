@@ -400,6 +400,7 @@ export function ListSearchToolbar({
   showPlatformFilter = false,
   secondaryFilter,
   filters,
+  extra,
 }: {
   query: string;
   onQueryChange: (value: string) => void;
@@ -423,6 +424,8 @@ export function ListSearchToolbar({
     onChange: (value: string) => void;
     options: ListFilterOption[];
   }>;
+  /** Custom filter controls (e.g. a multi-select), placed after the dropdowns. */
+  extra?: ReactNode;
 }) {
   const extraFilters = [
     ...(secondaryFilter ? [secondaryFilter] : []),
@@ -485,6 +488,7 @@ export function ListSearchToolbar({
           </select>
         </label>
       ))}
+      {extra}
       {countLabel ? (
         <p className="muted" style={{ margin: 0, fontSize: "0.6875rem", alignSelf: "end" }}>
           {countLabel}
