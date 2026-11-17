@@ -4,6 +4,7 @@ import type { SessionMode } from "../types/glance";
 import type { ClientContainerStatus } from "../types/clientContainer";
 import { ALL_NAV, NAV_MODULES, matchingNavItems, moduleForPath } from "../lib/nav";
 import { navigate, type AppRoute } from "../lib/route";
+import { moduleKey, recallRoute, rememberRoute } from "../lib/navMemory";
 import { SHELL_BANNER_DISMISS_KEYS } from "../lib/readOnly";
 import { useDensity, useTheme } from "../lib/theme";
 import { AppSettingsView } from "./AppSettingsView";
@@ -258,7 +259,8 @@ function NavChild({
         disabled={planned}
         title={planned ? "Not in this desktop pass" : undefined}
         onClick={() => {
-          if (!planned) navigate(item.href);
+          // Coming back to an area reopens where you left it; clicking the area you're in goes to its top.
+          if (!planned) navigate(active ? item.href : recallRoute(item.href, item.href));
         }}
       >
         <span className="shell-nav-label">{item.label}</span>
@@ -311,7 +313,7 @@ function NavTopItem({
         disabled={planned}
         title={planned ? "Not in this desktop pass" : undefined}
         onClick={() => {
-          if (!planned) navigate(item.href);
+          if (!planned) navigate(active ? item.href : recallRoute(item.href, item.href));
         }}
       >
         <NavIcon name={item.icon ?? "overview"} className="shell-nav-icon" />
@@ -464,6 +466,22 @@ export function AppShell({
   const activeModule = NAV_MODULES.find((module) => module.id === moduleForPath(pathname)) ?? NAV_MODULES[0];
   const hub = activeModule.nav.length === 1 && activeModule.nav[0].children?.length ? activeModule.nav[0] : null;
 
+  // Remember this route for its module and every nav row it sits under (see navMemory).
+  const searchText = search.toString();
+  useEffect(() => {
+    if (onAppSettings) return;
+    const keys = [moduleKey(activeModule.id)];
+    const walk = (items: NavItem[]) =>
+      items.forEach((item) => {
+        if (isActive(pathname, search, item)) keys.push(item.href);
+        walk(item.children ?? []);
+      });
+    walk(activeModule.nav);
+    rememberRoute(keys, searchText ? `${pathname}?${searchText}` : pathname);
+    // `search` is a new object each render; `searchText` is its value.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathname, searchText, onAppSettings, activeModule]);
+
   const [panelCollapsed, setPanelCollapsedState] = useState(() => loadPanelCollapsed());
   const setPanelCollapsed = (next: boolean | ((current: boolean) => boolean)) => {
     setPanelCollapsedState((current) => {
@@ -529,7 +547,9 @@ export function AppShell({
                   type="button"
                   className={`shell-module${isCurrent ? " is-active" : ""}`}
                   aria-current={isCurrent ? "page" : undefined}
-                  onClick={() => navigate(module.nav[0].href)}
+                  onClick={() =>
+                    navigate(isCurrent ? module.nav[0].href : recallRoute(moduleKey(module.id), module.nav[0].href))
+                  }
                 >
                   {module.label}
                 </button>
