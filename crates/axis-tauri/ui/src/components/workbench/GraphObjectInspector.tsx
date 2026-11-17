@@ -815,6 +815,7 @@ export function GraphObjectInspector({
       <div className="inspector-chrome">
       <PageHeader
         eyebrow={popout ? "Popout" : "Inspector"}
+        platformChips={false}
         title={detail?.title ?? fallbackTitle ?? "Object"}
         onContextMenu={(event) => {
           event.preventDefault();

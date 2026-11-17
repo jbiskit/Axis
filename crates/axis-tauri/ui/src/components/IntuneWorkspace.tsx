@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { TenantGlance } from "../types/glance";
+import { useHashRoute } from "../hooks/useHashRoute";
+import { platformsForPath } from "../lib/nav";
 import type {
   BaselineReferenceSourceInput,
   CatalogPolicySummary,
@@ -1823,6 +1825,7 @@ function NamedPolicyList({
   /** Show Graph device limit (enrollment limit configs; uses settingCount). */
   showDeviceLimit?: boolean;
 }) {
+  const routePath = useHashRoute().pathname;
   const { query, setQuery, assignedFilter, setAssignedFilter, platformFilter, setPlatformFilter } =
     useListSearchState();
   const { sort, toggle: toggleSort } = useColumnSort<CatalogPolicySortKey>(defaultSortKey);
@@ -1986,7 +1989,8 @@ function NamedPolicyList({
               platformFilter={platformFilter}
               onPlatformFilterChange={setPlatformFilter}
               platformOptions={platformOptions}
-              showPlatformFilter
+              // The header's platform chips already filter routes that have them.
+              showPlatformFilter={!platformsForPath(routePath)}
               countLabel={`${filtered.length} of ${items.length}`}
               placeholder={showProfile ? "Name, profile, platform, assigned…" : "Name, platform, assigned…"}
             >
@@ -2071,7 +2075,6 @@ function NamedPolicyList({
                 kind={objectKind}
                 id={selected.id}
                 fallbackTitle={selected.name}
-                incomplete={incomplete}
                 onClose={closeActive}
               />
             ) : null

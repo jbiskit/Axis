@@ -60,6 +60,7 @@ export function PageHeader({
   onContextMenu,
   onRefresh,
   refreshing,
+  platformChips = true,
 }: {
   eyebrow?: ReactNode;
   title: ReactNode;
@@ -68,6 +69,8 @@ export function PageHeader({
   onContextMenu?: (event: MouseEvent<HTMLDivElement>) => void;
   onRefresh?: () => void;
   refreshing?: boolean;
+  /** List page headers only; an inspector on the same route must not filter the list. */
+  platformChips?: boolean;
 }) {
   const refreshMenu = useHeaderRefreshMenu(onRefresh, refreshing);
   return (
@@ -80,7 +83,7 @@ export function PageHeader({
         {eyebrow ? <div className="axis-kicker">{eyebrow}</div> : null}
         <h1>{title}</h1>
         {description ? <div className="page-header-desc">{description}</div> : null}
-        <PlatformChips />
+        {platformChips ? <PlatformChips /> : null}
       </div>
       {actions ? <div className="page-header-actions">{actions}</div> : null}
       {refreshMenu.menuNode}
