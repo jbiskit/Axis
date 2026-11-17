@@ -140,6 +140,29 @@ const stateLabel = (state: unknown) => (state === "enabledForReportingButNotEnfo
 const stateTone = (state: unknown) => (state === "enabledForReportingButNotEnforced" ? "report" : state === "enabled" ? "on" : "off");
 const outcome = (row: ReviewRow) => [grantText(row), ...sessionItems(row)].filter(Boolean).join(" · ") || "No controls";
 
+const list = (items: string[], max = 3) => (items.length > max ? `${items.slice(0, max).join(", ")} and ${items.length - max} more` : items.join(", "));
+
+/** "Blocks X signing in to Y, from outside Z." — the lane as one sentence. */
+function plainSummary(row: ReviewRow, names: ReviewNames, labels: Record<Gate, string>): string {
+  const users = userTargets(row, names);
+  const apps = resourceTargets(row, names);
+  const locations = asRecord(asRecord(row.conditions).locations);
+  const include = named(locations.includeLocations, names, LOCATION_SPECIAL).filter((name) => name !== LOCATION_SPECIAL.All);
+  const exclude = named(locations.excludeLocations, names, LOCATION_SPECIAL);
+  const except = (items: string[]) => (items.length ? ` (except ${list(items)})` : "");
+  const where = [
+    include.length ? `from ${list(include)}` : "",
+    exclude.length ? `${include.length ? "but not" : "from anywhere except"} ${list(exclude)}` : "",
+    labels.device !== "any" ? `on ${labels.device}` : "",
+    labels.risk !== "any" ? `when risk is ${labels.risk}` : "",
+  ].filter(Boolean);
+  const grant = grantText(row).replace(/^Require /, "Requires ");
+  const session = sessionItems(row);
+  const action = isBlock(row) ? "Blocks" : grant ? `${grant} for` : session.length ? `Applies ${list(session)} to` : "Does nothing for";
+  const also = grant && session.length ? ` Also applies ${list(session)}.` : "";
+  return `${action} ${list(users.include) || "no one"}${except(users.exclude)} signing in to ${list(apps.include) || "nothing"}${except(apps.exclude)}${where.length ? `, ${where.join(", ")}` : ""}.${also}`;
+}
+
 const PLATFORMS = ["", "windows", "macOS", "iOS", "android", "linux", "windowsPhone"];
 const CLIENTS = ["browser", "mobileAppsAndDesktopClients", "exchangeActiveSync", "easSupported", "other"];
 const RISKS = ["none", "low", "medium", "high"];
@@ -440,6 +463,30 @@ export function CaViewer({ signedIn }: { signedIn: boolean }) {
           title="Policy map"
           hint={trace ? `Tracing ${trace.label}` : "No order: every policy whose gates all pass applies. Block wins, grants stack (each policy must pass), and the strictest session control wins."}
         />
+        <details className="ca-howto">
+          <summary>ⓘ How to interpret</summary>
+          <ul>
+            <li>
+              Each row is one policy. Read it left to right as a sentence: if the user, app, network, device and risk all match, the outcome on the
+              right happens. A gate showing <em>any</em> means the policy doesn't check that condition.
+            </li>
+            <li>
+              Trace a sign-in above to mark each gate: <strong>✓</strong> means the sign-in meets that condition, <strong>✗</strong> means it doesn't
+              match. A ✗ ends that branch: the policy doesn't apply to this sign-in, and the gates after it show as not reached (hollow). Entra checks
+              every condition; the ✗ shown is the first one that failed.
+            </li>
+            <li>
+              A lane that makes it all the way to its outcome is a complete match. If the policy is <span className="ca-state-on">On</span>, its control is
+              enforced. If it's <span className="ca-state-report">Report-only</span> (amber, dashed), the result is only logged. Off policies are never
+              evaluated.
+            </li>
+            <li>
+              There's no order between policies: every complete match applies at once. Any Block wins; otherwise the user must satisfy every matching
+              policy's grant, and the strictest session control applies. The row under the map adds them up into the final result.
+            </li>
+            <li>With nothing traced, the lanes have no marks and the map shows how your policies are laid out.</li>
+          </ul>
+        </details>
         <div className="ca-form-actions">
           <label className="ca-toggle">
             <BooleanToggle checked={showOff} onChange={setShowOff} ariaLabel="Show disabled policies" />
@@ -510,6 +557,7 @@ export function CaViewer({ signedIn }: { signedIn: boolean }) {
                 <button type="button" className="ca-name" onClick={() => navigate(policyLink(row).href)} title="Open policy">
                   <strong>{rowTitle(row)}</strong>
                   <span className={`ca-state ca-state-${tone}`}>{stateLabel(row.state)}</span>
+                  <span className="ca-summary">{plainSummary(row, names, labels)}</span>
                 </button>
                 {GATES.map((gate, index) => {
                   const mark = !lane

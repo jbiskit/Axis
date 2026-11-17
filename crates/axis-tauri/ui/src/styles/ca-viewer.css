@@ -12,9 +12,9 @@
 .ca-map { --ca-line: var(--axis-border-strong); display: grid; overflow-x: auto; }
 .ca-lane {
   display: grid;
-  grid-template-columns: 28px minmax(180px, 1.4fr) repeat(5, minmax(96px, 1fr)) minmax(150px, 1.2fr);
+  grid-template-columns: 28px minmax(240px, 2.2fr) repeat(5, minmax(96px, 1fr)) minmax(150px, 1.2fr);
   align-items: start;
-  min-width: 960px;
+  min-width: 1040px;
   border-bottom: 1px solid var(--axis-border);
   padding: var(--axis-space-2) 0;
 }
@@ -24,6 +24,10 @@
 .ca-name { display: grid; gap: 2px; text-align: left; background: none; border: 0; padding: 0 var(--axis-space-2) 0 0; color: var(--axis-fg); cursor: pointer; font: inherit; }
 .ca-name strong { font-weight: 500; font-size: var(--axis-text-sm); }
 .ca-name:hover strong { color: var(--axis-accent); }
+.ca-summary { font-size: var(--axis-text-xs); color: var(--axis-muted-strong); line-height: 1.4; }
+.ca-howto { margin-top: var(--axis-space-2); font-size: var(--axis-text-sm); color: var(--axis-muted-strong); }
+.ca-howto summary { cursor: pointer; color: var(--axis-accent); width: max-content; }
+.ca-howto ul { margin: var(--axis-space-2) 0 0; padding-left: 1.2rem; display: grid; gap: var(--axis-space-1); max-width: 80ch; }
 .ca-state { font-size: var(--axis-text-2xs); }
 .ca-state-on { color: var(--axis-success); }
 .ca-state-report { color: var(--axis-warning); }
