@@ -1,6 +1,7 @@
 import type { TenantGlance } from "../types/glance";
 import { STALE_DEVICE_DAYS } from "../types/glance";
 import { navigate } from "../lib/route";
+import { useDebugTools } from "../lib/debugTools";
 import { healthTitle, healthValue, TenantHealthColumn, useTenantHealth } from "./TenantHealthPanel";
 import {
   AttentionTable,
@@ -50,6 +51,7 @@ export function TenantOverview({
   onRefresh: () => void;
 }) {
   const health = useTenantHealth(glance?.fetchedAt ?? "");
+  const debugTools = useDebugTools();
 
   if (!glance && loading) {
     return <p className="muted">Loading tenant overview…</p>;
@@ -335,6 +337,7 @@ export function TenantOverview({
         </section>
       </div>
 
+      {debugTools ? (
       <details className="axis-panel ov-diagnostics">
         <summary>Graph inventory and token scopes</summary>
         {glance.tokenScopes.length > 0 ? (
@@ -373,6 +376,7 @@ export function TenantOverview({
           </tbody>
         </table>
       </details>
+      ) : null}
     </div>
   );
 }

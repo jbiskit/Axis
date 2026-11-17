@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { getPreferences, setPreferences, type Preferences } from "../lib/tauri";
 import { navigate } from "../lib/route";
+import { saveDebugTools, useDebugTools } from "../lib/debugTools";
 import type { Density, Theme } from "../lib/theme";
 import { PageHeader, Panel, PanelHead } from "./ui/PageChrome";
 import { BooleanToggle } from "./workbench/BooleanToggle";
@@ -61,6 +62,7 @@ export function AppSettingsView({
   const [preferences, setLocal] = useState<Preferences | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const debugTools = useDebugTools();
 
   useEffect(() => {
     void getPreferences()
@@ -151,6 +153,18 @@ export function AppSettingsView({
             disabled={!preferences || saving}
             onChange={(value) => void update({ undoStateTracking: value })}
             hint="Reads each object just before and just after Axis changes it. Undo uses those reads to put the object back, and to stop when someone changed it since. This adds two Graph reads per write, so large bulk changes are slower and more likely to be throttled. When off, writes are still recorded but cannot be undone, including writes made while it was off."
+          />
+        </div>
+      </Panel>
+
+      <Panel padded>
+        <PanelHead title="Troubleshooting" />
+        <div className="stack" style={{ marginTop: "0.75rem" }}>
+          <SettingRow
+            label="Debug tools"
+            checked={debugTools}
+            onChange={saveDebugTools}
+            hint="Shows raw Graph payloads and diagnostics: raw settings, template references and raw template payloads on Settings Catalog policies, raw policy diagnostics on devices, and Graph inventory and token scopes on the Overview."
           />
         </div>
       </Panel>

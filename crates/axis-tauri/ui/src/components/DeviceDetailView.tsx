@@ -18,6 +18,7 @@ import { DeviceBaselineCompare } from "./devices/DeviceBaselineCompare";
 import { DeviceHardwareDetailsPanel } from "./devices/DeviceHardwareDetailsPanel";
 import { DeviceRecoveryPanel } from "./devices/DeviceRecoveryPanel";
 import { closeThisWindow, popOutObject } from "../lib/popout";
+import { useDebugTools } from "../lib/debugTools";
 import { intuneDeviceUrl } from "../lib/intune/portalLinks";
 import { OpenInIntune } from "./intune/OpenInIntune";
 import {
@@ -96,6 +97,7 @@ export function DeviceDetailView({
   cachedEntry?: DeviceDetailCacheEntry;
   onCacheUpdate?: (entry: DeviceDetailCacheEntry) => void;
 }) {
+  const debugTools = useDebugTools();
   const [device, setDevice] = useState<ManagedDeviceDetail | null>(
     cachedEntry?.device ?? null,
   );
@@ -671,6 +673,7 @@ export function DeviceDetailView({
             </div>
           ) : null}
 
+          {debugTools ? (
           <details className="axis-panel" style={{ padding: "0.75rem" }}>
             <summary>Raw Graph policy diagnostics</summary>
             <p className="muted">
@@ -684,6 +687,7 @@ export function DeviceDetailView({
               {JSON.stringify(device.policyDiagnostics?.rawStates ?? [], null, 2)}
             </pre>
           </details>
+          ) : null}
 
           {applied.length === 0 ? (
             <p className="muted">No assigned configuration or compliance policies were matched for this device.</p>

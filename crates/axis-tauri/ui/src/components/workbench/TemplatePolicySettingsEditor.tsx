@@ -32,6 +32,7 @@ import { SettingDraftEditor } from "./SettingDraftEditor";
 import { SettingValueDiff } from "./SettingValueDiff";
 import { settingEditIsDirty, usePersistedPolicySettingsDraft } from "../../lib/inspectorDrafts";
 import { useInspectorSaveAction } from "./inspectorSave";
+import { useDebugTools } from "../../lib/debugTools";
 
 function templateIdFromObject(object: Record<string, unknown>): string | null {
   const reference =
@@ -63,6 +64,7 @@ export function TemplatePolicySettingsEditor({
   const templateId = templateIdFromObject(object);
   const [nodes, setNodes] = useState<TemplateSettingNode[] | null>(null);
   const [rawTemplates, setRawTemplates] = useState<unknown>(null);
+  const debugTools = useDebugTools();
   const [templateError, setTemplateError] = useState<string | null>(null);
   const { edits, setEdits, stagedRemoves, setStagedRemoves, editingId, setEditingId } =
     usePersistedPolicySettingsDraft(policyId);
@@ -606,18 +608,22 @@ export function TemplatePolicySettingsEditor({
       {nodes != null && nodes.length === 0 && !templateError ? (
         <p className="muted">This template defines no settings.</p>
       ) : null}
-      <details className="template-settings-diagnostic">
-        <summary>Raw settings ({settings.length})</summary>
-        <pre className="inspector-code">{JSON.stringify(settings, null, 2)}</pre>
-      </details>
-      <details className="template-settings-diagnostic">
-        <summary>Template references ({Object.keys(templateRefByDefinition).length})</summary>
-        <pre className="inspector-code">{JSON.stringify(templateRefByDefinition, null, 2)}</pre>
-      </details>
-      <details className="template-settings-diagnostic">
-        <summary>Raw template payload</summary>
-        <pre className="inspector-code">{JSON.stringify(rawTemplates, null, 2)}</pre>
-      </details>
+      {debugTools ? (
+        <>
+          <details className="template-settings-diagnostic">
+            <summary>Raw settings ({settings.length})</summary>
+            <pre className="inspector-code">{JSON.stringify(settings, null, 2)}</pre>
+          </details>
+          <details className="template-settings-diagnostic">
+            <summary>Template references ({Object.keys(templateRefByDefinition).length})</summary>
+            <pre className="inspector-code">{JSON.stringify(templateRefByDefinition, null, 2)}</pre>
+          </details>
+          <details className="template-settings-diagnostic">
+            <summary>Raw template payload</summary>
+            <pre className="inspector-code">{JSON.stringify(rawTemplates, null, 2)}</pre>
+          </details>
+        </>
+      ) : null}
       {nodes != null && nodes.length > 0 && anyVisible ? (
         <div className="setting-group-sections">
           {groupedNodes.map((section) => (
