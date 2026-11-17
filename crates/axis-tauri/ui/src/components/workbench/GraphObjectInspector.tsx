@@ -36,13 +36,14 @@ import { ScriptRunSettingsFields } from "./ScriptRunSettingsFields";
 import { PageHeader } from "../ui/PageChrome";
 import { CatalogSettingInstances } from "./CatalogSettingInstances";
 import { CompliancePolicyStatus } from "./CompliancePolicyStatus";
+import { DeviceConfigurationStatus } from "./DeviceConfigurationStatus";
 import { ComplianceSettingsView } from "./ComplianceSettingsView";
 import { InspectorSaveButton, InspectorSaveProvider } from "./inspectorSave";
 import { PolicySettingsEditor } from "./PolicySettingsEditor";
 import { TemplatePolicySettingsEditor } from "./TemplatePolicySettingsEditor";
 import { AssignmentsDialog } from "./PolicyBulkAssign";
 import { ScriptRunStatus } from "./RemediationDeviceStatus";
-import { formatRelative, IncompleteBanner, InspectorErrorBoundary } from "./shared";
+import { IncompleteBanner, InspectorErrorBoundary } from "./shared";
 import {
   isEnrollmentPlatformRestrictionsObject,
 } from "../../lib/enrollmentRestrictions";
@@ -238,116 +239,6 @@ function ExportJsonDialog({
       </div>
     </div>
   );
-}
-
-function overviewRows(detail: GraphObjectDetail): Array<{ label: string; value: string }> {
-  const object = asRecord(detail.object) ?? {};
-  const keys = [
-    ["Description", "description"],
-    ["Status", "status"],
-    ["Error code", "errorCode"],
-    ["Priority", "priority"],
-    ["Platform", "platformType"],
-    ["Enrollment type", "deviceEnrollmentConfigurationType"],
-    ["Device limit", "limit"],
-    ["Publisher", "publisher"],
-    ["Version", "version"],
-    ["Version", "displayVersion"],
-    ["File", "fileName"],
-    ["Package id", "packageIdentifier"],
-    ["Publishing", "publishingState"],
-    ["Platforms", "platforms"],
-    ["Technologies", "technologies"],
-    ["Settings", "settingCount"],
-    ["Join type", "deviceJoinType"],
-    ["Name template", "deviceNameTemplate"],
-    ["Serial", "serialNumber"],
-    ["Group tag", "groupTag"],
-    ["Manufacturer", "manufacturer"],
-    ["Model", "model"],
-    ["Enrollment", "enrollmentState"],
-    ["User", "userPrincipalName"],
-    ["Profile status", "deploymentProfileAssignmentStatus"],
-    ["Managed device", "managedDeviceId"],
-    ["Type", "@odata.type"],
-    ["Created", "createdDateTime"],
-    ["Modified", "lastModifiedDateTime"],
-  ] as const;
-  const rows: Array<{ label: string; value: string }> = [
-    { label: "Id", value: detail.id },
-    { label: "Kind", value: detail.kind },
-  ];
-  // "Assigned" answers "does this object have assignment targets?". It only
-  // applies to objects that Graph assigns to groups — Autopilot devices and
-  // policy sets have no assignment concept, so the row is omitted for them
-  // rather than reported as "No".
-  const hasAssignmentConcept =
-    !detail.kind.startsWith("autopilot") && detail.kind !== "policySet" && !isReviewKind(detail.kind);
-  const assigned = !hasAssignmentConcept
-    ? null
-    : typeof object.isAssigned === "boolean"
-      ? object.isAssigned
-      : Array.isArray(detail.assignments)
-        ? detail.assignments.length > 0
-        : null;
-  if (assigned != null) {
-    rows.push({
-      label: "Assigned",
-      value:
-        assigned && detail.assignments.length > 1
-          ? `Yes (${detail.assignments.length})`
-          : assigned
-            ? "Yes"
-            : "No",
-    });
-  }
-  if (detail.kind.startsWith("script:")) {
-    if (detail.kind === "script:remediation") {
-      rows.push({
-        label: "Detection script",
-        value: detail.detectionScriptText?.trim() ? "Yes" : "No",
-      });
-      rows.push({
-        label: "Remediation script",
-        value: detail.remediationScriptText?.trim() ? "Yes" : "No",
-      });
-    }
-    rows.push({
-      label: "Run this script using the logged-on credentials",
-      value: object.runAsAccount === "user" ? "Yes" : "No",
-    });
-    if (detail.kind !== "script:platform-shell") {
-      rows.push({
-        label: "Enforce script signature check",
-        value: object.enforceSignatureCheck === true ? "Yes" : "No",
-      });
-      rows.push({
-        label: "Run script in 64-bit PowerShell",
-        value: object.runAs32Bit === true ? "No" : "Yes",
-      });
-    }
-  }
-  for (const [label, key] of keys) {
-    const raw = object[key];
-    if (raw == null || raw === "") continue;
-    if (
-      key === "deviceNameTemplate" &&
-      String(object["@odata.type"] ?? "")
-        .toLowerCase()
-        .includes("activedirectory")
-    ) {
-      continue;
-    }
-    if (key.endsWith("DateTime") && typeof raw === "string") {
-      rows.push({ label, value: formatRelative(raw) });
-    } else if (typeof raw === "boolean") {
-      rows.push({ label, value: raw ? "Yes" : "No" });
-    } else {
-      const value = text(raw);
-      if (value) rows.push({ label, value });
-    }
-  }
-  return rows;
 }
 
 function hasScript(detail: GraphObjectDetail): boolean {
@@ -599,28 +490,6 @@ export function GraphObjectInspector({
       typeof templateReference.templateId === "string" &&
       templateReference.templateId.trim(),
   );
-  const rows = useMemo(() => {
-    if (!detail) return [];
-    const all = [...overviewRows(detail)];
-    if (kind === "policySet" && policySetItems.length) {
-      all.push({
-        label: "Items",
-        value: String(policySetItems.length),
-      });
-    }
-    if (kind === "mobileApp" && isWin32LobApp(asRecord(detail.object))) {
-      const keep = new Set(["Id", "Kind", "Assigned", "File", "Created", "Modified"]);
-      return all.filter((row) => keep.has(row.label));
-    }
-    if (kind === "mobileApp" && isWinGetApp(asRecord(detail.object))) {
-      const keep = new Set(["Id", "Kind", "Assigned", "Package id", "Created", "Modified"]);
-      return all.filter((row) => keep.has(row.label));
-    }
-    if (kind !== "autopilotProfile" && kind !== "autopilotDevice") return all;
-    // Structured Autopilot sections own join / OOBE / identity fields — keep a slim header.
-    const keep = new Set(["Id", "Kind", "Assigned", "Description", "Created", "Modified"]);
-    return all.filter((row) => keep.has(row.label));
-  }, [detail, kind, policySetItems.length]);
   const showRestrictionEditor =
     kind === "enrollmentConfiguration" &&
     isEnrollmentPlatformRestrictionsObject(asRecord(detail?.object));
@@ -637,8 +506,22 @@ export function GraphObjectInspector({
   const appIcon = kind === "mobileApp" ? graphLargeIcon(asRecord(detail?.object)) : null;
   const showWin32Editor = kind === "mobileApp" && isWin32LobApp(asRecord(detail?.object));
   const showStoreEditor = kind === "mobileApp" && isWinGetApp(asRecord(detail?.object));
+  // No tab without content: kinds whose editor lives on Overview (rings, feature updates) and objects
+  // with no settings, scripts or related data. Additional information still has the raw payload.
   const hideEmptySettingsTab =
-    kind === "autopilotProfile" || kind === "autopilotDevice" || kind === "mobileApp";
+    kind === "autopilotProfile" ||
+    kind === "autopilotDevice" ||
+    kind === "mobileApp" ||
+    (detail != null &&
+      kind !== "configurationPolicy" &&
+      kind !== "compliancePolicy" &&
+      !scriptInfo &&
+      !hasScript(detail) &&
+      settings.length === 0 &&
+      !extras);
+  useEffect(() => {
+    if (tab === "payload" && hideEmptySettingsTab) setTab("overview");
+  }, [tab, hideEmptySettingsTab]);
   const dependencyApp: MobileAppSummary | null =
     kind === "mobileApp" && detail
       ? {
@@ -666,6 +549,7 @@ export function GraphObjectInspector({
   const inspectorTabs: Array<[InspectorTab, string]> = [
     ["overview", "Overview"],
     ...(kind === "compliancePolicy" ||
+    kind === "windowsUpdate:rings" ||
     kind === "script:remediation" ||
     kind.startsWith("script:platform-")
       ? ([["status", "Device status"]] as Array<[InspectorTab, string]>)
@@ -939,14 +823,6 @@ export function GraphObjectInspector({
                   <TenantAppIcon mimeType={appIcon.iconType} value={appIcon.iconValue} />
                 </div>
               ) : null}
-              <dl className="meta-grid">
-                {rows.map((row) => (
-                  <div key={row.label}>
-                    <dt>{row.label}</dt>
-                    <dd>{row.value}</dd>
-                  </div>
-                ))}
-              </dl>
               {summary}
               {showRingEditor ? (
                 <WindowsUpdateRingEditor ringId={detail.id} onSaved={() => void reloadDetail()} />
@@ -997,6 +873,9 @@ export function GraphObjectInspector({
           ) : null}
           {tab === "status" && kind === "compliancePolicy" ? (
             <CompliancePolicyStatus policyId={detail.id} />
+          ) : null}
+          {tab === "status" && kind === "windowsUpdate:rings" ? (
+            <DeviceConfigurationStatus policyId={detail.id} />
           ) : null}
           {tab === "status" &&
           (kind === "script:remediation" || kind.startsWith("script:platform-")) ? (
@@ -1237,16 +1116,6 @@ export function GraphObjectInspector({
                   <h2 style={{ margin: "0 0 0.5rem", fontSize: "0.85rem" }}>Related Graph data</h2>
                   <pre className="inspector-code">{pretty(extras)}</pre>
                 </section>
-              ) : null}
-              {kind !== "configurationPolicy" &&
-              kind !== "compliancePolicy" &&
-              !hasScript(detail) &&
-              settings.length === 0 &&
-              !extras ? (
-                <p className="muted">
-                  No setting instances or script bodies on this object. Use Additional information
-                  for the full Graph payload.
-                </p>
               ) : null}
             </div>
         </>

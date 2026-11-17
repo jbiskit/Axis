@@ -211,7 +211,7 @@ pub use pack_restore::{
     RestoreCandidate, RestoreItemStatus, RestoreMode, RestorePlan, RestorePlanItem,
 };
 pub use policy_health::{
-    fetch_app_install_health, fetch_configuration_policy_health, index_app_install,
+    fetch_app_install_health, fetch_configuration_policy_health, fetch_device_configuration_devices, index_app_install,
     index_policy_health, lookup_app_install, lookup_policy_health, AppInstallHealth, PolicyHealth,
 };
 pub use ca_coverage::{fetch_conditional_access_coverage, ConditionalAccessCoverage};

@@ -71,7 +71,7 @@ pub async fn fetch_configuration_policy_health(
     let client = GraphClient::new();
     let mut last_error = None;
     for path in REPORT_PATHS {
-        match fetch_report_pages(&client, access_token, path, SELECT).await {
+        match fetch_report_pages(&client, access_token, path, SELECT, "").await {
             Ok(payload) => {
                 return Ok(rows_from_report(&payload)
                     .into_iter()
@@ -152,7 +152,7 @@ pub async fn fetch_app_install_health(
     let client = GraphClient::new();
     let mut last_error = None;
     for path in APP_REPORT_PATHS {
-        match fetch_report_pages(&client, access_token, path, APP_SELECT).await {
+        match fetch_report_pages(&client, access_token, path, APP_SELECT, "").await {
             Ok(payload) => {
                 return Ok(rows_from_report(&payload)
                     .into_iter()
@@ -220,9 +220,36 @@ fn map_app_install(row: Value) -> Option<AppInstallHealth> {
 }
 
 /// Every row of an Intune `get*` report as an object keyed by column (all columns, `_loc` labels included).
-pub(crate) async fn fetch_report_rows(access_token: &str, path: &str) -> Result<Vec<Value>, GraphError> {
-    let payload = fetch_report_pages(&GraphClient::new(), access_token, path, &[]).await?;
+/// `filter` is the report's own filter, e.g. `(PolicyId eq '…')`; empty for every row.
+pub(crate) async fn fetch_report_rows(access_token: &str, path: &str, filter: &str) -> Result<Vec<Value>, GraphError> {
+    let payload = fetch_report_pages(&GraphClient::new(), access_token, path, &[], filter).await?;
     Ok(rows_from_report(&payload))
+}
+
+/// Per-device status of one classic device configuration (update rings included), from the report
+/// behind the portal's Device status. `deviceStatusOverview` stays at zero for rings, so it isn't used.
+pub async fn fetch_device_configuration_devices(access_token: &str, policy_id: &str) -> Result<Vec<Value>, GraphError> {
+    // The id is spliced into the report filter, so only a GUID gets through.
+    if !is_guid(policy_id) {
+        return Err(GraphError::Request {
+            status: 400,
+            code: None,
+            message: format!("Not a policy id: {policy_id}"),
+            permission_related: false,
+        });
+    }
+    fetch_report_rows(
+        access_token,
+        "/deviceManagement/reports/getConfigurationPolicyDevicesReport",
+        &format!("(PolicyId eq '{policy_id}') and (PolicyBaseTypeName eq 'DeviceConfiguration')"),
+    )
+    .await
+}
+
+fn is_guid(value: &str) -> bool {
+    let parts: Vec<&str> = value.split('-').collect();
+    parts.iter().map(|part| part.len()).eq([8, 4, 4, 4, 12])
+        && parts.iter().all(|part| part.chars().all(|c| c.is_ascii_hexdigit()))
 }
 
 async fn fetch_report_pages(
@@ -230,11 +257,12 @@ async fn fetch_report_pages(
     access_token: &str,
     path: &str,
     select: &[&str],
+    filter: &str,
 ) -> Result<IntuneReportPayload, GraphError> {
     let page_size = 50i64;
     let base = json!({
         "select": select,
-        "filter": "",
+        "filter": filter,
         "skip": 0,
         "top": page_size,
     });
@@ -253,7 +281,7 @@ async fn fetch_report_pages(
         }
         let page_body = json!({
             "select": select,
-            "filter": "",
+            "filter": filter,
             "skip": skip,
             "top": page_size,
         });

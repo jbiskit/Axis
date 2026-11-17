@@ -1864,6 +1864,18 @@ pub async fn fetch_conditional_access_coverage_cmd(
         .map_err(|error| error.to_string())
 }
 
+/// Per-device rows for a classic device configuration (update rings): the portal's Device status report.
+#[tauri::command]
+pub async fn fetch_device_configuration_devices_cmd(
+    state: State<'_, AppState>,
+    policy_id: String,
+) -> Result<Vec<serde_json::Value>, String> {
+    let token = session_token(&state).await?.unwrap_or_default();
+    axis_sdk::fetch_device_configuration_devices(&token, &policy_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 pub async fn resolve_review_names_cmd(
     state: State<'_, AppState>,

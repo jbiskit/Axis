@@ -620,7 +620,12 @@ export async function fetchReviewObjects(kind: ReviewKind): Promise<InventoryRes
   return invoke("fetch_review_objects_cmd", { kind });
 }
 
-export type ReviewReferences = Partial<Record<"users" | "groups" | "roles" | "apps" | "locations", string[]>>;
+/** Report rows (`DeviceName`, `UPN`, `ReportStatus_loc`, `PspdpuLastModifiedTimeUtc`, …) for a classic device configuration. */
+export async function fetchDeviceConfigurationDevices(policyId: string): Promise<Array<Record<string, unknown>>> {
+  return invoke("fetch_device_configuration_devices_cmd", { policyId });
+}
+
+export type ReviewReferences =Partial<Record<"users" | "groups" | "roles" | "apps" | "locations", string[]>>;
 
 /** id → display name; ids Graph can't read are missing from the map. */
 export async function resolveReviewNames(refs: ReviewReferences): Promise<Record<string, string>> {

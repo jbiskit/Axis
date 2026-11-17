@@ -330,6 +330,7 @@ pub fn run() {
             commands::fetch_endpoint_security_intents_cmd,
             commands::fetch_app_protection_policies_cmd,
             commands::fetch_review_objects_cmd,
+            commands::fetch_device_configuration_devices_cmd,
             commands::resolve_review_names_cmd,
             commands::fetch_conditional_access_coverage_cmd,
             commands::fetch_policy_sets_cmd,

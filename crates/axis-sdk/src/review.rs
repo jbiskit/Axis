@@ -241,6 +241,7 @@ async fn assignment_failures(access_token: &str) -> Result<Vec<Value>, GraphErro
     let mut rows = crate::policy_health::fetch_report_rows(
         access_token,
         "/deviceManagement/reports/getConfigurationPolicyNonComplianceSummaryReport",
+        "",
     )
     .await?;
     let failures = |row: &Value| {
@@ -266,7 +267,7 @@ async fn update_alerts(access_token: &str) -> Result<Vec<Value>, GraphError> {
         ("Quality", "getWindowsQualityUpdateAlertSummaryReport"),
         ("Driver", "getWindowsDriverUpdateAlertSummaryReport"),
     ] {
-        let rows = crate::policy_health::fetch_report_rows(access_token, &format!("/deviceManagement/reports/{report}")).await?;
+        let rows = crate::policy_health::fetch_report_rows(access_token, &format!("/deviceManagement/reports/{report}"), "").await?;
         out.extend(rows.into_iter().map(|mut row| {
             if let Some(object) = row.as_object_mut() {
                 let id = format!("{update_type}:{}", object.get("PolicyId").and_then(Value::as_str).unwrap_or_default());
