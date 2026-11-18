@@ -662,6 +662,10 @@ export async function evaluateConditionalAccess(request: Record<string, unknown>
   return invoke("evaluate_conditional_access_cmd", { request });
 }
 
+export async function searchConditionalAccessApps(query: string): Promise<Array<{ appId: string; displayName: string }>> {
+  return invoke("search_conditional_access_apps_cmd", { query });
+}
+
 export async function fetchPolicySets(): Promise<InventoryResponse<PolicySetSummary>> {
   return invoke("fetch_policy_sets_cmd");
 }

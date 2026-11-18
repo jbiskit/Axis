@@ -215,7 +215,7 @@ pub use policy_health::{
     fetch_app_install_health, fetch_configuration_policy_health, fetch_device_configuration_devices, index_app_install,
     index_policy_health, lookup_app_install, lookup_policy_health, AppInstallHealth, PolicyHealth,
 };
-pub use ca_coverage::{evaluate_conditional_access, fetch_conditional_access_coverage, fetch_conditional_access_sign_ins, ConditionalAccessCoverage};
+pub use ca_coverage::{evaluate_conditional_access, fetch_conditional_access_coverage, fetch_conditional_access_sign_ins, search_conditional_access_apps, ConditionalAccessCoverage};
 pub use review::{
     fetch_review_objects, fetch_review_row, is_row_only_review_kind, resolve_review_names,
     ReviewReferences,

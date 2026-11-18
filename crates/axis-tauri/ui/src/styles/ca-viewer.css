@@ -1,7 +1,18 @@
 /* Conditional Access viewer: waterfall policy map (components/modules/CaViewer.tsx). */
 .ca-viewer { display: grid; gap: var(--axis-space-4); }
 .ca-form { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: var(--axis-space-3); margin-top: var(--axis-space-3); }
-.ca-form label { display: grid; gap: var(--axis-space-1); font-size: var(--axis-text-xs); color: var(--axis-muted); }
+.ca-form label, .ca-picker { display: grid; gap: var(--axis-space-1); font-size: var(--axis-text-xs); color: var(--axis-muted); }
+.ca-picker { position: relative; grid-column: span 2; }
+.ca-picker-list {
+  position: absolute; top: 100%; left: 0; right: 0; z-index: 20; margin: 2px 0 0; padding: 4px 0; list-style: none;
+  max-height: 280px; overflow: auto; background: var(--axis-surface); border: 1px solid var(--axis-border-strong); border-radius: 6px;
+  box-shadow: 0 6px 18px rgb(0 0 0 / 0.25);
+}
+.ca-picker-list button {
+  display: flex; justify-content: space-between; gap: var(--axis-space-2); width: 100%; padding: 6px 10px;
+  background: none; border: 0; text-align: left; font: inherit; font-size: var(--axis-text-sm); color: var(--axis-fg); cursor: pointer;
+}
+.ca-picker-list button:hover { background: var(--axis-accent-soft); }
 .ca-form-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--axis-space-2); margin: var(--axis-space-3) 0; }
 .ca-form-actions .axis-input { flex: 1; min-width: 200px; }
 .ca-toggle { display: inline-flex; align-items: center; gap: var(--axis-space-2); font-size: var(--axis-text-sm); color: var(--axis-muted-strong); }

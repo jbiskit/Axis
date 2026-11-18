@@ -291,3 +291,11 @@ pub async fn evaluate_conditional_access(access_token: &str, mut request: Value)
     let result: Value = client.post(access_token, "/identity/conditionalAccess/evaluate", "beta", &request).await?;
     Ok(result["value"].as_array().cloned().unwrap_or_default())
 }
+
+/// Enterprise apps whose display name starts with `query`, for the what-if app picker.
+pub async fn search_conditional_access_apps(access_token: &str, query: &str) -> Result<Vec<Value>, GraphError> {
+    let query = query.trim().replace('\'', "''").replace(['#', '&', '?'], "");
+    let path = format!("/servicePrincipals?$filter=startswith(displayName,'{query}')&$select=appId,displayName&$top=20");
+    let page: Value = GraphClient::new().fetch_plain(access_token, &path, "beta").await?;
+    Ok(page["value"].as_array().cloned().unwrap_or_default())
+}

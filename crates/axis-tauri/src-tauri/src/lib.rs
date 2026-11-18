@@ -335,6 +335,7 @@ pub fn run() {
             commands::fetch_conditional_access_coverage_cmd,
             commands::fetch_conditional_access_sign_ins_cmd,
             commands::evaluate_conditional_access_cmd,
+            commands::search_conditional_access_apps_cmd,
             commands::fetch_policy_sets_cmd,
             commands::fetch_tenant_scripts_cmd,
             commands::fetch_autopilot_devices_cmd,

@@ -1,7 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { useInventory } from "../../hooks/useInventory";
 import { navigate } from "../../lib/route";
-import { evaluateConditionalAccess, fetchConditionalAccessSignIns, saveTextFile } from "../../lib/tauri";
+import {
+  evaluateConditionalAccess,
+  fetchConditionalAccessSignIns,
+  saveTextFile,
+  searchConditionalAccessApps,
+  searchReadinessUsers,
+} from "../../lib/tauri";
 import { PageHeader, Panel, PanelHead } from "../ui/PageChrome";
 import { BooleanToggle } from "../workbench/BooleanToggle";
 import { SelectCheckbox, useCheckedIds } from "../workbench/PolicyBulkAssign";
@@ -176,8 +182,116 @@ const KNOWN_APPS: Array<[string, string]> = [
   ["0000000a-0000-0000-c000-000000000000", "Microsoft Intune"],
 ];
 
-type WhatIf = { user: string; app: string; platform: string; client: string; country: string; ip: string; signInRisk: string; userRisk: string };
-const EMPTY_WHAT_IF: WhatIf = { user: "", app: KNOWN_APPS[0][0], platform: "windows", client: "browser", country: "", ip: "", signInRisk: "none", userRisk: "none" };
+type WhatIf = {
+  user: string;
+  userLabel: string;
+  app: string;
+  appLabel: string;
+  platform: string;
+  client: string;
+  country: string;
+  ip: string;
+  signInRisk: string;
+  userRisk: string;
+};
+const EMPTY_WHAT_IF: WhatIf = {
+  user: "",
+  userLabel: "",
+  app: KNOWN_APPS[0][0],
+  appLabel: KNOWN_APPS[0][1],
+  platform: "windows",
+  client: "browser",
+  country: "",
+  ip: "",
+  signInRisk: "none",
+  userRisk: "none",
+};
+
+type PickOption = { id: string; label: string; detail?: string };
+const looksLikeId = (text: string) => text.includes("@") || /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(text);
+
+/** Type to filter: local options match on name, `search` adds tenant matches from Graph. */
+function Picker({
+  label,
+  text,
+  placeholder,
+  local = [],
+  search,
+  onPick,
+}: {
+  label: string;
+  text: string;
+  placeholder: string;
+  local?: PickOption[];
+  search: (query: string) => Promise<PickOption[]>;
+  onPick: (option: PickOption) => void;
+}) {
+  const [query, setQuery] = useState<string | null>(null);
+  const [remote, setRemote] = useState<PickOption[]>([]);
+  const typed = query ?? "";
+  useEffect(() => {
+    if (query === null || typed.trim().length < 2) {
+      setRemote([]);
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      search(typed.trim())
+        .then((found) => !cancelled && setRemote(found))
+        .catch(() => !cancelled && setRemote([]));
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [typed, query === null]); // eslint-disable-line react-hooks/exhaustive-deps
+  const needle = typed.trim().toLowerCase();
+  const seen = new Set<string>();
+  const options = [...local.filter((option) => !needle || `${option.label} ${option.detail ?? ""}`.toLowerCase().includes(needle)), ...remote]
+    .filter((option) => !seen.has(option.id) && Boolean(seen.add(option.id)))
+    .slice(0, 12);
+  const pick = (option: PickOption) => {
+    onPick(option);
+    setQuery(null);
+  };
+  return (
+    <div className="ca-picker">
+      <span>{label}</span>
+      <input
+        className="axis-input"
+        value={query ?? text}
+        placeholder={text || placeholder}
+        onFocus={() => setQuery("")}
+        onChange={(event) => setQuery(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && options[0]) pick(options[0]);
+          if (event.key === "Escape") setQuery(null);
+        }}
+        onBlur={() => {
+          // A typed UPN or id still works without picking from the list.
+          if (query && looksLikeId(query.trim())) onPick({ id: query.trim(), label: query.trim() });
+          setQuery(null);
+        }}
+      />
+      {query !== null && options.length ? (
+        <ul className="ca-picker-list" role="listbox">
+          {options.map((option) => (
+            <li key={option.id}>
+              <button type="button" onMouseDown={(event) => (event.preventDefault(), pick(option))}>
+                <span>{option.label}</span>
+                {option.detail ? <span className="muted">{option.detail}</span> : null}
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
+const searchUsers = (query: string) =>
+  searchReadinessUsers(query).then(({ users }) => users.map((user) => ({ id: user.id, label: user.displayName, detail: user.userPrincipalName })));
+const searchApps = (query: string) => searchConditionalAccessApps(query).then((apps) => apps.map((app) => ({ id: app.appId, label: app.displayName })));
 
 function whatIfBody(input: WhatIf) {
   const conditions: Record<string, unknown> = {
@@ -202,9 +316,12 @@ function whatIfFromSignIn(signIn: Record<string, unknown>): WhatIf {
   const platform = PLATFORMS.find((value) => value && os.startsWith(value.toLowerCase())) ?? (os.startsWith("mac") ? "macOS" : "");
   const client = String(signIn.clientAppUsed ?? "");
   const risk = String(signIn.riskLevelDuringSignIn ?? "none");
+  const upn = String(signIn.userPrincipalName ?? "");
   return {
-    user: String(signIn.userId ?? signIn.userPrincipalName ?? ""),
+    user: String(signIn.userId ?? upn),
+    userLabel: signIn.userDisplayName ? `${signIn.userDisplayName} (${upn})` : upn,
     app: String(signIn.appId ?? ""),
+    appLabel: String(signIn.appDisplayName ?? signIn.appId ?? ""),
     platform,
     client: client === "Browser" ? "browser" : /mobile apps/i.test(client) ? "mobileAppsAndDesktopClients" : /activesync/i.test(client) ? "exchangeActiveSync" : "other",
     country: String(asRecord(signIn.location).countryOrRegion ?? ""),
@@ -252,6 +369,15 @@ export function CaViewer({ signedIn }: { signedIn: boolean }) {
     };
   }, [rows]);
 
+  // Picker shortlist: well-known apps plus every named app the policies target.
+  const appOptions = useMemo(() => {
+    const ids = rows.flatMap((row) => asList(asRecord(asRecord(row.conditions).applications).includeApplications));
+    return [
+      ...KNOWN_APPS.map(([id, label]) => ({ id, label })),
+      ...ids.filter((id) => looksLikeId(id) && names[id]).map((id) => ({ id, label: names[id] })),
+    ];
+  }, [rows, names]);
+
   const lanes = rows.filter((row) => showOff || row.state !== "disabled");
   const laneIds = lanes.map((row) => String(row.id));
   const selection = useCheckedIds(laneIds);
@@ -265,11 +391,11 @@ export function CaViewer({ signedIn }: { signedIn: boolean }) {
   };
   const evaluate = () => {
     if (!form.user.trim() || !form.app.trim()) {
-      setError("Enter a user and an app id first.");
+      setError("Pick a user and an app first.");
       return;
     }
-    const app = KNOWN_APPS.find(([id]) => id === form.app.trim())?.[1] ?? form.app.trim();
-    run(evaluateConditionalAccess(whatIfBody(form)).then((results) => setTrace(whatIfTrace(`What-if · ${form.user.trim()} · ${app}`, results))));
+    const label = `What-if · ${form.userLabel || form.user} · ${form.appLabel || form.app}`;
+    run(evaluateConditionalAccess(whatIfBody(form)).then((results) => setTrace(whatIfTrace(label, results))));
   };
   const loadSignIns = () => run(fetchConditionalAccessSignIns(search).then(setSignIns));
   const refresh = () => {
@@ -316,21 +442,21 @@ export function CaViewer({ signedIn }: { signedIn: boolean }) {
 
         {mode === "whatif" ? (
           <div className="ca-form">
-            <label>
-              User (UPN or id)
-              <input className="axis-input" value={form.user} placeholder="alex@contoso.com" onChange={(event) => setForm({ ...form, user: event.target.value })} />
-            </label>
-            <label>
-              App id
-              <input className="axis-input" list="ca-viewer-apps" value={form.app} onChange={(event) => setForm({ ...form, app: event.target.value })} />
-              <datalist id="ca-viewer-apps">
-                {KNOWN_APPS.map(([id, label]) => (
-                  <option key={id} value={id}>
-                    {label}
-                  </option>
-                ))}
-              </datalist>
-            </label>
+            <Picker
+              label="User"
+              text={form.userLabel}
+              placeholder="Search by name or UPN"
+              search={searchUsers}
+              onPick={(user) => setForm({ ...form, user: user.id, userLabel: user.detail ? `${user.label} (${user.detail})` : user.label })}
+            />
+            <Picker
+              label="App"
+              text={form.appLabel}
+              placeholder="Search apps"
+              local={appOptions}
+              search={searchApps}
+              onPick={(app) => setForm({ ...form, app: app.id, appLabel: app.label })}
+            />
             <label>
               Platform
               <select className="axis-input" value={form.platform} onChange={(event) => setForm({ ...form, platform: event.target.value })}>
