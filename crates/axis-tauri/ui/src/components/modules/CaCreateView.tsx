@@ -1,7 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useInventory } from "../../hooks/useInventory";
 import { navigate } from "../../lib/route";
-import { createConditionalAccessPolicy, saveTextFile } from "../../lib/tauri";
+import { createConditionalAccessPolicy, fetchSignedInUser, saveTextFile } from "../../lib/tauri";
 import { PageHeader, Panel, PanelHead } from "../ui/PageChrome";
 import { SelectCheckbox, useCheckedIds } from "../workbench/PolicyBulkAssign";
 import { CaPolicyBuilder } from "./CaPolicyBuilder";
@@ -15,6 +15,7 @@ type StateMode = "enabledForReportingButNotEnforced" | "disabled" | "source";
 
 const READ_ONLY = ["id", "createdDateTime", "modifiedDateTime", "deletedDateTime", "templateId", "partialEnablementStrategy"];
 const GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+const IS_GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const BLANK: Policy = {
   displayName: "New policy",
@@ -27,16 +28,21 @@ const BLANK: Policy = {
   grantControls: { operator: "OR", builtInControls: ["mfa"] },
 };
 
-/** Drop Graph annotations (`@odata.context` etc.) at every level; `@odata.type` stays. */
+/** Drop Graph annotations (`@odata.context` etc.) and null (unset) properties at every level; `@odata.type` stays. */
 function clean(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(clean);
   if (!value || typeof value !== "object") return value;
   return Object.fromEntries(
     Object.entries(value)
-      .filter(([key]) => !key.includes("@odata") || key === "@odata.type")
+      .filter(([key, child]) => child !== null && (!key.includes("@odata") || key === "@odata.type"))
       .map(([key, child]) => [key, clean(child)]),
   );
 }
+
+/** Templates put "Current administrator will be excluded" in excludeUsers; Graph only takes ids there. */
+const TEMPLATE_ME = "Current administrator will be excluded";
+const USER_KEYWORDS = new Set(["All", "None", "GuestsOrExternalUsers"]);
+const USER_LISTS = ["includeUsers", "excludeUsers", "includeGroups", "excludeGroups", "includeRoles", "excludeRoles"];
 
 /** The exact body POSTed for a draft. */
 function createBody(policy: Policy, mode: StateMode): Policy {
@@ -46,6 +52,12 @@ function createBody(policy: Policy, mode: StateMode): Policy {
   const strength = asRecord(grant.authenticationStrength);
   // Exports carry the whole strength object; create only takes its id.
   if (strength.id) body.grantControls = { ...grant, authenticationStrength: { id: strength.id } };
+  const conditions = asRecord(body.conditions);
+  const users = asRecord(conditions.users);
+  // Drop template placeholders and other text that isn't an object id or keyword.
+  for (const key of USER_LISTS) {
+    if (Array.isArray(users[key])) users[key] = (users[key] as unknown[]).filter((id) => typeof id === "string" && (USER_KEYWORDS.has(id) || IS_GUID.test(id)));
+  }
   if (mode !== "source") body.state = mode;
   return body;
 }
@@ -72,6 +84,12 @@ export function CaCreateView({ signedIn }: { signedIn: boolean }) {
   const [templateQuery, setTemplateQuery] = useState("");
   const [editing, setEditing] = useState<{ key: string; text: string; error?: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [meId, setMeId] = useState("");
+  useEffect(() => {
+    fetchSignedInUser()
+      .then((me) => setMeId(me.id))
+      .catch(() => undefined);
+  }, []);
   const [error, setError] = useState<string | null>(null);
 
   const existingNames = useMemo(() => new Set(policies.items.map((row) => rowTitle(row).trim().toLowerCase())), [policies.items]);
@@ -109,10 +127,16 @@ export function CaCreateView({ signedIn }: { signedIn: boolean }) {
     add(
       picked.map((row: ReviewRow) => {
         const details = asRecord(row.details);
+        const conditions = asRecord(structuredClone(details.conditions ?? {}));
+        const users = asRecord(conditions.users);
+        // The template's "exclude current administrator" becomes the signed-in user, like the portal does.
+        if (Array.isArray(users.excludeUsers) && users.excludeUsers.includes(TEMPLATE_ME)) {
+          users.excludeUsers = [...new Set(users.excludeUsers.map((id) => (id === TEMPLATE_ME ? meId : id)).filter(Boolean))];
+        }
         return draftOf(`Template · ${row.name}`, {
           displayName: row.name,
           state: "enabledForReportingButNotEnforced",
-          conditions: details.conditions,
+          conditions,
           grantControls: details.grantControls ?? null,
           sessionControls: details.sessionControls ?? null,
         });
