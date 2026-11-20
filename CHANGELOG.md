@@ -4,7 +4,17 @@ Notable user-facing changes to Axis are recorded here.
 
 ## [Unreleased]
 
-Add release notes here before preparing the next version.
+### Added
+
+- **Conditional Access › Viewer** maps every policy as a lane of gates (users, apps, network, device and client, risk) leading to its outcome, with a plain-English sentence for each policy and a "How to interpret" tip. Trace a sign-in to see which gates pass, where each policy stops, and what the matching policies add up to: blocks, the grants that must all pass, and session controls.
+- The Viewer traces a sign-in two ways: a what-if run through Microsoft's evaluator, with searchable user and app pickers that show names instead of ids, or a real sign-in picked from the sign-in logs. A logged sign-in can be re-run as a what-if.
+- **Conditional Access › New / import** creates policies in bulk. Build one with the **Policy builder** form (users, groups and roles, target apps or user actions, conditions, grant and session controls), import JSON exported from Axis, the Entra portal or Graph, or start from Microsoft's templates. Drafts can be edited in the builder or as JSON, checked for duplicate names and ids that must exist in the tenant, and created together or one at a time.
+- New Conditional Access policies are created Report-only unless you choose otherwise. The builder has an **Exclude me** button and warns when you aren't excluded, and templates exclude the signed-in admin as the portal does.
+- **Groups › Import / export** exports groups with their dynamic user and device rules as raw Graph JSON or CSV, and imports JSON or CSV to create many groups at once. Drafts show the group type, rule and processing state (On or Paused), and flag duplicate names, missing rules, and rules that don't match the group type. CSV and JSON templates can be downloaded from the page.
+
+### Changed
+
+- Sign-in in Admin mode requests one more permission, `Policy.ReadWrite.ConditionalAccess`, to create Conditional Access policies. Each tenant is asked to consent again, and the app registration manifest Axis generates includes it.
 
 ## [0.1.10] - 2026-11-17
 
