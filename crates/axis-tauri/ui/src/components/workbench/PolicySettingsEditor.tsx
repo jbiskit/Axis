@@ -30,14 +30,14 @@ import {
   loadCategorySettings,
   pauseCatalogIndex,
   removeSettingsFromPolicy,
-  searchCatalogSettings,
 } from "../../lib/tauri";
+import type { ReactNode } from "react";
 import { CatalogSettingInstances } from "./CatalogSettingInstances";
 import { useInspectorSaveAction } from "./inspectorSave";
 import { SettingValueWithDefaultCue } from "./SettingDefaultCue";
 import { SettingDescription } from "./SettingDescription";
 import { SettingDraftEditor, settingDraftHasDependents } from "./SettingDraftEditor";
-import { SettingSearchHit } from "./SettingSearchHit";
+import { SettingPicker } from "./SettingPicker";
 import { SettingValueDiff } from "./SettingValueDiff";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -78,9 +78,8 @@ export function PolicySettingsEditor({
   const { edits, setEdits, stagedRemoves, setStagedRemoves, editingId, setEditingId } =
     usePersistedPolicySettingsDraft(policyId);
   const [adding, setAdding] = useState(false);
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState<CatalogSettingSummary[]>([]);
-  const [searching, setSearching] = useState(false);
+  const [picked, setPicked] = useState<Map<string, CatalogSettingSummary>>(() => new Map());
+  const [focusId, setFocusId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -93,12 +92,21 @@ export function PolicySettingsEditor({
   useEffect(() => {
     setAdding(false);
     setAddFromSearch(false);
-    setQuery("");
-    setResults([]);
+    setPicked(new Map());
+    setFocusId(null);
     setError(null);
     setMessage(null);
     setConfirmSave(false);
   }, [policyId]);
+
+  useEffect(() => {
+    if (!adding) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setAdding(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [adding]);
 
   useEffect(() => {
     let cancelled = false;
@@ -142,42 +150,6 @@ export function PolicySettingsEditor({
       void pauseCatalogIndex();
     };
   }, [adding, platform]);
-
-  useEffect(() => {
-    if (!adding) return;
-    const q = query.trim();
-    if (q.length < 2) {
-      setResults([]);
-      setSearching(false);
-      return;
-    }
-    let cancelled = false;
-    const handle = window.setTimeout(() => {
-      setSearching(true);
-      void searchCatalogSettings(q, platform)
-        .then((response) => {
-          if (cancelled) return;
-          const settings = response.result?.settings;
-          setResults(
-            Array.isArray(settings)
-              ? settings.filter((item) => item?.id).slice(0, 25)
-              : [],
-          );
-          setSearching(false);
-          if (response.error) setError(response.error);
-        })
-        .catch((err) => {
-          if (cancelled) return;
-          setResults([]);
-          setSearching(false);
-          setError(err instanceof Error ? err.message : "Catalog search failed.");
-        });
-    }, 280);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(handle);
-    };
-  }, [adding, platform, query]);
 
   function upsertEdit(
     definitionId: string,
@@ -250,44 +222,59 @@ export function PolicySettingsEditor({
     upsertEdit(definitionId, detail, dependents, defaultDraftForSetting(detail, dependents), true);
   }
 
-  async function openCatalogSetting(summary: CatalogSettingSummary) {
+  /** Stage every picked catalog setting as a new setting with its default value. */
+  async function addPicked(summaries: CatalogSettingSummary[]) {
     setError(null);
     setMessage(null);
-    if (!summary.categoryId) {
-      setError("This search hit has no category, so its editor cannot load yet.");
-      return;
-    }
     setBusy(true);
     try {
-      const response = await loadCategorySettings(summary.categoryId, platform);
-      if (response.error) throw new Error(response.error);
-      const load = response.load;
-      if (load?.byId) setCatalogById((current) => ({ ...current, ...load.byId }));
-      const bundled = load ? bundleFromCategoryMap(summary.id, load.byId) : null;
-      const detail = bundled?.detail ?? load?.byId[summary.id];
-      if (!detail) throw new Error("Could not load that setting definition.");
-      const dependents = bundled?.dependents ?? {};
-      const existingInstance = settings
-        .map((row) => settingInstanceFromRow(row))
-        .find((row) => row?.settingDefinitionId === summary.id);
-      setAddFromSearch(true);
-      upsertEdit(
-        summary.id,
-        detail,
-        dependents,
-        existingInstance
-          ? draftFromSettingInstance(existingInstance, detail, dependents)
-          : defaultDraftForSetting(detail, dependents),
-        !existingInstance,
+      const loaded: Record<string, CatalogSettingDetail> = {};
+      const categoryIds = new Set(
+        summaries.map((summary) => summary.categoryId).filter((id): id is string => Boolean(id)),
       );
-      setQuery("");
-      setResults([]);
+      for (const categoryId of categoryIds) {
+        const response = await loadCategorySettings(categoryId, platform);
+        if (response.error) throw new Error(response.error);
+        Object.assign(loaded, response.load?.byId ?? {});
+      }
+      setCatalogById((current) => ({ ...current, ...loaded }));
+      const skipped: string[] = [];
+      let first: string | null = null;
+      for (const summary of summaries) {
+        const bundled = bundleFromCategoryMap(summary.id, loaded);
+        const detail = bundled?.detail ?? loaded[summary.id];
+        if (!detail) {
+          skipped.push(summary.displayName);
+          continue;
+        }
+        const dependents = bundled?.dependents ?? {};
+        upsertEdit(summary.id, detail, dependents, defaultDraftForSetting(detail, dependents), true);
+        first ??= summary.id;
+      }
+      setAddFromSearch(true);
+      setEditingId(summaries.length === 1 ? first : null);
+      setFocusId(first);
+      setAdding(false);
+      setPicked(new Map());
+      if (skipped.length) setError(`Could not load: ${skipped.join(", ")}.`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load setting");
+      setError(err instanceof Error ? err.message : "Failed to load settings");
     } finally {
       setBusy(false);
     }
   }
+
+  const categoryById = useMemo(() => new Map(categories.map((item) => [item.id, item])), [categories]);
+  const categoryLabel = (id?: string | null) => {
+    const parts: string[] = [];
+    let current = id ? categoryById.get(id) : undefined;
+    while (current && parts.length < 8) {
+      parts.unshift(current.displayName);
+      current = current.parentCategoryId ? categoryById.get(current.parentCategoryId) : undefined;
+    }
+    return parts.join(" › ") || "Other";
+  };
+  const detailFor = (id: string) => edits[id]?.detail ?? byId[id] ?? catalogById[id];
 
   const dirtyEdits = useMemo(
     () =>
@@ -393,6 +380,73 @@ export function PolicySettingsEditor({
       edit.detail.id !== editingId,
   );
 
+  function groupByCategory(items: { categoryId?: string | null; node: ReactNode }[]) {
+    const groups = new Map<string, ReactNode[]>();
+    for (const item of items) {
+      const label = categoryLabel(item.categoryId);
+      groups.set(label, [...(groups.get(label) ?? []), item.node]);
+    }
+    const labels = [...groups.keys()].sort((a, b) =>
+      a === "Other" ? 1 : b === "Other" ? -1 : a.localeCompare(b),
+    );
+    return labels.map((label) => (
+      <section key={label} className="setting-group">
+        <h4 className="setting-group-head">
+          {label}
+          <span className="setting-group-count">{groups.get(label)!.length}</span>
+        </h4>
+        <ul className="setting-instance-list">{groups.get(label)}</ul>
+      </section>
+    ));
+  }
+
+  const focusDetail = focusId ? detailFor(focusId) : undefined;
+  const focusRow = focusId ? formatted.find((row) => row.definitionId === focusId) : undefined;
+  const focusEdit = focusId ? edits[focusId] : undefined;
+  const focusDescription = focusDetail?.description ?? focusRow?.description;
+  const contextColumn = (
+    <aside className="setting-context" aria-label="Setting details">
+      {focusDetail || focusRow ? (
+        <>
+          <p className="axis-kicker">{categoryLabel(focusDetail?.categoryId)}</p>
+          <h4 className="setting-context-title">{focusDetail?.displayName ?? focusRow?.displayName}</h4>
+          <p className="setting-context-label">Value</p>
+          <p className="setting-context-value">
+            {focusEdit
+              ? draftValueSummary(focusEdit.detail, focusEdit.draft, focusEdit.dependents)
+              : focusRow?.valueSummary ?? "Not configured"}
+          </p>
+          {focusDescription ? (
+            <SettingDescription key={focusId} text={focusDescription} className="is-context" />
+          ) : null}
+          {focusDetail?.helpText && focusDetail.helpText !== focusDescription ? (
+            <p className="muted setting-context-help">{focusDetail.helpText}</p>
+          ) : null}
+          {focusDetail?.options.length ? (
+            <>
+              <p className="setting-context-label">Options</p>
+              <ul className="setting-context-options">
+                {focusDetail.options.map((option) => {
+                  const isDefault = option.isDefault || option.itemId === focusDetail.defaultOptionId;
+                  return (
+                    <li key={option.itemId} className={isDefault ? "is-default" : undefined}>
+                      {option.displayName}
+                      {isDefault ? <span className="muted"> · default</span> : null}
+                    </li>
+                  );
+                })}
+              </ul>
+            </>
+          ) : null}
+          <p className="setting-context-label">Graph ID</p>
+          <code className="setting-context-id">{focusId}</code>
+        </>
+      ) : (
+        <p className="muted">Select a setting to see its details.</p>
+      )}
+    </aside>
+  );
+
   return (
     <div className="stack">
       <div className="device-toolbar">
@@ -407,11 +461,11 @@ export function PolicySettingsEditor({
           type="button"
           className="axis-btn"
           onClick={() => {
-            setAdding((open) => !open);
+            setAdding(true);
             setError(null);
           }}
         >
-          {adding ? "Close search" : "Add setting"}
+          Add settings
         </button>
         {unconfigured.length > 0 ? (
           <button
@@ -426,37 +480,97 @@ export function PolicySettingsEditor({
       {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
       {message ? <div className="axis-alert axis-alert-info">{message}</div> : null}
       {adding ? (
-        <section className="policy-setting-editor">
-          <p className="muted" style={{ margin: "0 0 0.5rem", fontSize: "0.75rem" }}>
-            Search the catalog for this platform and save onto this policy.
-            {indexHint ? ` ${indexHint}` : ""}
-          </p>
-          <input
-            className="axis-input"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search settings…"
-            aria-label="Search catalog settings"
-          />
-          {searching ? <p className="muted">Searching…</p> : null}
-          {results.length > 0 ? (
-            <ul className="policy-setting-search-list">
-              {results.map((item) => (
-                <li key={String(item.id)}>
-                  <SettingSearchHit
-                    setting={item}
-                    categories={categories ?? []}
-                    alreadyOnPolicy={existingIds.has(item.id)}
-                    disabled={busy}
-                    onSelect={() => void openCatalogSetting(item)}
-                  />
-                </li>
-              ))}
-            </ul>
-          ) : query.trim().length >= 2 && !searching ? (
-            <p className="muted">No catalog matches.</p>
-          ) : null}
-        </section>
+        <div
+          className="settings-drawer-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !busy) setAdding(false);
+          }}
+        >
+          <aside className="settings-drawer" role="dialog" aria-modal="true" aria-labelledby="add-settings-title">
+            <header className="settings-drawer-head">
+              <div>
+                <p className="axis-kicker">Settings catalog</p>
+                <h3 id="add-settings-title">Add settings</h3>
+                {indexHint ? <p className="muted settings-drawer-hint">{indexHint}</p> : null}
+              </div>
+              <button type="button" className="axis-btn" onClick={() => setAdding(false)}>
+                Close
+              </button>
+            </header>
+            <div className="settings-drawer-body">
+              <SettingPicker
+                platform={platform}
+                categories={categories}
+                picked={picked}
+                autoFocus
+                disabledIds={existingIds}
+                onTogglePick={(setting) =>
+                  setPicked((current) => {
+                    const next = new Map(current);
+                    if (next.has(setting.id)) next.delete(setting.id);
+                    else next.set(setting.id, setting);
+                    return next;
+                  })
+                }
+                onTogglePickMany={(list, pick) =>
+                  setPicked((current) => {
+                    const next = new Map(current);
+                    for (const setting of list) {
+                      if (pick) next.set(setting.id, setting);
+                      else next.delete(setting.id);
+                    }
+                    return next;
+                  })
+                }
+              />
+            </div>
+            <footer className="settings-drawer-tray">
+              {picked.size > 0 ? (
+                <ul className="settings-drawer-picked">
+                  {[...picked.values()].map((setting) => (
+                    <li key={setting.id}>
+                      <span title={categoryLabel(setting.categoryId)}>{setting.displayName}</span>
+                      <button
+                        type="button"
+                        aria-label={`Unpick ${setting.displayName}`}
+                        onClick={() =>
+                          setPicked((current) => {
+                            const next = new Map(current);
+                            next.delete(setting.id);
+                            return next;
+                          })
+                        }
+                      >
+                        ×
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="muted">Tick settings to add them. They're added with their default values; save from the object header.</p>
+              )}
+              <div className="settings-drawer-actions">
+                {picked.size > 0 ? (
+                  <button type="button" className="axis-btn" disabled={busy} onClick={() => setPicked(new Map())}>
+                    Clear
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="axis-btn axis-btn-primary"
+                  disabled={busy || picked.size === 0}
+                  onClick={() => void addPicked([...picked.values()])}
+                >
+                  {busy
+                    ? "Adding…"
+                    : picked.size
+                      ? `Add ${picked.size} setting${picked.size === 1 ? "" : "s"}`
+                      : "Add settings"}
+                </button>
+              </div>
+            </footer>
+          </aside>
+        </div>
       ) : null}
       {addingNewSetting && activeEdit ? (
         <section className="policy-setting-editor is-added">
@@ -510,9 +624,16 @@ export function PolicySettingsEditor({
         </section>
       ) : null}
       {formatted.length > 0 || pendingAdds.length > 0 || (showUnconfigured && unconfigured.length > 0) ? (
-        <ul className="setting-instance-list">
-          {pendingAdds.map((edit) => (
-            <li key={`add:${edit.detail.id}`} className="setting-instance-row is-added">
+        <div className="setting-editor-wrap">
+        <div className="setting-editor-body">
+        <div className="setting-groups">
+        {groupByCategory([
+          ...pendingAdds.map((edit) => ({ categoryId: edit.detail.categoryId, node: (
+            <li
+              key={`add:${edit.detail.id}`}
+              className={`setting-instance-row is-added${focusId === edit.detail.id ? " is-focused" : ""}`}
+              onClick={() => setFocusId(edit.detail.id)}
+            >
               <div className="setting-instance-head">
                 <div className="setting-instance-title-block">
                   <p className="setting-instance-name">
@@ -555,8 +676,8 @@ export function PolicySettingsEditor({
                 </div>
               </div>
             </li>
-          ))}
-          {formatted.map((row) => {
+          ) })),
+          ...formatted.map((row) => {
             const instance =
               settings
                 .map((item) => settingInstanceFromRow(item))
@@ -567,11 +688,12 @@ export function PolicySettingsEditor({
             const rowEditing = !rowRemoved && editingId === row.definitionId && Boolean(rowEdit);
             const rowDirty = Boolean(rowEdit && settingEditIsDirty(rowEdit));
             const canStageRemove = rowRemoved || remainingConfigured(row.definitionId) >= 1;
-            return (
+            return { categoryId: detailFor(row.definitionId)?.categoryId, node: (
               <li
                 key={row.key}
-                className={`setting-instance-row${rowEditing ? " is-editing" : ""}${rowDirty ? " is-dirty" : ""}${rowRemoved ? " is-removed" : ""}${canEdit && !rowRemoved ? " is-activatable" : ""}`}
+                className={`setting-instance-row${rowEditing ? " is-editing" : ""}${rowDirty ? " is-dirty" : ""}${rowRemoved ? " is-removed" : ""}${canEdit && !rowRemoved ? " is-activatable" : ""}${focusId === row.definitionId ? " is-focused" : ""}`}
                 title={canEdit && !rowRemoved ? "Double-click to edit" : undefined}
+                onClick={() => setFocusId(row.definitionId)}
                 onMouseDown={(event) => {
                   if (canEdit && !rowRemoved && event.detail > 1) event.preventDefault();
                 }}
@@ -717,16 +839,17 @@ export function PolicySettingsEditor({
                   </div>
                 ) : null}
               </li>
-            );
-          })}
-          {showUnconfigured ? unconfigured.map((detail) => {
+            ) };
+          }),
+          ...(showUnconfigured ? unconfigured.map((detail) => {
             const rowEdit = edits[detail.id];
             const rowEditing = editingId === detail.id && Boolean(rowEdit);
             const rowDirty = Boolean(rowEdit && settingEditIsDirty(rowEdit));
-            return (
+            return { categoryId: detail.categoryId, node: (
               <li
                 key={`unconfigured:${detail.id}`}
-                className={`setting-instance-row is-unconfigured${rowEditing ? " is-editing" : ""}${rowDirty ? " is-dirty" : ""}`}
+                className={`setting-instance-row is-unconfigured${rowEditing ? " is-editing" : ""}${rowDirty ? " is-dirty" : ""}${focusId === detail.id ? " is-focused" : ""}`}
+                onClick={() => setFocusId(detail.id)}
               >
                 <div className="setting-instance-head">
                   <div className="setting-instance-title-block">
@@ -798,9 +921,13 @@ export function PolicySettingsEditor({
                   </div>
                 ) : null}
               </li>
-            );
-          }) : null}
-        </ul>
+            ) };
+          }) : []),
+        ])}
+        </div>
+        {contextColumn}
+        </div>
+        </div>
       ) : unconfigured.length > 0 ? (
         <p className="muted">
           No settings are configured on this policy yet. Show not configured settings to add from the
