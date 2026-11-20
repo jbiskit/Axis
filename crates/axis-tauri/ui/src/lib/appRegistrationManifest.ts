@@ -43,6 +43,7 @@ const WRITE_SCOPE_IDS = [
   "4e46008b-f24c-477d-8fff-7bb4ec7aafe0", // Group.ReadWrite.All
   "40b534c3-9552-4550-901b-23879c90bcf9", // Policy.ReadWrite.DeviceConfiguration
   "a8ead177-1889-4546-9387-f25e658e2a79", // Policy.ReadWrite.MobilityManagement
+  "ad902697-1014-4ef5-81ef-2b4301988e8c", // Policy.ReadWrite.ConditionalAccess
 ] as const;
 
 /** The manifest `requiredResourceAccess` property, ready to replace that block in the editor. */
