@@ -135,6 +135,24 @@ function toCsv(groups: Raw[]): string {
   return [CSV_COLUMNS.join(","), ...lines].join("\r\n");
 }
 
+/** Download templates; same rows as docs/samples/groups-template.*. */
+const TEMPLATE: Array<[string, string, Kind, string, string]> = [
+  ["SG - Pilot Users", "Hand-picked pilot ring (add members after creating)", "assigned", "", ""],
+  ["DYN-U - Finance", "All Finance department users", "dynamicUser", '(user.department -eq "Finance")', "On"],
+  ["DYN-U - Enabled Members", "Enabled member accounts (no guests)", "dynamicUser", '(user.accountEnabled -eq true) -and (user.userType -eq "Member")', "On"],
+  ["DYN-U - Sydney Staff", "Users whose office is in Sydney", "dynamicUser", '(user.city -eq "Sydney") -and (user.country -eq "Australia")', "Paused"],
+  ["DYN-D - Windows Devices", "All Windows devices", "dynamicDevice", '(device.deviceOSType -eq "Windows")', "On"],
+  ["DYN-D - Corporate iOS", "Corporate-owned iPhones and iPads", "dynamicDevice", '(device.deviceOSType -in ["iPhone","iPad"]) -and (device.deviceOwnership -eq "Company")', "On"],
+  ["DYN-D - Autopilot Devices", "Every Windows Autopilot registered device", "dynamicDevice", '(device.devicePhysicalIDs -any (_ -startsWith "[ZTDId]"))', "On"],
+];
+const templateRows = () =>
+  TEMPLATE.map(([displayName, description, membershipType, membershipRule, membershipRuleProcessingState]) => ({
+    displayName,
+    description,
+    membershipType,
+    ...(membershipRule ? { membershipRule, membershipRuleProcessingState } : {}),
+  }));
+
 /** Bulk export (raw Graph JSON or CSV) and import of Entra groups, including dynamic user and device rules. */
 export function GroupBulkView({ eyebrow }: { eyebrow: string }) {
   const [groups, setGroups] = useState<Raw[]>([]);
@@ -337,6 +355,17 @@ export function GroupBulkView({ eyebrow }: { eyebrow: string }) {
               }}
             >
               Add pasted groups
+            </button>
+            <span className="ca-spacer" />
+            <button
+              type="button"
+              className="axis-btn"
+              onClick={() => save(toCsv(templateRows().map((row) => ({ ...row, groupTypes: row.membershipType === "assigned" ? [] : ["DynamicMembership"] }))), "groups-template.csv", "Save CSV template")}
+            >
+              Download CSV template
+            </button>
+            <button type="button" className="axis-btn" onClick={() => save(JSON.stringify(templateRows(), null, 2), "groups-template.json", "Save JSON template")}>
+              Download JSON template
             </button>
           </div>
           {importError ? <div className="axis-alert axis-alert-danger ca-error">{importError}</div> : null}
