@@ -2686,6 +2686,14 @@ pub struct DirectoryGroupsResponse {
 }
 
 #[tauri::command]
+pub async fn export_directory_groups_cmd(state: State<'_, AppState>) -> Result<Vec<serde_json::Value>, String> {
+    let token = session_token(&state).await?.ok_or("Not signed in.")?;
+    axis_sdk::export_directory_groups(&token)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub async fn list_directory_groups_cmd(
     state: State<'_, AppState>,
 ) -> Result<DirectoryGroupsResponse, String> {

@@ -164,6 +164,7 @@ import {
   TermsAndConditionsView,
 } from "./modules/IntuneAdminPages";
 import { UsersView } from "./modules/EntraDirectoryPages";
+import { GroupBulkView } from "./modules/GroupBulkView";
 import { DynamicRuleBuilder } from "./workbench/DynamicRuleBuilder";
 
 const ADMIN_PAGES: Record<string, typeof IntuneRolesView> = {
@@ -487,6 +488,7 @@ export function IntuneWorkspace({
     );
   }
 
+  if (pathname === "/intune/groups/bulk") return <GroupBulkView eyebrow="Manage" />;
   if (pathname === "/intune/groups") {
     return (
       <div className="stack">
@@ -494,6 +496,11 @@ export function IntuneWorkspace({
           eyebrow="Manage"
           title="Groups"
           description="Every Entra group in this tenant, how each one gets its members, and who is currently in it."
+          actions={
+            <button type="button" className="axis-btn" onClick={() => navigate("/intune/groups/bulk")}>
+              Import / export
+            </button>
+          }
         />
         <GroupBuilderView />
       </div>

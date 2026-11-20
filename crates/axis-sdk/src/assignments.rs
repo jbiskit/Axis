@@ -63,6 +63,9 @@ pub struct CreateDirectoryGroupInput {
     pub membership: CreateGroupMembership,
     #[serde(default)]
     pub membership_rule: Option<String>,
+    /// `On` (default) or `Paused` for dynamic groups.
+    #[serde(default)]
+    pub membership_rule_processing_state: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -740,7 +743,11 @@ pub fn directory_group_create_body(input: &CreateDirectoryGroupInput) -> Result<
     if let Some(rule) = rule {
         body["groupTypes"] = json!(["DynamicMembership"]);
         body["membershipRule"] = json!(rule);
-        body["membershipRuleProcessingState"] = json!("On");
+        let paused = input
+            .membership_rule_processing_state
+            .as_deref()
+            .is_some_and(|state| state.eq_ignore_ascii_case("paused"));
+        body["membershipRuleProcessingState"] = json!(if paused { "Paused" } else { "On" });
     }
     Ok(body)
 }
@@ -1686,6 +1693,7 @@ mod tests {
             description: Some("Pilot ring".into()),
             membership: CreateGroupMembership::Assigned,
             membership_rule: Some("ignored".into()),
+            membership_rule_processing_state: None,
         })
         .unwrap();
         assert_eq!(body["displayName"], "Contoso pilots");
@@ -1704,6 +1712,7 @@ mod tests {
             description: None,
             membership: CreateGroupMembership::Assigned,
             membership_rule: None,
+            membership_rule_processing_state: None,
         })
         .unwrap();
         assert_eq!(body["mailNickname"], "group");
@@ -1716,6 +1725,7 @@ mod tests {
             description: None,
             membership: CreateGroupMembership::DynamicUser,
             membership_rule: None,
+            membership_rule_processing_state: None,
         })
         .unwrap();
         assert_eq!(body["groupTypes"], json!(["DynamicMembership"]));
@@ -1795,4 +1805,17 @@ mod tests {
         assert_eq!(schedule.kind, RemediationScheduleKind::RunOnce);
         assert_eq!(schedule.date.as_deref(), Some("2026-08-28"));
     }
+}
+
+/// Every group as raw Graph JSON, for bulk export (dynamic rules and processing state included).
+pub async fn export_directory_groups(access_token: &str) -> Result<Vec<Value>, GraphError> {
+    GraphClient::new()
+        .fetch_all_pages(
+            access_token,
+            "/groups?$select=id,displayName,description,mailNickname,groupTypes,securityEnabled,mailEnabled,membershipRule,membershipRuleProcessingState,createdDateTime&$top=999",
+            "beta",
+            20000,
+        )
+        .await
+        .map_err(|error| annotate_scope(error, "Group.Read.All"))
 }

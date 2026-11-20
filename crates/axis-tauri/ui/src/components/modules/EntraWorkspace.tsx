@@ -25,6 +25,7 @@ import {
   type ReviewSection,
 } from "./ReviewWorkbench";
 import { CaCreateView } from "./CaCreateView";
+import { GroupBulkView } from "./GroupBulkView";
 import { CaViewer } from "./CaViewer";
 import { AppCredentialsView, AuthStrengthsView, CaTemplatesView, CustomRolesView, PimRoleSettingsView, RoleAssignmentsView, TenantSettingsView, UsersView } from "./EntraDirectoryPages";
 
@@ -927,6 +928,7 @@ export function EntraWorkspace({ route, signedIn }: { route: { pathname: string;
   if (pathname === NEW_POLICIES_PATH) return <CaCreateView signedIn={signedIn} />;
   if (pathname === "/entra/applications/credentials") return <AppCredentialsView route={route} signedIn={signedIn} />;
   if (pathname === "/entra/directory/users") return <UsersView route={route} signedIn={signedIn} />;
+  if (pathname === "/entra/directory/groups/bulk") return <GroupBulkView eyebrow="Entra · Directory" />;
   if (pathname === "/entra/directory/groups") {
     return (
       <div className="stack">
@@ -934,6 +936,11 @@ export function EntraWorkspace({ route, signedIn }: { route: { pathname: string;
           eyebrow="Entra · Directory"
           title="Groups"
           description="Every Entra group in this tenant, how each one gets its members, and who is currently in it."
+          actions={
+            <button type="button" className="axis-btn" onClick={() => navigate("/entra/directory/groups/bulk")}>
+              Import / export
+            </button>
+          }
         />
         <GroupBuilderView />
       </div>

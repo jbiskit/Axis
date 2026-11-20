@@ -66,7 +66,7 @@ pub use app_icon::{
 pub use assignments::{
     add_directory_group_member, apply_filter_names, apply_group_metadata, assign_object_assignments,
     assignment_capabilities, assignment_capabilities_for, classify_group_membership,
-    create_directory_group, default_remediation_schedule, drafts_from_graph_assignments,
+    create_directory_group, default_remediation_schedule, drafts_from_graph_assignments, export_directory_groups,
     list_assignment_filters, list_directory_group_members, list_directory_groups,
     mail_nickname_from_display_name, normalize_assignment_drafts, normalize_assignment_drafts_for,
     remove_directory_group_member, resolve_directory_groups, search_directory_groups,

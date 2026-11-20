@@ -418,6 +418,8 @@ export type CreateDirectoryGroupInput = {
   description?: string | null;
   membership: CreateGroupMembership;
   membershipRule?: string | null;
+  /** "On" (default) or "Paused"; dynamic groups only. */
+  membershipRuleProcessingState?: "On" | "Paused" | null;
 };
 
 export type CreateDirectoryGroupResponse = {

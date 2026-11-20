@@ -1831,6 +1831,11 @@ export async function searchDirectoryGroups(query: string): Promise<DirectoryGro
   return invoke("search_directory_groups_cmd", { query });
 }
 
+/** Every group as raw Graph JSON (dynamic rules and processing state included). */
+export async function exportDirectoryGroups(): Promise<Array<Record<string, unknown>>> {
+  return invoke("export_directory_groups_cmd");
+}
+
 export async function createDirectoryGroup(
   input: CreateDirectoryGroupInput,
 ): Promise<CreateDirectoryGroupResponse> {

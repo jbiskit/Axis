@@ -357,6 +357,7 @@ pub fn run() {
             commands::apply_pack_changes_cmd,
             commands::list_directory_group_members_cmd,
             commands::list_directory_groups_cmd,
+            commands::export_directory_groups_cmd,
             commands::update_directory_group_cmd,
             commands::fetch_windows_update_ring_cmd,
             commands::update_windows_update_ring_cmd,
