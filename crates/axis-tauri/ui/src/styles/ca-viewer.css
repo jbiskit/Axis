@@ -76,6 +76,9 @@
 .ca-applied.ca-report .ca-outcome { border-color: var(--axis-warning); background: var(--axis-warning-soft); }
 .ca-stopped .ca-outcome, .ca-lane.ca-off .ca-outcome { color: var(--axis-muted); }
 .ca-reason { font-size: var(--axis-text-2xs); color: var(--axis-muted); }
+.ca-import { display: grid; gap: var(--axis-space-2); margin-top: var(--axis-space-3); }
+.ca-json { width: 100%; font-family: var(--axis-font-mono, ui-monospace, monospace); font-size: var(--axis-text-xs); }
+.ca-error { color: var(--axis-danger); font-size: var(--axis-text-xs); white-space: pre-wrap; word-break: break-word; }
 .ca-empty { padding: var(--axis-space-4) 0; }
 
 .ca-combine { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: var(--axis-space-3); margin-top: var(--axis-space-4); }

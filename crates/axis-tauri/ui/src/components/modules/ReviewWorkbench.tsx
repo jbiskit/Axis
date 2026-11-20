@@ -184,7 +184,10 @@ export function ReviewWorkbench({
   parentOf,
   defaultSort = "name",
   groupings,
+  headerActions,
 }: {
+  /** Extra page-header buttons, before Refresh. */
+  headerActions?: ReactNode;
   kind: ReviewKind;
   eyebrow: string;
   title: string;
@@ -341,9 +344,12 @@ export function ReviewWorkbench({
         onRefresh={refresh}
         refreshing={inventory.loading}
         actions={
-          <button type="button" className="axis-btn" onClick={refresh} disabled={inventory.loading}>
-            {inventory.loading ? "Refreshing…" : "Refresh"}
-          </button>
+          <>
+            {headerActions}
+            <button type="button" className="axis-btn" onClick={refresh} disabled={inventory.loading}>
+              {inventory.loading ? "Refreshing…" : "Refresh"}
+            </button>
+          </>
         }
       />
       {note ? <div className="axis-alert">{note}</div> : null}

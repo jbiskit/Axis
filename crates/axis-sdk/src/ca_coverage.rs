@@ -299,3 +299,22 @@ pub async fn search_conditional_access_apps(access_token: &str, query: &str) -> 
     let page: Value = GraphClient::new().fetch_plain(access_token, &path, "beta").await?;
     Ok(page["value"].as_array().cloned().unwrap_or_default())
 }
+
+/// POST a new Conditional Access policy. Read-only fields from an export are dropped here.
+pub async fn create_conditional_access_policy(access_token: &str, mut policy: Value) -> Result<Value, GraphError> {
+    let Some(fields) = policy.as_object_mut() else {
+        return Err(input_error("A policy must be a JSON object."));
+    };
+    if !fields.get("displayName").is_some_and(|name| name.as_str().is_some_and(|name| !name.trim().is_empty())) {
+        return Err(input_error("A policy needs a displayName."));
+    }
+    for key in ["id", "createdDateTime", "modifiedDateTime", "deletedDateTime", "templateId", "partialEnablementStrategy"] {
+        fields.remove(key);
+    }
+    fields.retain(|key, _| !key.contains("@odata"));
+    GraphClient::new().post(access_token, "/identity/conditionalAccess/policies", "beta", &policy).await
+}
+
+fn input_error(message: impl Into<String>) -> GraphError {
+    GraphError::Request { status: 400, code: None, message: message.into(), permission_related: false }
+}

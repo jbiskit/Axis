@@ -509,6 +509,11 @@ export function CaTemplatesView({ route, signedIn }: { route: Route; signedIn: b
       title="Templates"
       description="Microsoft's Conditional Access templates, and whether this tenant has a policy for each."
       headline={templatesHeadline}
+      headerActions={
+        <button type="button" className="axis-btn axis-btn-primary" onClick={() => navigate("/entra/conditional-access/new")}>
+          Create from templates
+        </button>
+      }
       columns={[
         { key: "status", label: "Status", value: (row) => (matched(row).length ? "Has policy" : "No policy") },
         { key: "scenarios", label: "Scenarios", value: (row) => text(row.scenarios).split(",").map((value) => humanize(value)).join(", ") },

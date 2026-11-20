@@ -24,12 +24,14 @@ import {
   type ReviewRow,
   type ReviewSection,
 } from "./ReviewWorkbench";
+import { CaCreateView } from "./CaCreateView";
 import { CaViewer } from "./CaViewer";
 import { AppCredentialsView, AuthStrengthsView, CaTemplatesView, CustomRolesView, PimRoleSettingsView, RoleAssignmentsView, TenantSettingsView, UsersView } from "./EntraDirectoryPages";
 
 const OVERVIEW_PATH = "/entra/conditional-access/overview";
 const POLICIES_PATH = "/entra/conditional-access/policies";
 const NAMED_LOCATIONS_PATH = "/entra/conditional-access/named-locations";
+const NEW_POLICIES_PATH = "/entra/conditional-access/new";
 const AUTH_REGISTRATION_PATH = "/entra/authentication-methods/registration";
 const AUTH_POLICY_PATH = "/entra/authentication-methods/policy";
 
@@ -922,6 +924,7 @@ export function EntraWorkspace({ route, signedIn }: { route: { pathname: string;
     return <EntraOverview signedIn={signedIn} />;
   }
   if (pathname === "/entra/conditional-access/viewer") return <CaViewer signedIn={signedIn} />;
+  if (pathname === NEW_POLICIES_PATH) return <CaCreateView signedIn={signedIn} />;
   if (pathname === "/entra/applications/credentials") return <AppCredentialsView route={route} signedIn={signedIn} />;
   if (pathname === "/entra/directory/users") return <UsersView route={route} signedIn={signedIn} />;
   if (pathname === "/entra/directory/groups") {
@@ -1004,6 +1007,11 @@ export function EntraWorkspace({ route, signedIn }: { route: { pathname: string;
       description="Every Conditional Access policy with who it targets, what it requires, and its state."
       columns={POLICY_COLUMNS}
       resolveNames={resolvePolicyNames}
+      headerActions={
+        <button type="button" className="axis-btn axis-btn-primary" onClick={() => navigate(NEW_POLICIES_PATH)}>
+          New / import
+        </button>
+      }
       summary={(row, names) => <ReviewSections sections={policySections(row, names)} />}
       pathname={pathname}
       search={search}

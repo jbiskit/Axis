@@ -666,6 +666,11 @@ export async function searchConditionalAccessApps(query: string): Promise<Array<
   return invoke("search_conditional_access_apps_cmd", { query });
 }
 
+/** POST /beta/identity/conditionalAccess/policies; returns the created policy. */
+export async function createConditionalAccessPolicy(policy: Record<string, unknown>): Promise<Record<string, unknown>> {
+  return invoke("create_conditional_access_policy_cmd", { policy });
+}
+
 export async function fetchPolicySets(): Promise<InventoryResponse<PolicySetSummary>> {
   return invoke("fetch_policy_sets_cmd");
 }

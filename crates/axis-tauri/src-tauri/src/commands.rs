@@ -1897,6 +1897,18 @@ pub async fn search_conditional_access_apps_cmd(
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+pub async fn create_conditional_access_policy_cmd(
+    state: State<'_, AppState>,
+    policy: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    ensure_write_allowed(&state).await?;
+    let token = session_token(&state).await?.ok_or("Not signed in.")?;
+    axis_sdk::create_conditional_access_policy(&token, policy)
+        .await
+        .map_err(|error| error.to_string())
+}
+
 /// Per-device rows for a classic device configuration (update rings): the portal's Device status report.
 #[tauri::command]
 pub async fn fetch_device_configuration_devices_cmd(
