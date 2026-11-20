@@ -1898,6 +1898,14 @@ pub async fn search_conditional_access_apps_cmd(
 }
 
 #[tauri::command]
+pub async fn fetch_signed_in_user_cmd(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+    let token = session_token(&state).await?.ok_or("Not signed in.")?;
+    axis_sdk::fetch_signed_in_user(&token)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub async fn create_conditional_access_policy_cmd(
     state: State<'_, AppState>,
     policy: serde_json::Value,

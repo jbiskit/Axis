@@ -324,3 +324,8 @@ pub async fn create_conditional_access_policy(access_token: &str, mut policy: Va
 fn input_error(message: impl Into<String>) -> GraphError {
     GraphError::Request { status: 400, code: None, message: message.into(), permission_related: false }
 }
+
+/// The signed-in user (`id`, `displayName`, `userPrincipalName`), for "Exclude me".
+pub async fn fetch_signed_in_user(access_token: &str) -> Result<Value, GraphError> {
+    GraphClient::new().fetch_plain(access_token, "/me?$select=id,displayName,userPrincipalName", "beta").await
+}

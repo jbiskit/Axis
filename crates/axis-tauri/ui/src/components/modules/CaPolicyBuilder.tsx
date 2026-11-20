@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useInventory } from "../../hooks/useInventory";
-import { searchDirectoryGroups } from "../../lib/tauri";
+import { fetchSignedInUser, searchDirectoryGroups } from "../../lib/tauri";
 import { BooleanToggle } from "../workbench/BooleanToggle";
 import { gateLabels, KNOWN_APPS, Picker, plainSummary, searchApps, searchUsers, useAppOptions, type PickOption } from "./CaViewer";
 import { resolvePolicyNames } from "./EntraWorkspace";
@@ -128,6 +128,12 @@ export function CaPolicyBuilder({ policy, onChange }: { policy: Policy; onChange
   const locations = useInventory(loaderFor("namedLocation"), true, true);
   const strengths = useInventory(loaderFor("authStrength"), true, true);
   const appList = useAppOptions(APPS);
+  const [me, setMe] = useState<{ id: string; displayName: string; userPrincipalName: string } | null>(null);
+  useEffect(() => {
+    fetchSignedInUser()
+      .then(setMe)
+      .catch(() => undefined);
+  }, []);
   const [names, setNames] = useState<ReviewNames>(() => Object.fromEntries([...ROLES, ...APPS].map((option) => [option.id, option.label])));
   const remember = (option: PickOption) => setNames((current) => ({ ...current, [option.id]: option.detail ? `${option.label} (${option.detail})` : option.label }));
   useEffect(() => {
@@ -191,7 +197,8 @@ export function CaPolicyBuilder({ policy, onChange }: { policy: Policy; onChange
     appMode === "None" ? "Targets no resources, so it will never apply." : "",
     appMode === "Select" && !includeApps.length ? "Pick at least one app." : "",
     !policy.grantControls && !orNull(session) ? "Has no grant or session controls." : "",
-    userMode === "All" && block ? "Blocks all users. Exclude an emergency access account before turning it On." : "",
+    me && userMode !== "None" && !ids(users.excludeUsers).includes(me.id) ? "You aren't excluded. Exclude yourself so a mistake can't lock you out." : "",
+    userMode === "All" && block ?"Blocks all users. Exclude an emergency access account before turning it On." : "",
   ].filter(Boolean);
 
   return (
@@ -236,6 +243,21 @@ export function CaPolicyBuilder({ policy, onChange }: { policy: Policy; onChange
             <Targets label="Users" value={includeUsers.filter((id) => id !== "None")} names={names} search={searchUsers} onName={remember} onChange={(next) => set(["conditions", "users", "includeUsers"], next)} />
             <Targets label="Groups" value={ids(users.includeGroups)} names={names} search={searchGroups} onName={remember} onChange={(next) => set(["conditions", "users", "includeGroups"], next)} />
             <Targets label="Directory roles" value={ids(users.includeRoles)} names={names} local={ROLES} search={async () => []} onName={remember} onChange={(next) => set(["conditions", "users", "includeRoles"], next)} />
+          </div>
+        ) : null}
+        {me ? (
+          <div className="ca-form-actions">
+            <button
+              type="button"
+              className="axis-btn"
+              disabled={ids(users.excludeUsers).includes(me.id)}
+              onClick={() => {
+                remember({ id: me.id, label: me.displayName, detail: me.userPrincipalName });
+                set(["conditions", "users", "excludeUsers"], [...ids(users.excludeUsers), me.id]);
+              }}
+            >
+              {ids(users.excludeUsers).includes(me.id) ? "You're excluded" : `Exclude me (${me.userPrincipalName})`}
+            </button>
           </div>
         ) : null}
         <div className="ca-form">
