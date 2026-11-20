@@ -1,0 +1,8 @@
+displayName,description,membershipType,membershipRule,membershipRuleProcessingState
+SG - Pilot Users,Hand-picked pilot ring (add members after creating),assigned,,
+DYN-U - Finance,All Finance department users,dynamicUser,"(user.department -eq ""Finance"")",On
+DYN-U - Enabled Members,Enabled member accounts (no guests),dynamicUser,"(user.accountEnabled -eq true) -and (user.userType -eq ""Member"")",On
+DYN-U - Sydney Staff,Users whose office is in Sydney,dynamicUser,"(user.city -eq ""Sydney"") -and (user.country -eq ""Australia"")",Paused
+DYN-D - Windows Devices,All Windows devices,dynamicDevice,"(device.deviceOSType -eq ""Windows"")",On
+DYN-D - Corporate iOS,Corporate-owned iPhones and iPads,dynamicDevice,"(device.deviceOSType -in [""iPhone"",""iPad""]) -and (device.deviceOwnership -eq ""Company"")",On
+DYN-D - Autopilot Devices,Every Windows Autopilot registered device,dynamicDevice,"(device.devicePhysicalIDs -any (_ -startsWith ""[ZTDId]""))",On

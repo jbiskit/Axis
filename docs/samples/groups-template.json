@@ -1,0 +1,49 @@
+[
+  {
+    "displayName": "SG - Pilot Users",
+    "description": "Hand-picked pilot ring (add members after creating)",
+    "membershipType": "assigned"
+  },
+  {
+    "displayName": "DYN-U - Finance",
+    "description": "All Finance department users",
+    "membershipType": "dynamicUser",
+    "membershipRule": "(user.department -eq \"Finance\")",
+    "membershipRuleProcessingState": "On"
+  },
+  {
+    "displayName": "DYN-U - Enabled Members",
+    "description": "Enabled member accounts (no guests)",
+    "membershipType": "dynamicUser",
+    "membershipRule": "(user.accountEnabled -eq true) -and (user.userType -eq \"Member\")",
+    "membershipRuleProcessingState": "On"
+  },
+  {
+    "displayName": "DYN-U - Sydney Staff",
+    "description": "Users whose office is in Sydney",
+    "membershipType": "dynamicUser",
+    "membershipRule": "(user.city -eq \"Sydney\") -and (user.country -eq \"Australia\")",
+    "membershipRuleProcessingState": "Paused"
+  },
+  {
+    "displayName": "DYN-D - Windows Devices",
+    "description": "All Windows devices",
+    "membershipType": "dynamicDevice",
+    "membershipRule": "(device.deviceOSType -eq \"Windows\")",
+    "membershipRuleProcessingState": "On"
+  },
+  {
+    "displayName": "DYN-D - Corporate iOS",
+    "description": "Corporate-owned iPhones and iPads",
+    "membershipType": "dynamicDevice",
+    "membershipRule": "(device.deviceOSType -in [\"iPhone\",\"iPad\"]) -and (device.deviceOwnership -eq \"Company\")",
+    "membershipRuleProcessingState": "On"
+  },
+  {
+    "displayName": "DYN-D - Autopilot Devices",
+    "description": "Every Windows Autopilot registered device",
+    "membershipType": "dynamicDevice",
+    "membershipRule": "(device.devicePhysicalIDs -any (_ -startsWith \"[ZTDId]\"))",
+    "membershipRuleProcessingState": "On"
+  }
+]
