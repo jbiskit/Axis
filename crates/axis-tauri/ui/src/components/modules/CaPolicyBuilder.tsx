@@ -154,7 +154,7 @@ export function CaPolicyBuilder({ policy, onChange }: { policy: Policy; onChange
   const userMode = includeUsers.includes("All") ? "All" : includeUsers.includes("None") && !ids(users.includeGroups).length && !ids(users.includeRoles).length ? "None" : "Select";
   const includeApps = ids(apps.includeApplications);
   const actions = ids(apps.includeUserActions);
-  const appMode = actions.length ? "actions" : includeApps.includes("All") ? "All" : includeApps.includes("Office365") ? "Office365" : includeApps.includes("None") || !includeApps.length ? "None" : "Select";
+  const appMode = actions.length ? "actions" : includeApps.includes("All") ? "All" : includeApps.includes("Office365") ? "Office365" : includeApps.includes("None") ? "None" : "Select";
   const platforms = asRecord(conditions.platforms);
   const includePlatforms = ids(platforms.includePlatforms).filter((value) => value !== "all");
   const loc = asRecord(conditions.locations);
@@ -188,6 +188,7 @@ export function CaPolicyBuilder({ policy, onChange }: { policy: Policy; onChange
       : "",
     userMode === "None" ? "Targets no users, so it will never apply." : "",
     appMode === "None" ? "Targets no resources, so it will never apply." : "",
+    appMode === "Select" && !includeApps.length ? "Pick at least one app." : "",
     !policy.grantControls && !orNull(session) ? "Has no grant or session controls." : "",
     userMode === "All" && block ? "Blocks all users. Exclude an emergency access account before turning it On." : "",
   ].filter(Boolean);
@@ -270,7 +271,7 @@ export function CaPolicyBuilder({ policy, onChange }: { policy: Policy; onChange
           <Targets label="Apps" value={includeApps.filter((id) => id !== "None")} names={names} local={APPS} search={searchApps} onName={remember} onChange={(next) => set(["conditions", "applications", "includeApplications"], next)} />
         ) : null}
         {appMode === "actions" ? (
-          <Chips options={USER_ACTIONS} selected={actions} onChange={(next) => set(["conditions", "applications", "includeUserActions"], next)} />
+          <Chips options={USER_ACTIONS} selected={actions} onChange={(next) => next.length && set(["conditions", "applications", "includeUserActions"], next)} />
         ) : null}
         {appMode === "All" || appMode === "Office365" ? (
           <Targets label="Exclude apps" value={ids(apps.excludeApplications)} names={names} local={APPS} search={searchApps} onName={remember} onChange={(next) => set(["conditions", "applications", "excludeApplications"], next)} />
