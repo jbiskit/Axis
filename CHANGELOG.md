@@ -14,6 +14,7 @@ Notable user-facing changes to Axis are recorded here.
 
 ### Changed
 
+- Adding settings to a Settings Catalog policy uses the setting picker: tick several settings and add them in one go, each with its default value. Escape closes the picker.
 - Sign-in in Admin mode requests one more permission, `Policy.ReadWrite.ConditionalAccess`, to create Conditional Access policies. Each tenant is asked to consent again, and the app registration manifest Axis generates includes it.
 
 ## [0.1.10] - 2026-11-17
