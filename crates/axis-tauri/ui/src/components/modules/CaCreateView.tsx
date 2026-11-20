@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useInventory } from "../../hooks/useInventory";
 import { navigate } from "../../lib/route";
 import { createConditionalAccessPolicy, fetchSignedInUser, saveTextFile } from "../../lib/tauri";
+import { FilePickButton } from "../ui/FilePickButton";
 import { PageHeader, Panel, PanelHead } from "../ui/PageChrome";
 import { SelectCheckbox, useCheckedIds } from "../workbench/PolicyBulkAssign";
 import { CaPolicyBuilder } from "./CaPolicyBuilder";
@@ -119,8 +120,8 @@ export function CaCreateView({ signedIn }: { signedIn: boolean }) {
       setError(`${source}: ${reason instanceof Error ? reason.message : String(reason)}`);
     }
   };
-  const addFiles = async (files: FileList | null) => {
-    for (const file of Array.from(files ?? [])) addText(await file.text(), file.name);
+  const addFiles = async (files: File[]) => {
+    for (const file of files) addText(await file.text(), file.name);
   };
   const addTemplates = () => {
     const picked = templateRows.filter((row) => templateSelection.checkedIds.has(String(row.id)));
@@ -219,9 +220,9 @@ export function CaCreateView({ signedIn }: { signedIn: boolean }) {
             <p className="muted">
               Accepts one policy, an array of policies, or a Graph list response: Axis exports, Entra portal downloads, or <code>GET /identity/conditionalAccess/policies</code>.
             </p>
-            <input type="file" accept=".json,application/json" multiple onChange={(event) => void addFiles(event.target.files).then(() => (event.target.value = ""))} />
-            <textarea className="axis-input ca-json" rows={6} value={paste} placeholder="…or paste JSON here" onChange={(event) => setPaste(event.target.value)} />
+            <textarea className="axis-input ca-json" rows={6} value={paste} placeholder="Paste JSON here, or choose files" onChange={(event) => setPaste(event.target.value)} />
             <div className="ca-form-actions">
+              <FilePickButton label="Choose files…" accept=".json,application/json" onFiles={addFiles} />
               <button
                 type="button"
                 className="axis-btn"

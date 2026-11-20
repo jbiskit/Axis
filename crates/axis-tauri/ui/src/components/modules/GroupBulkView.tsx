@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { createDirectoryGroup, exportDirectoryGroups, saveTextFile } from "../../lib/tauri";
 import { WriteActionButton } from "../../lib/readOnly";
 import type { CreateGroupMembership } from "../../types/inventory";
+import { FilePickButton } from "../ui/FilePickButton";
 import { PageHeader, Panel, PanelHead } from "../ui/PageChrome";
 import { BooleanToggle } from "../workbench/BooleanToggle";
 import { SelectCheckbox, useCheckedIds } from "../workbench/PolicyBulkAssign";
@@ -334,17 +335,15 @@ export function GroupBulkView({ eyebrow }: { eyebrow: string }) {
           hint="Accepts this page's JSON or CSV export, raw Graph groups, or any CSV with displayName, description, membershipType, membershipRule and membershipRuleProcessingState columns. Members of assigned groups aren't copied."
         />
         <div className="ca-import">
-          <input
-            type="file"
-            accept=".json,.csv,application/json,text/csv"
-            multiple
-            onChange={(event) => {
-              const input = event.target;
-              void Promise.all(Array.from(input.files ?? []).map(async (file) => addText(await file.text(), file.name))).then(() => (input.value = ""));
-            }}
-          />
-          <textarea className="axis-input ca-json" rows={5} value={paste} placeholder="…or paste JSON or CSV here" onChange={(event) => setPaste(event.target.value)} />
+          <textarea className="axis-input ca-json" rows={5} value={paste} placeholder="Paste JSON or CSV here, or choose files" onChange={(event) => setPaste(event.target.value)} />
           <div className="ca-form-actions">
+            <FilePickButton
+              label="Choose files…"
+              accept=".json,.csv,application/json,text/csv"
+              onFiles={async (files) => {
+                for (const file of files) addText(await file.text(), file.name);
+              }}
+            />
             <button
               type="button"
               className="axis-btn"
