@@ -10,6 +10,7 @@ use futures::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::device_recovery::annotate_scope;
 use crate::graph::{GraphClient, GraphError};
 use crate::review::fetch_review_objects;
 
@@ -318,7 +319,10 @@ pub async fn create_conditional_access_policy(access_token: &str, mut policy: Va
         fields.remove(key);
     }
     fields.retain(|key, _| !key.contains("@odata"));
-    GraphClient::new().post(access_token, "/identity/conditionalAccess/policies", "beta", &policy).await
+    GraphClient::new()
+        .post(access_token, "/identity/conditionalAccess/policies", "beta", &policy)
+        .await
+        .map_err(|error| annotate_scope(error, "Policy.ReadWrite.ConditionalAccess"))
 }
 
 fn input_error(message: impl Into<String>) -> GraphError {

@@ -155,6 +155,8 @@ fn write_scopes() -> Vec<String> {
         "Group.ReadWrite.All".to_string(),
         "Policy.ReadWrite.DeviceConfiguration".to_string(),
         "Policy.ReadWrite.MobilityManagement".to_string(),
+        // Conditional Access create / import (Entra › Conditional Access › New).
+        "Policy.ReadWrite.ConditionalAccess".to_string(),
     ]
 }
 
