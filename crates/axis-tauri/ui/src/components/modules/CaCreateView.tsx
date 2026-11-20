@@ -120,21 +120,35 @@ export function CaCreateView({ signedIn }: { signedIn: boolean }) {
     );
   };
 
-  const createSelected = async () => {
+  /** Creates each draft in turn; true when all of them were created. */
+  const createDrafts = async (list: Draft[]) => {
     setBusy(true);
+    let ok = true;
     // One at a time keeps Graph throttling and the per-row status readable.
-    for (const draft of selectedDrafts.filter((item) => item.status !== "created")) {
+    for (const draft of list.filter((item) => item.status !== "created")) {
       update(draft.key, { status: "creating", message: undefined });
       try {
         const created = await createConditionalAccessPolicy(createBody(draft.policy, mode));
         update(draft.key, { status: "created", created, message: undefined });
       } catch (reason) {
+        ok = false;
         update(draft.key, { status: "error", message: String(reason) });
       }
     }
     setBusy(false);
     policies.reload();
+    return ok;
   };
+  const createSelected = () => createDrafts(selectedDrafts);
+  /** Builder "Create": the policy lands in the drafts list and is created straight away; on failure it stays open to fix. */
+  const createFromBuilder = async () => {
+    const draft: Draft = builder.key ? { key: builder.key, source: "Builder", policy: builder.policy } : draftOf("Builder", builder.policy);
+    if (builder.key) update(draft.key, { policy: builder.policy });
+    else add([draft]);
+    setBuilder({ key: draft.key, policy: builder.policy });
+    if (await createDrafts([draft])) setBuilder({ key: null, policy: structuredClone(BLANK) });
+  };
+  const builderDraft = drafts.find((draft) => draft.key === builder.key);
 
   const warnings = (draft: Draft) => {
     const body = createBody(draft.policy, mode);
@@ -266,7 +280,8 @@ export function CaCreateView({ signedIn }: { signedIn: boolean }) {
               )}
               <button
                 type="button"
-                className="axis-btn axis-btn-primary"
+                className="axis-btn"
+                disabled={busy}
                 onClick={() => {
                   if (builder.key) update(builder.key, { policy: builder.policy, status: undefined, message: undefined });
                   else add([draftOf("Builder", builder.policy)]);
@@ -275,7 +290,11 @@ export function CaCreateView({ signedIn }: { signedIn: boolean }) {
               >
                 {builder.key ? "Save to draft" : "Add to drafts"}
               </button>
+              <button type="button" className="axis-btn axis-btn-primary" disabled={busy} onClick={() => void createFromBuilder()}>
+                {busy ? "Creating…" : `Create as ${mode === "source" ? STATE_TEXT[String(builder.policy.state)] ?? "set in policy" : STATE_TEXT[mode]}`}
+              </button>
             </div>
+            {builderDraft?.status === "error" ? <div className="axis-alert axis-alert-danger ca-error">{builderDraft.message}</div> : null}
           </>
         )}
         {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
