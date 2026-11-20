@@ -249,7 +249,7 @@ function Picker({
   const seen = new Set<string>();
   const options = [...local.filter((option) => !needle || `${option.label} ${option.detail ?? ""}`.toLowerCase().includes(needle)), ...remote]
     .filter((option) => !seen.has(option.id) && Boolean(seen.add(option.id)))
-    .slice(0, 12);
+    .slice(0, 100);
   const pick = (option: PickOption) => {
     onPick(option);
     setQuery(null);
@@ -292,6 +292,29 @@ function Picker({
 const searchUsers = (query: string) =>
   searchReadinessUsers(query).then(({ users }) => users.map((user) => ({ id: user.id, label: user.displayName, detail: user.userPrincipalName })));
 const searchApps = (query: string) => searchConditionalAccessApps(query).then((apps) => apps.map((app) => ({ id: app.appId, label: app.displayName })));
+let allAppsCache: Promise<PickOption[]> | null = null;
+/** Every enterprise app in the tenant, fetched once per session; a failed load retries next time. */
+const allApps = () =>
+  (allAppsCache ??= searchApps("")
+    .then((apps) => apps.sort((a, b) => a.label.localeCompare(b.label)))
+    .catch((error) => {
+      allAppsCache = null;
+      throw error;
+    }));
+/** Shortlist plus the tenant's full app list once it loads. */
+function useAppOptions(shortlist: PickOption[]) {
+  const [apps, setApps] = useState<PickOption[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    allApps()
+      .then((found) => !cancelled && setApps(found))
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return useMemo(() => [...shortlist, ...apps], [shortlist, apps]);
+}
 
 function whatIfBody(input: WhatIf) {
   const conditions: Record<string, unknown> = {
@@ -377,8 +400,9 @@ export function CaViewer({ signedIn }: { signedIn: boolean }) {
       ...ids.filter((id) => looksLikeId(id) && names[id]).map((id) => ({ id, label: names[id] })),
     ];
   }, [rows, names]);
+  const allAppOptions = useAppOptions(appOptions);
 
-  const lanes = rows.filter((row) => showOff || row.state !== "disabled");
+  const lanes =rows.filter((row) => showOff || row.state !== "disabled");
   const laneIds = lanes.map((row) => String(row.id));
   const selection = useCheckedIds(laneIds);
   const signInIds = signIns.map((row) => String(row.id));
@@ -453,7 +477,7 @@ export function CaViewer({ signedIn }: { signedIn: boolean }) {
               label="App"
               text={form.appLabel}
               placeholder="Search apps"
-              local={appOptions}
+              local={allAppOptions}
               search={searchApps}
               onPick={(app) => setForm({ ...form, app: app.id, appLabel: app.label })}
             />
@@ -743,4 +767,4 @@ export function CaViewer({ signedIn }: { signedIn: boolean }) {
   );
 }
 
-export { gateLabels, KNOWN_APPS, Picker, plainSummary, searchApps, searchUsers, type PickOption };
+export { gateLabels, KNOWN_APPS, Picker, plainSummary, searchApps, searchUsers, useAppOptions, type PickOption };

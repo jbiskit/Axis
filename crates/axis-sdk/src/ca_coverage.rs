@@ -292,9 +292,15 @@ pub async fn evaluate_conditional_access(access_token: &str, mut request: Value)
     Ok(result["value"].as_array().cloned().unwrap_or_default())
 }
 
-/// Enterprise apps whose display name starts with `query`, for the what-if app picker.
+/// Enterprise apps whose display name starts with `query`, or every one when `query` is empty (app pickers).
 pub async fn search_conditional_access_apps(access_token: &str, query: &str) -> Result<Vec<Value>, GraphError> {
     let query = query.trim().replace('\'', "''").replace(['#', '&', '?'], "");
+    if query.is_empty() {
+        // shortcut: capped at 5000 apps, page server-side if a tenant ever has more.
+        return GraphClient::new()
+            .fetch_all_pages(access_token, "/servicePrincipals?$select=appId,displayName&$top=999", "beta", 5000)
+            .await;
+    }
     let path = format!("/servicePrincipals?$filter=startswith(displayName,'{query}')&$select=appId,displayName&$top=20");
     let page: Value = GraphClient::new().fetch_plain(access_token, &path, "beta").await?;
     Ok(page["value"].as_array().cloned().unwrap_or_default())

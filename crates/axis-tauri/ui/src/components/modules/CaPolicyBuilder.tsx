@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { useInventory } from "../../hooks/useInventory";
 import { searchDirectoryGroups } from "../../lib/tauri";
 import { BooleanToggle } from "../workbench/BooleanToggle";
-import { gateLabels, KNOWN_APPS, Picker, plainSummary, searchApps, searchUsers, type PickOption } from "./CaViewer";
+import { gateLabels, KNOWN_APPS, Picker, plainSummary, searchApps, searchUsers, useAppOptions, type PickOption } from "./CaViewer";
 import { resolvePolicyNames } from "./EntraWorkspace";
 import { asRecord, humanize, loaderFor, rowTitle, type ReviewNames } from "./ReviewWorkbench";
 
@@ -127,6 +127,7 @@ function Targets({
 export function CaPolicyBuilder({ policy, onChange }: { policy: Policy; onChange: (policy: Policy) => void }) {
   const locations = useInventory(loaderFor("namedLocation"), true, true);
   const strengths = useInventory(loaderFor("authStrength"), true, true);
+  const appList = useAppOptions(APPS);
   const [names, setNames] = useState<ReviewNames>(() => Object.fromEntries([...ROLES, ...APPS].map((option) => [option.id, option.label])));
   const remember = (option: PickOption) => setNames((current) => ({ ...current, [option.id]: option.detail ? `${option.label} (${option.detail})` : option.label }));
   useEffect(() => {
@@ -268,13 +269,13 @@ export function CaPolicyBuilder({ policy, onChange }: { policy: Policy; onChange
           </select>
         </label>
         {appMode === "Select" ? (
-          <Targets label="Apps" value={includeApps.filter((id) => id !== "None")} names={names} local={APPS} search={searchApps} onName={remember} onChange={(next) => set(["conditions", "applications", "includeApplications"], next)} />
+          <Targets label="Apps" value={includeApps.filter((id) => id !== "None")} names={names} local={appList} search={searchApps} onName={remember} onChange={(next) => set(["conditions", "applications", "includeApplications"], next)} />
         ) : null}
         {appMode === "actions" ? (
           <Chips options={USER_ACTIONS} selected={actions} onChange={(next) => next.length && set(["conditions", "applications", "includeUserActions"], next)} />
         ) : null}
         {appMode === "All" || appMode === "Office365" ? (
-          <Targets label="Exclude apps" value={ids(apps.excludeApplications)} names={names} local={APPS} search={searchApps} onName={remember} onChange={(next) => set(["conditions", "applications", "excludeApplications"], next)} />
+          <Targets label="Exclude apps" value={ids(apps.excludeApplications)} names={names} local={appList} search={searchApps} onName={remember} onChange={(next) => set(["conditions", "applications", "excludeApplications"], next)} />
         ) : null}
       </Section>
 
