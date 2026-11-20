@@ -4,6 +4,10 @@ Notable user-facing changes to Axis are recorded here.
 
 ## [Unreleased]
 
+Add release notes here before preparing the next version.
+
+## [0.1.11] - 2026-11-20
+
 ### Added
 
 - **Conditional Access › Viewer** maps every policy as a lane of gates (users, apps, network, device and client, risk) leading to its outcome, with a plain-English sentence for each policy and a "How to interpret" tip. Trace a sign-in to see which gates pass, where each policy stops, and what the matching policies add up to: blocks, the grants that must all pass, and session controls.
@@ -16,7 +20,6 @@ Notable user-facing changes to Axis are recorded here.
 
 - Adding settings to a Settings Catalog policy uses the setting picker: tick several settings and add them in one go, each with its default value. Escape closes the picker.
 - Sign-in in Admin mode requests one more permission, `Policy.ReadWrite.ConditionalAccess`, to create Conditional Access policies. Each tenant is asked to consent again, and the app registration manifest Axis generates includes it.
-
 ## [0.1.10] - 2026-11-17
 
 ### Added
