@@ -87,3 +87,24 @@
 .ca-warn { color: var(--axis-warning); font-size: var(--axis-text-xs); }
 .ca-result { border-color: var(--axis-accent); background: var(--axis-accent-soft); }
 .ca-result-block { border-color: var(--axis-danger); background: var(--axis-danger-soft); }
+
+/* Policy builder (components/modules/CaPolicyBuilder.tsx). */
+.ca-builder { display: grid; gap: var(--axis-space-3); margin-top: var(--axis-space-3); }
+.ca-builder label { display: grid; gap: var(--axis-space-1); font-size: var(--axis-text-xs); color: var(--axis-muted); max-width: 420px; }
+.ca-builder label.ca-chip, .ca-builder label.ca-toggle { display: inline-flex; max-width: none; }
+.ca-builder-name input { font-size: var(--axis-text-sm); }
+.ca-builder-summary {
+  display: grid; gap: 4px; padding: var(--axis-space-3); border: 1px solid var(--axis-accent); border-radius: 8px;
+  background: var(--axis-accent-soft); font-size: var(--axis-text-sm);
+}
+.ca-builder-section { display: grid; gap: var(--axis-space-3); border: 1px solid var(--axis-border-strong); border-radius: 8px; padding: var(--axis-space-3); margin: 0; }
+.ca-builder-section legend { padding: 0 6px; font-weight: 500; font-size: var(--axis-text-sm); }
+.ca-builder-field { display: grid; gap: var(--axis-space-1); font-size: var(--axis-text-xs); color: var(--axis-muted); }
+.ca-targets { display: grid; gap: var(--axis-space-1); align-content: start; }
+.ca-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.ca-chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border: 1px solid var(--axis-border-strong); border-radius: 999px;
+  font-size: var(--axis-text-xs); color: var(--axis-fg); background: var(--axis-surface); cursor: pointer;
+}
+.ca-chip-remove:hover { border-color: var(--axis-danger); color: var(--axis-danger); }
+.ca-row-actions { display: flex; gap: var(--axis-space-1); }

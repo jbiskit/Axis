@@ -4,6 +4,7 @@ import { navigate } from "../../lib/route";
 import { createConditionalAccessPolicy, saveTextFile } from "../../lib/tauri";
 import { PageHeader, Panel, PanelHead } from "../ui/PageChrome";
 import { SelectCheckbox, useCheckedIds } from "../workbench/PolicyBulkAssign";
+import { CaPolicyBuilder } from "./CaPolicyBuilder";
 import { policyLink } from "./EntraWorkspace";
 import { asRecord, loaderFor, rowTitle, type ReviewRow } from "./ReviewWorkbench";
 import "../../styles/ca-viewer.css";
@@ -63,7 +64,8 @@ const draftOf = (source: string, policy: Policy): Draft => ({ key: `draft-${next
 export function CaCreateView({ signedIn }: { signedIn: boolean }) {
   const policies = useInventory(loaderFor("conditionalAccessPolicy"), signedIn, signedIn);
   const templates = useInventory(loaderFor("caTemplate"), signedIn, signedIn);
-  const [tab, setTab] = useState<"import" | "template" | "blank">("import");
+  const [tab, setTab] = useState<"import" | "template" | "builder">("builder");
+  const [builder, setBuilder] = useState<{ key: string | null; policy: Policy }>(() => ({ key: null, policy: structuredClone(BLANK) }));
   const [drafts, setDrafts] = useState<Draft[]>([]);
   const [mode, setMode] = useState<StateMode>("enabledForReportingButNotEnforced");
   const [paste, setPaste] = useState("");
@@ -149,7 +151,7 @@ export function CaCreateView({ signedIn }: { signedIn: boolean }) {
       <PageHeader
         eyebrow="Entra · Conditional Access"
         title="New Conditional Access policies"
-        description="Import policies from JSON, start from Microsoft's templates, or write one from scratch. Review the drafts, then create them in bulk."
+        description="Build a policy with the form, import policies from JSON, or start from Microsoft's templates. Review the drafts, then create them in bulk."
         onRefresh={() => {
           policies.reload();
           templates.reload();
@@ -165,7 +167,7 @@ export function CaCreateView({ signedIn }: { signedIn: boolean }) {
             [
               ["import", "Import JSON"],
               ["template", "From template"],
-              ["blank", "Blank"],
+              ["builder", "Builder"],
             ] as const
           ).map(([key, label]) => (
             <button key={key} type="button" className={`tab-btn${tab === key ? " active" : ""}`} onClick={() => setTab(key)}>
@@ -249,12 +251,32 @@ export function CaCreateView({ signedIn }: { signedIn: boolean }) {
             {templates.error ? <div className="axis-alert axis-alert-danger">{templates.error}</div> : null}
           </>
         ) : (
-          <div className="ca-form-actions">
-            <span className="muted">Adds a policy that targets no one, so you can edit its JSON before creating it.</span>
-            <button type="button" className="axis-btn" onClick={() => add([draftOf("Blank", structuredClone(BLANK))])}>
-              Add blank policy
-            </button>
-          </div>
+          <>
+            <CaPolicyBuilder policy={builder.policy} onChange={(policy) => setBuilder({ ...builder, policy })} />
+            <div className="ca-form-actions">
+              <span className="ca-spacer" />
+              {builder.key ? (
+                <button type="button" className="axis-btn" onClick={() => setBuilder({ key: null, policy: structuredClone(BLANK) })}>
+                  Cancel edit
+                </button>
+              ) : (
+                <button type="button" className="axis-btn" onClick={() => setBuilder({ key: null, policy: structuredClone(BLANK) })}>
+                  Start over
+                </button>
+              )}
+              <button
+                type="button"
+                className="axis-btn axis-btn-primary"
+                onClick={() => {
+                  if (builder.key) update(builder.key, { policy: builder.policy, status: undefined, message: undefined });
+                  else add([draftOf("Builder", builder.policy)]);
+                  setBuilder({ key: null, policy: structuredClone(BLANK) });
+                }}
+              >
+                {builder.key ? "Save to draft" : "Add to drafts"}
+              </button>
+            </div>
+          </>
         )}
         {error ? <div className="axis-alert axis-alert-danger">{error}</div> : null}
       </Panel>
@@ -360,7 +382,19 @@ export function CaCreateView({ signedIn }: { signedIn: boolean }) {
                         <span className="ca-error">{draft.message}</span>
                       ) : null}
                     </td>
-                    <td>
+                    <td className="ca-row-actions">
+                      <button
+                        type="button"
+                        className="axis-btn"
+                        disabled={draft.status === "created"}
+                        onClick={() => {
+                          setBuilder({ key: draft.key, policy: draft.policy });
+                          setTab("builder");
+                          window.scrollTo({ top: 0, behavior: "smooth" });
+                        }}
+                      >
+                        Edit
+                      </button>
                       <button
                         type="button"
                         className="axis-btn"
@@ -397,7 +431,7 @@ export function CaCreateView({ signedIn }: { signedIn: boolean }) {
               {drafts.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="muted">
-                    No drafts yet. Import JSON, pick templates, or add a blank policy above.
+                    No drafts yet. Build a policy, import JSON, or pick templates above.
                   </td>
                 </tr>
               ) : null}
